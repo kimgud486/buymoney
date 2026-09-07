@@ -101,6 +101,14 @@ function scanFile(fullPath) {
 
   const text = fs.readFileSync(fullPath, "utf8");
 
+  // Core production engine rule: trading, services, realtime, and server engines MUST NOT import from demo
+  if (/(src[\\/](trading|services|realtime)|server[\\/])/.test(fullPath)) {
+    if (/from\s+["'].*\/demo\b/.test(text)) {
+      console.error(`❌ CORE PRODUCTION ENGINE IMPORTS DEMO CODE: ${fullPath}`);
+      failed = true;
+    }
+  }
+
   for (const pattern of forbidden) {
     if (pattern.test(text)) {
       console.error(`❌ FAKE DATA PATTERN FOUND IN PRODUCTION CODE: ${fullPath}`);

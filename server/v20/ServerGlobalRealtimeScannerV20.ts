@@ -101,11 +101,16 @@ export class ServerGlobalRealtimeScannerV20 {
     else if (input.rvol >= 1.5) score += 12;
     else if (input.rvol < 1.0) score -= 15;
 
-    // Relative Strength Boost
-    const rsAvg = ((input.rs5m || 50) + (input.rs15m || 50) + (input.rs1h || 50) + (input.rs1d || 50)) / 4;
-    if (rsAvg >= 75) score += 15;
-    else if (rsAvg >= 60) score += 8;
-    else if (rsAvg < 45) score -= 10;
+    // Relative Strength Boost (only average valid present timeframe values - no neutral 50 fillers)
+    const validRsValues = [input.rs5m, input.rs15m, input.rs1h, input.rs1d].filter(
+      (v): v is number => typeof v === "number" && !isNaN(v)
+    );
+    if (validRsValues.length > 0) {
+      const rsAvg = validRsValues.reduce((sum, val) => sum + val, 0) / validRsValues.length;
+      if (rsAvg >= 75) score += 15;
+      else if (rsAvg >= 60) score += 8;
+      else if (rsAvg < 45) score -= 10;
+    }
 
     // VWAP & EMA Alignment
     if (input.vwap && input.price > input.vwap) score += 8;
@@ -136,6 +141,15 @@ export class ServerGlobalRealtimeScannerV20 {
     } else {
       grade = "C";
       recommendation = "REJECT";
+    }
+
+    // Data Truth Restriction: ONLY REALTIME_VERIFIED data can generate a BUY_CANDIDATE signal.
+    // REALTIME_DERIVED is capped at WATCH at maximum.
+    if (input.dataStatus !== "REALTIME_VERIFIED" && recommendation === "BUY_CANDIDATE") {
+      recommendation = "WATCH";
+      if (grade === "S" || grade === "A") {
+        grade = "B";
+      }
     }
 
     return {

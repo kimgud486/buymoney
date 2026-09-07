@@ -83,6 +83,7 @@ export interface RuntimeEvaluationResult {
 
 export class LivePositionRuntimeService {
   private activePositions: Map<string, LivePosition> = new Map();
+  private processedNoticeIds: Set<string> = new Set();
 
   /**
    * Register or restore a live position
@@ -370,7 +371,25 @@ export class LivePositionRuntimeService {
     const position = this.activePositions.get(positionId);
     if (!position) return "FLAT";
 
-    const { side, execQty, remainingQty } = notice;
+    // Notice ID Deduplication Guard
+    if (notice.noticeId) {
+      if (this.processedNoticeIds.has(notice.noticeId)) {
+        return position.state;
+      }
+      this.processedNoticeIds.add(notice.noticeId);
+      if (this.processedNoticeIds.size > 2000) {
+        const oldest = Array.from(this.processedNoticeIds).slice(0, 500);
+        oldest.forEach((id) => this.processedNoticeIds.delete(id));
+      }
+    }
+
+    // Symbol Mismatch Guard
+    if (notice.symbol && position.symbol !== notice.symbol) {
+      console.warn(`[LivePositionRuntimeService] Symbol mismatch on execution notice: position ${position.symbol} vs notice ${notice.symbol}`);
+      return position.state;
+    }
+
+    const { side, execQty } = notice;
 
     if (side === "BUY") {
       position.quantities.buyFilledQty += execQty;
@@ -397,9 +416,10 @@ export class LivePositionRuntimeService {
       }
     } else if (side === "SELL") {
       position.quantities.sellFilledQty += execQty;
+      position.quantities.currentPositionQty = Math.max(0, position.quantities.currentPositionQty - execQty);
       position.quantities.remainingPositionQty = Math.max(0, position.quantities.remainingPositionQty - execQty);
 
-      if (position.quantities.remainingPositionQty === 0) {
+      if (position.quantities.currentPositionQty === 0 || position.quantities.remainingPositionQty === 0) {
         position.state = "CLOSED";
       } else if (position.quantities.sellFilledQty > 0) {
         position.state = "SELL_PARTIAL";
