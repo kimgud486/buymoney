@@ -1,0 +1,37 @@
+name: AISTOCK v13.6 Validation & Safety CI Workflow
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  validate-safety-suite:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment (v22)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: TypeScript Type Check & Lint
+        run: npm run lint
+
+      - name: Run Complete AISTOCK Test Suite
+        run: npm test
+
+      - name: Static Safety Scan - Ban synthetic live-market code in src
+        run: |
+          ! grep -R "MOCK_SYNTHETIC_GENERATOR" src/ --include="*.ts" --include="*.tsx"
+          ! grep -R "generateSynthetic" src/ --include="*.ts" --include="*.tsx"
+
+      - name: Verify Production Build
+        run: npm run build

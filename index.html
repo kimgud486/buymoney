@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="AISTOCK 24" />
+    <meta name="application-name" content="AISTOCK 24" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/svg+xml" href="/pwa-icon.svg" />
+    <link rel="apple-touch-icon" href="/pwa-icon.svg" />
+    <title>AISTOCK 24 - J.A.R.V.I.S. AI 실전자율투자</title>
+    <meta name="description" content="J.A.R.V.I.S. V4.0 AI 글로벌 주식·가상자산 실전 자율투자 및 AI 퀀트 예측 분석 플랫폼." />
+    <meta property="og:title" content="AISTOCK 24" />
+    <meta property="og:description" content="J.A.R.V.I.S. V4.0 AI 글로벌 주식·가상자산 실전 자율투자 및 AI 퀀트 예측 분석 플랫폼." />
+    <script>
+      (function() {
+        if (typeof window !== 'undefined' && window.performance) {
+          try {
+            var origM = window.performance.measure;
+            if (typeof origM === 'function') {
+              window.performance.measure = function() {
+                try {
+                  return origM.apply(window.performance, arguments);
+                } catch(e) {
+                  try {
+                    if (window.performance.clearMarks) window.performance.clearMarks();
+                    if (window.performance.clearMeasures) window.performance.clearMeasures();
+                  } catch(_) {}
+                  return undefined;
+                }
+              };
+            }
+            var origMark = window.performance.mark;
+            if (typeof origMark === 'function') {
+              window.performance.mark = function() {
+                try {
+                  return origMark.apply(window.performance, arguments);
+                } catch(e) {
+                  return undefined;
+                }
+              };
+            }
+          } catch(e) {}
+        }
+      })();
+    </script>
+  </head>
+  <body class="bg-[#09090b] text-slate-100 antialiased selection:bg-cyan-500 selection:text-black">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

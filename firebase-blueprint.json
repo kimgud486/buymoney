@@ -1,0 +1,146 @@
+{
+  "entities": {
+    "users": {
+      "fields": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "userName": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "phoneVerified": { "type": "boolean" },
+        "familyRelation": { "type": "string" },
+        "approvalStatus": { "type": "string" },
+        "isAdmin": { "type": "boolean" },
+        "balance": { "type": "number" },
+        "initialBalance": { "type": "number" },
+        "riskLimitPerTrade": { "type": "number" },
+        "dailyLossLimit": { "type": "number" },
+        "maxPositionWeight": { "type": "number" },
+        "autoTradingEnabled": { "type": "boolean" },
+        "tradingMode": { "type": "string" },
+        "koreaAppKey": { "type": "string" },
+        "koreaAppSecret": { "type": "string" },
+        "alpacaKeyId": { "type": "string" },
+        "alpacaSecretKey": { "type": "string" },
+        "createdAt": { "type": "timestamp" }
+      },
+      "rules": {
+        "read": "auth != null",
+        "write": "auth != null"
+      }
+    },
+    "strategies": {
+      "fields": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "type": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "conditions": { "type": "array" },
+        "allocation": { "type": "number" },
+        "createdAt": { "type": "timestamp" }
+      },
+      "rules": {
+        "read": "auth != null",
+        "write": "auth != null"
+      }
+    },
+    "positions": {
+      "fields": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "symbol": { "type": "string" },
+        "name": { "type": "string" },
+        "market": { "type": "string" },
+        "quantity": { "type": "number" },
+        "avgPrice": { "type": "number" },
+        "currentPrice": { "type": "number" },
+        "updatedAt": { "type": "timestamp" }
+      },
+      "rules": {
+        "read": "auth != null",
+        "write": "auth != null"
+      }
+    },
+    "trades": {
+      "fields": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "symbol": { "type": "string" },
+        "name": { "type": "string" },
+        "market": { "type": "string" },
+        "side": { "type": "string" },
+        "quantity": { "type": "number" },
+        "price": { "type": "number" },
+        "strategyName": { "type": "string" },
+        "aiRationale": { "type": "string" },
+        "timestamp": { "type": "timestamp" }
+      },
+      "rules": {
+        "read": "auth != null",
+        "write": "auth != null"
+      }
+    },
+    "ai_analyses": {
+      "fields": {
+        "id": { "type": "string" },
+        "symbol": { "type": "string" },
+        "name": { "type": "string" },
+        "market": { "type": "string" },
+        "score": { "type": "number" },
+        "opinion": { "type": "string" },
+        "technicalScore": { "type": "number" },
+        "fundamentalScore": { "type": "number" },
+        "sentimentScore": { "type": "number" },
+        "targetPrice": { "type": "number" },
+        "stopLoss": { "type": "number" },
+        "rationale": { "type": "string" },
+        "timestamp": { "type": "timestamp" }
+      },
+      "rules": {
+        "read": "auth != null",
+        "write": "auth != null"
+      }
+    },
+    "ai_loss_analytics": {
+      "fields": {
+        "id": { "type": "string" },
+        "symbol": { "type": "string" },
+        "stockName": { "type": "string" },
+        "market": { "type": "string" },
+        "positionType": { "type": "string" },
+        "entryPrice": { "type": "number" },
+        "exitPrice": { "type": "number" },
+        "lossAmountKRW": { "type": "number" },
+        "lossRatePct": { "type": "number" },
+        "rootCauseCategory": { "type": "string" },
+        "detailedAnalysis": { "type": "string" },
+        "improvedRule": { "type": "string" },
+        "analyzedAt": { "type": "string" },
+        "sessionContext": { "type": "string" },
+        "createdAt": { "type": "timestamp" }
+      },
+      "rules": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "ai_model_upgrades": {
+      "fields": {
+        "id": { "type": "string" },
+        "upgradeVersion": { "type": "string" },
+        "upgradedAt": { "type": "string" },
+        "triggerEvent": { "type": "string" },
+        "improvementsApplied": { "type": "array" },
+        "accuracyGainPct": { "type": "number" },
+        "falseSignalReductionPct": { "type": "number" },
+        "totalLossRecordsAnalyzed": { "type": "number" },
+        "createdAt": { "type": "timestamp" }
+      },
+      "rules": {
+        "read": "true",
+        "write": "true"
+      }
+    }
+  }
+}

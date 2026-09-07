@@ -1,0 +1,6 @@
+{
+  "name": "AISTOCK 24",
+  "description": "J.A.R.V.I.S. V4.0 AI 글로벌 주식·가상자산 실전 자율투자 및 AI 퀀트 예측 분석 플랫폼.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

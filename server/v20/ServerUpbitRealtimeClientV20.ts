@@ -1,0 +1,134 @@
+// ----------------------------------------------------------------------
+// AISTOCK V20 UPBIT REALTIME WEBSOCKET CLIENT & TICKER HUB
+// Connects to wss://api.upbit.com/websocket/v1 for 24/7 execution-grade crypto stream
+// ----------------------------------------------------------------------
+
+import { WebSocket } from "ws";
+
+export interface UpbitRealtimeTickV20 {
+  type: "ticker" | "trade" | "orderbook";
+  symbol: string;
+  price: number;
+  signedChangePrice: number;
+  signedChangeRate: number;
+  accTradeVolume24h: number;
+  accTradePrice24h: number;
+  highest52WeekPrice: number;
+  lowest52WeekPrice: number;
+  tradeVolume: number;
+  askBid: "ASK" | "BID";
+  timestamp: number;
+  grade: "EXECUTION_GRADE";
+}
+
+export type UpbitTickCallbackV20 = (tick: UpbitRealtimeTickV20) => void;
+
+export class ServerUpbitRealtimeClientV20 {
+  private ws: WebSocket | null = null;
+  private subscribedMarkets: Set<string> = new Set(["KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL"]);
+  private listeners: Set<UpbitTickCallbackV20> = new Set();
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private isClosedIntentionally = false;
+
+  public connect(): void {
+    if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
+      return;
+    }
+
+    this.isClosedIntentionally = false;
+    try {
+      this.ws = new WebSocket("wss://api.upbit.com/websocket/v1");
+
+      this.ws.on("open", () => {
+        this.sendSubscription();
+      });
+
+      this.ws.on("message", (data: Buffer | string) => {
+        try {
+          const str = data.toString("utf8");
+          const parsed = JSON.parse(str);
+          if (parsed && parsed.code && parsed.trade_price) {
+            const tick: UpbitRealtimeTickV20 = {
+              type: "ticker",
+              symbol: parsed.code.replace("KRW-", ""),
+              price: parsed.trade_price,
+              signedChangePrice: parsed.signed_change_price || 0,
+              signedChangeRate: (parsed.signed_change_rate || 0) * 100,
+              accTradeVolume24h: parsed.acc_trade_volume_24h || 0,
+              accTradePrice24h: parsed.acc_trade_price_24h || 0,
+              highest52WeekPrice: parsed.highest_52_week_price || parsed.trade_price,
+              lowest52WeekPrice: parsed.lowest_52_week_price || parsed.trade_price,
+              tradeVolume: parsed.trade_volume || 0,
+              askBid: parsed.ask_bid === "ASK" ? "ASK" : "BID",
+              timestamp: parsed.timestamp || Date.now(),
+              grade: "EXECUTION_GRADE"
+            };
+
+            for (const callback of this.listeners) {
+              callback(tick);
+            }
+          }
+        } catch (e) {
+          // Ignore malformed packet
+        }
+      });
+
+      this.ws.on("error", (err) => {
+        // Socket error handling
+      });
+
+      this.ws.on("close", () => {
+        if (!this.isClosedIntentionally) {
+          this.scheduleReconnect();
+        }
+      });
+    } catch (e) {
+      this.scheduleReconnect();
+    }
+  }
+
+  public subscribeMarket(symbol: string): void {
+    const market = symbol.startsWith("KRW-") ? symbol : `KRW-${symbol}`;
+    if (!this.subscribedMarkets.has(market)) {
+      this.subscribedMarkets.add(market);
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.sendSubscription();
+      }
+    }
+  }
+
+  public onTick(callback: UpbitTickCallbackV20): () => void {
+    this.listeners.add(callback);
+    return () => {
+      this.listeners.delete(callback);
+    };
+  }
+
+  private sendSubscription(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const payload = [
+      { ticket: "AISTOCK_V20_SERVER_HUB" },
+      { type: "ticker", codes: Array.from(this.subscribedMarkets) },
+      { format: "DEFAULT" }
+    ];
+    this.ws.send(JSON.stringify(payload));
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = setTimeout(() => {
+      this.connect();
+    }, 5000);
+  }
+
+  public close(): void {
+    this.isClosedIntentionally = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+  }
+}
+
+export const serverUpbitRealtimeClientV20 = new ServerUpbitRealtimeClientV20();

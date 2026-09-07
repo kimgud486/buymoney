@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer utilities {
+  /* Hide scrollbar for Chrome, Safari and Opera */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  /* Hide scrollbar for IE, Edge and Firefox */
+  .no-scrollbar {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+  }
+
+  /* Safe area inset utilities for mobile screen notch & bottom bar */
+  .pb-safe {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+  .mb-safe {
+    margin-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+
+  .keep-all {
+    word-break: keep-all;
+    overflow-wrap: break-word;
+  }
+}
+
+/* Mobile responsive layout tweaks */
+html, body {
+  overflow-x: hidden;
+  overflow-y: auto;
+  min-height: 100%;
+  width: 100%;
+  -webkit-tap-highlight-color: transparent;
+  word-break: keep-all;
+  touch-action: auto;
+}
+
+
+/* Enable text selection inside input fields and text areas */
+input, textarea, [contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Touch target optimizations & instant tap response */
+button, a, select, summary, [role="button"] {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+}
+
+/* Touch active feedback scaling */
+button:active, [role="button"]:active {
+  opacity: 0.9;
+}
+
+/* Dark mode base styles */
+html.dark {
+  color-scheme: dark;
+}
+
+/* Smooth horizontal scrolling for mobile navigation tab bars */
+.mobile-tab-scroll {
+  display: flex;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  white-space: nowrap;
+}
+.mobile-tab-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* Mobile table overflow wrapper */
+.mobile-table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+

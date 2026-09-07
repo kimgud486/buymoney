@@ -1,0 +1,42 @@
+name: Final RC3 Production Validation
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  validate-final:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit zero fake production data
+        run: npm run audit:fake-data
+
+      - name: Verify final production truth
+        run: node scripts/check-final-production-truth.mjs
+
+      - name: Verify V20 production truth
+        run: node scripts/check-v20-production-truth.mjs
+
+      - name: Typecheck / Lint
+        run: npm run lint
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Production build
+        run: npm run build
