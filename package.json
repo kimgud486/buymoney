@@ -10,8 +10,9 @@
     "test": "node --import tsx --test tests/**/*.test.ts",
     "clean": "rm -rf dist server.js",
     "audit:fake-data": "node scripts/check-no-fake-production-data-v4.mjs",
+    "audit:boundaries": "node scripts/check-production-import-boundaries.mjs",
     "validate:v20": "node scripts/check-v20-production-truth.mjs && npm run audit:fake-data && npm run lint && npm test && npm run build",
-    "validate:final": "node scripts/check-final-production-truth.mjs && node scripts/check-v20-production-truth.mjs && npm run audit:fake-data && npm run lint && npm test && npm run build",
+    "validate:final": "node scripts/check-final-production-truth.mjs && node scripts/check-v20-production-truth.mjs && npm run audit:fake-data && npm run audit:boundaries && npm run lint && npm test && npm run build",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

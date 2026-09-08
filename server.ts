@@ -16,7 +16,7 @@ import { brokerExecutionRuntimeBridgeV20 } from "./server/v20/BrokerExecutionRun
 import { ServerGlobalRealtimeScannerV20 } from "./server/v20/ServerGlobalRealtimeScannerV20";
 import { ServerKISRealtimeClientV20 } from "./server/v20/ServerKISRealtimeClientV20";
 import { KISBrokerGatewayV121 } from "./server/broker/KISBrokerGatewayV121";
-import { DEMO_FIXTURE_STOCKS } from "./src/demo/presetStocks.js";
+import { DEMO_FIXTURE_STOCKS } from "./src/data/presetStocks.js";
 
 dotenv.config();
 

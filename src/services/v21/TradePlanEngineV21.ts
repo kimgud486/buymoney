@@ -32,21 +32,46 @@ export class TradePlanEngineV21 {
     if (indicators.ema20 && indicators.ema20 < entryPrice) {
       candidates.push(indicators.ema20 * 0.995);
     }
-    candidates.push(entryPrice * 0.98); // 2% fallback
+
+    if (candidates.length === 0) {
+      throw new Error(
+        "[TradePlanEngineV21] " +
+        "INSUFFICIENT_RISK_EVIDENCE: " +
+        "No swing/ATR/VWAP/EMA stop candidate available"
+      );
+    }
 
     const maxStopPrice = entryPrice * (1 - minRiskPct / 100);
     const minStopPrice = entryPrice * (1 - maxRiskPct / 100);
 
-    let rawStop = candidates.reduce((prev, curr) => {
-      if (curr >= minStopPrice && curr <= maxStopPrice) {
-        return Math.max(prev, curr);
-      }
-      return prev;
-    }, minStopPrice);
+    const validStops = candidates.filter(
+      (candidate) =>
+        Number.isFinite(candidate) &&
+        candidate > 0 &&
+        candidate >= minStopPrice &&
+        candidate <= maxStopPrice &&
+        candidate < entryPrice
+    );
+
+    if (validStops.length === 0) {
+      throw new Error(
+        "[TradePlanEngineV21] " +
+        "NO_VALID_STRUCTURAL_STOP"
+      );
+    }
+
+    const rawStop = Math.max(...validStops);
 
     let stopLossPrice = market === "KOREA" ? roundToKRXTick(rawStop, "floor") : Number(rawStop.toFixed(2));
-    if (stopLossPrice >= entryPrice) {
-      stopLossPrice = market === "KOREA" ? roundToKRXTick(entryPrice * 0.98, "floor") : Number((entryPrice * 0.98).toFixed(2));
+
+    if (
+      !Number.isFinite(stopLossPrice) ||
+      stopLossPrice <= 0 ||
+      stopLossPrice >= entryPrice
+    ) {
+      throw new Error(
+        "[TradePlanEngineV21] INVALID_STOP_PRICE"
+      );
     }
 
     const riskAmount = entryPrice - stopLossPrice;

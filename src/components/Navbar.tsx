@@ -6,7 +6,7 @@ import { RealTradeGuideModal } from "./RealTradeGuideModal";
 import { FloatingSearchBar } from "./FloatingSearchBar";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { ConnectionHealthDashboard } from "./ConnectionHealthDashboard";
-import { MockTradingInfoModal } from "../demo/MockTradingInfoModal";
+import { MockTradingInfoModal } from "./modals/MockTradingInfoModal";
 import { AiInvestmentReportModal } from "./trading/AiInvestmentReportModal";
 import { AutoTradingFilterConfigModal } from "./trading/AutoTradingFilterConfigModal";
 import { PwaInstallModal } from "./PwaInstallModal";

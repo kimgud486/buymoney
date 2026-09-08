@@ -83,7 +83,13 @@ export interface RuntimeEvaluationResult {
 
 export class LivePositionRuntimeService {
   private activePositions: Map<string, LivePosition> = new Map();
-  private processedNoticeIds: Set<string> = new Set();
+  private processedExecutionNoticeIds: Set<string> = new Set();
+
+  private normalizeSymbol(symbol: string): string {
+    return String(symbol || "")
+      .trim()
+      .toUpperCase();
+  }
 
   /**
    * Register or restore a live position
@@ -364,69 +370,203 @@ export class LivePositionRuntimeService {
     };
   }
 
-  /**
-   * Authoritative Broker Execution Sync (KIS / Exchange account notice)
-   */
-  public onBrokerExecutionNotice(positionId: string, notice: BrokerExecutionNotice): PositionState {
-    const position = this.activePositions.get(positionId);
-    if (!position) return "FLAT";
+  public onBrokerExecutionNotice(
+    positionId: string,
+    notice: BrokerExecutionNotice
+  ): PositionState {
+    const position =
+      this.activePositions.get(positionId);
 
-    // Notice ID Deduplication Guard
-    if (notice.noticeId) {
-      if (this.processedNoticeIds.has(notice.noticeId)) {
-        return position.state;
-      }
-      this.processedNoticeIds.add(notice.noticeId);
-      if (this.processedNoticeIds.size > 2000) {
-        const oldest = Array.from(this.processedNoticeIds).slice(0, 500);
-        oldest.forEach((id) => this.processedNoticeIds.delete(id));
-      }
+    if (!position) {
+      return "FLAT";
     }
 
-    // Symbol Mismatch Guard
-    if (notice.symbol && position.symbol !== notice.symbol) {
-      console.warn(`[LivePositionRuntimeService] Symbol mismatch on execution notice: position ${position.symbol} vs notice ${notice.symbol}`);
+    // CLOSED is terminal.
+    if (position.state === "CLOSED") {
+      return "CLOSED";
+    }
+
+    // ------------------------------------------------------------
+    // Validate authoritative broker notice
+    // ------------------------------------------------------------
+
+    if (
+      !notice.noticeId ||
+      !String(notice.noticeId).trim()
+    ) {
+      console.error(
+        "[EXECUTION_TRUTH] rejected empty noticeId"
+      );
       return position.state;
     }
 
-    const { side, execQty } = notice;
+    if (
+      this.normalizeSymbol(notice.symbol) !==
+      this.normalizeSymbol(position.symbol)
+    ) {
+      console.error(
+        `[EXECUTION_TRUTH] symbol mismatch: ` +
+        `${notice.symbol} != ${position.symbol}`
+      );
 
-    if (side === "BUY") {
-      position.quantities.buyFilledQty += execQty;
-      position.quantities.currentPositionQty += execQty;
-      position.quantities.remainingPositionQty += execQty;
-
-      if (position.quantities.buyFilledQty >= position.quantities.requestedBuyQty) {
-        position.state = "BUY_FILLED";
-        // Auto transition BUY_FILLED -> HOLD
-        position.state = PositionStateMachine.evaluateNextState({
-          state: "BUY_FILLED",
-          symbol: position.symbol,
-          strategyId: position.strategyId,
-          entryPrice: position.entryPrice,
-          currentPrice: notice.execPrice,
-          highestPriceSinceBuy: position.highestPriceSinceBuy,
-          initialStopPrice: position.initialStopPrice,
-          trailingFloorPrice: position.trailingFloor,
-          quantities: position.quantities,
-          exitEvidence: position.lastExitEvidence
-        });
-      } else if (position.quantities.buyFilledQty > 0) {
-        position.state = "BUY_PARTIAL";
-      }
-    } else if (side === "SELL") {
-      position.quantities.sellFilledQty += execQty;
-      position.quantities.currentPositionQty = Math.max(0, position.quantities.currentPositionQty - execQty);
-      position.quantities.remainingPositionQty = Math.max(0, position.quantities.remainingPositionQty - execQty);
-
-      if (position.quantities.currentPositionQty === 0 || position.quantities.remainingPositionQty === 0) {
-        position.state = "CLOSED";
-      } else if (position.quantities.sellFilledQty > 0) {
-        position.state = "SELL_PARTIAL";
-      }
+      return position.state;
     }
 
-    position.updatedAt = Date.now();
+    if (
+      !Number.isFinite(notice.execQty) ||
+      notice.execQty <= 0
+    ) {
+      console.error(
+        "[EXECUTION_TRUTH] invalid execQty",
+        notice.execQty
+      );
+
+      return position.state;
+    }
+
+    if (
+      !Number.isFinite(notice.execPrice) ||
+      notice.execPrice <= 0
+    ) {
+      console.error(
+        "[EXECUTION_TRUTH] invalid execPrice",
+        notice.execPrice
+      );
+
+      return position.state;
+    }
+
+    if (
+      !Number.isFinite(notice.timestamp) ||
+      notice.timestamp <= 0
+    ) {
+      console.error(
+        "[EXECUTION_TRUTH] invalid timestamp"
+      );
+
+      return position.state;
+    }
+
+    const dedupeKey =
+      `${positionId}:${notice.noticeId}`;
+
+    if (
+      this.processedExecutionNoticeIds.has(
+        dedupeKey
+      )
+    ) {
+      // Broker/websocket retry.
+      // Do NOT apply quantity twice.
+      return position.state;
+    }
+
+    // ------------------------------------------------------------
+    // BUY FILL
+    // ------------------------------------------------------------
+
+    if (notice.side === "BUY") {
+      this.processedExecutionNoticeIds.add(
+        dedupeKey
+      );
+
+      position.quantities.buyFilledQty +=
+        notice.execQty;
+
+      position.quantities.currentPositionQty +=
+        notice.execQty;
+
+      position.quantities.remainingPositionQty =
+        position.quantities.currentPositionQty;
+
+      if (
+        position.quantities.buyFilledQty >=
+        position.quantities.requestedBuyQty
+      ) {
+        position.state = "BUY_FILLED";
+
+        position.state =
+          PositionStateMachine.evaluateNextState({
+            state: "BUY_FILLED",
+            symbol: position.symbol,
+            strategyId: position.strategyId,
+
+            entryPrice: position.entryPrice,
+            currentPrice: notice.execPrice,
+
+            highestPriceSinceBuy:
+              position.highestPriceSinceBuy,
+
+            initialStopPrice:
+              position.initialStopPrice,
+
+            trailingFloorPrice:
+              position.trailingFloor,
+
+            quantities: position.quantities,
+
+            exitEvidence:
+              position.lastExitEvidence
+          });
+      } else {
+        position.state = "BUY_PARTIAL";
+      }
+
+      position.updatedAt = Date.now();
+
+      return position.state;
+    }
+
+    // ------------------------------------------------------------
+    // SELL FILL
+    // ------------------------------------------------------------
+
+    if (notice.side === "SELL") {
+      if (
+        notice.execQty >
+        position.quantities.currentPositionQty
+      ) {
+        console.error(
+          `[EXECUTION_TRUTH] impossible sell fill: ` +
+          `execQty=${notice.execQty}, ` +
+          `positionQty=${position.quantities.currentPositionQty}`
+        );
+
+        // Do not mutate an inconsistent position.
+        // Account reconciliation should handle this.
+        return position.state;
+      }
+
+      this.processedExecutionNoticeIds.add(
+        dedupeKey
+      );
+
+      position.quantities.sellFilledQty +=
+        notice.execQty;
+
+      position.quantities.currentPositionQty =
+        Math.max(
+          0,
+          position.quantities.currentPositionQty -
+            notice.execQty
+        );
+
+      position.quantities.remainingPositionQty =
+        position.quantities.currentPositionQty;
+
+      if (
+        position.quantities.currentPositionQty ===
+        0
+      ) {
+        position.state = "CLOSED";
+      } else {
+        position.state = "SELL_PARTIAL";
+      }
+
+      position.updatedAt = Date.now();
+
+      return position.state;
+    }
+
     return position.state;
   }
 }
