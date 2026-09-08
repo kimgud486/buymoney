@@ -874,146 +874,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return () => clearInterval(interval);
   }, [isAutoPingEnabled]);
-  const [decisionLogs, setDecisionLogs] = useState<AIDecisionLog[]>([
-    {
-      id: "dec_live_1",
-      timestamp: new Date(Date.now() - 35000).toISOString(),
-      symbol: "005930",
-      name: "삼성전자",
-      market: "KOREA",
-      action: "BUY_SIGNAL",
-      positionDirection: "LONG",
-      entryRationale: "SMC 상승 구조(BOS) 돌파 및 기관/외인 대량 수급 동반 유입 포착",
-      patternAnalysis: "장대양봉 거래대금 터짐 + 5분봉 FVG 갭 지지 반등",
-      candlePattern: "장대양봉(Bullish Marubozu) & 상승 덮개형",
-      smcStructure: "BOS (Break of Structure) 상단 돌파",
-      orderbookDelta: "매수 잔량 대비 매도 잔량 2.4배 상회 (수급 호조)",
-      currentPrice: 78500,
-      entryPrice: 78200,
-      targetPrice: 88000,
-      stopLossPrice: 74500,
-      targetGainPct: 12.1,
-      volumeRatio: 3.4,
-      rsi: 54,
-      confidence: 94,
-      message: "🚀 [AI 실시간 매수 시그널] 5분봉 20일선 지지 후 대량 거래대금 유입. 실시간 호가 ₩78,500원 기준 1차 목표가 ₩88,000원 (+12.1%) 분할 진입 승인.",
-      safetyStatus: { holdingsLimit: "PASS", dailyLossLimit: "PASS", marketRisk: "PASS", brokerAuth: "PASS" }
-    },
-    {
-      id: "dec_live_2",
-      timestamp: new Date(Date.now() - 95000).toISOString(),
-      symbol: "000660",
-      name: "SK하이닉스",
-      market: "KOREA",
-      action: "BUY_SIGNAL",
-      positionDirection: "LONG",
-      entryRationale: "HBM3E 공급망 수급 집중 및 연속 4일 기관 순매수 주도",
-      patternAnalysis: "돌파 캔들 + 이동평균선 정배열 급반등",
-      candlePattern: "상승 망치형(Hammer) & 거래량 분출",
-      smcStructure: "CHoCH (Change of Character) 추세 전환 완료",
-      orderbookDelta: "10단계 호가 매수벽 견고함",
-      currentPrice: 228000,
-      entryPrice: 227500,
-      targetPrice: 262000,
-      stopLossPrice: 216000,
-      targetGainPct: 14.9,
-      volumeRatio: 4.1,
-      rsi: 58,
-      confidence: 96,
-      message: "🚀 [AI 실시간 매수 시그널] HBM3E 공급망 수급 집중 및 기관 4일 연속 순매수. 실시간 호가 ₩228,000원 기준 목표가 ₩262,000원 (+14.9%) 알파 모멘텀 시그널 포착.",
-      safetyStatus: { holdingsLimit: "PASS", dailyLossLimit: "PASS", marketRisk: "PASS", brokerAuth: "PASS" }
-    },
-    {
-      id: "dec_live_3",
-      timestamp: new Date(Date.now() - 180000).toISOString(),
-      symbol: "196170",
-      name: "알테오젠",
-      market: "KOREA",
-      action: "BUY_SIGNAL",
-      positionDirection: "LONG",
-      entryRationale: "바이오 SC 제형 기술수출 모멘텀 및 외국인 연속 순매수",
-      patternAnalysis: "SMC FVG 불균형 갭 터치 후 강한 양봉 반등",
-      candlePattern: "역망치형 지지 양봉 (Inverted Hammer Reversal)",
-      smcStructure: "Demand Zone (수요구간) 지지 확인",
-      orderbookDelta: "체결강도 168% 상승 가속",
-      currentPrice: 382000,
-      entryPrice: 380000,
-      targetPrice: 440000,
-      stopLossPrice: 355000,
-      targetGainPct: 15.8,
-      volumeRatio: 3.8,
-      rsi: 61,
-      confidence: 94,
-      message: "🚀 [국내 바이오 대장주 매수 포착] 알테오젠 SC 제형 수출 모멘텀 및 외국인 대량 순매수. 실시간 호가 ₩382,000원 기준 1차 목표가 ₩440,000원 (+15.8%) 돌파 시그널.",
-      safetyStatus: { holdingsLimit: "PASS", dailyLossLimit: "PASS", marketRisk: "PASS", brokerAuth: "PASS" }
-    },
-    {
-      id: "dec_live_4",
-      timestamp: new Date(Date.now() - 320000).toISOString(),
-      symbol: "042700",
-      name: "한미반도체",
-      market: "KOREA",
-      action: "BUY_SIGNAL",
-      positionDirection: "LONG",
-      entryRationale: "HBM 고대역폭 메모리 본더 장비 독점적 수혜 및 코스피 반등 수급 집중",
-      patternAnalysis: "볼린저밴드 상단 밴드 핑퐁 돌파 패턴",
-      candlePattern: "장대양봉 돌파 (Bullish Breakout Candle)",
-      smcStructure: "BOS (Break of Structure)",
-      orderbookDelta: "기관/외국인 동시 순매수 유입",
-      currentPrice: 211500,
-      entryPrice: 208000,
-      targetPrice: 245000,
-      stopLossPrice: 198000,
-      targetGainPct: 15.8,
-      volumeRatio: 2.8,
-      rsi: 54,
-      confidence: 95,
-      message: "🚀 [국내 AI 반도체 실시간 포착] 한미반도체 HBM 본더 수주 모멘텀 및 볼린저 상단 돌파. 실시간 호가 ₩211,500원 기준 목표가 ₩245,000원 (+15.8%) 진입 승인.",
-      safetyStatus: { holdingsLimit: "PASS", dailyLossLimit: "PASS", marketRisk: "PASS", brokerAuth: "PASS" }
-    },
-    {
-      id: "dec_live_5",
-      timestamp: new Date(Date.now() - 480000).toISOString(),
-      symbol: "267260",
-      name: "HD현대일렉트릭",
-      market: "KOREA",
-      action: "BUY_SIGNAL",
-      positionDirection: "LONG",
-      entryRationale: "북미 AI 변압기 슈퍼사이클 수주 잔고 급증 및 5일선 지지 반등",
-      patternAnalysis: "Double Bottom (쌍바닥) 반등 및 기관 수급 유입",
-      candlePattern: "Bullish Engulfing (상승 덮개형)",
-      smcStructure: "Liquidity Sweep 후 재반등",
-      orderbookDelta: "투신/연기금 매수세 집중",
-      currentPrice: 312000,
-      entryPrice: 306000,
-      targetPrice: 358000,
-      stopLossPrice: 292000,
-      targetGainPct: 14.7,
-      volumeRatio: 3.1,
-      rsi: 58,
-      confidence: 93,
-      message: "⚡ [전력인프라 실시간 모멘텀] HD현대일렉트릭 변압기 수출 폭증 및 기관 수급 집중. 실시간 호가 ₩312,000원 기준 목표가 ₩358,000원 (+14.7%) 진입 신호.",
-      safetyStatus: { holdingsLimit: "PASS", dailyLossLimit: "PASS", marketRisk: "PASS", brokerAuth: "PASS" }
-    },
-    {
-      id: "dec_live_6",
-      timestamp: new Date(Date.now() - 720000).toISOString(),
-      symbol: "035420",
-      name: "NAVER",
-      market: "KOREA",
-      action: "HOLD_SIGNAL",
-      currentPrice: 185000,
-      entryPrice: 184000,
-      targetPrice: 210000,
-      stopLossPrice: 174000,
-      targetGainPct: 13.5,
-      volumeRatio: 1.2,
-      rsi: 48,
-      confidence: 86,
-      message: "⏸️ [AI 포지션 홀딩] 20일선 지지선 안착 확인 중. 실시간 호가 ₩185,000원 기준 목표가 ₩210,000원 (+13.5%) 유지 및 관망.",
-      safetyStatus: { holdingsLimit: "PASS", dailyLossLimit: "PASS", marketRisk: "PASS", brokerAuth: "PASS" }
-    }
-  ]);
+  const [decisionLogs, setDecisionLogs] = useState<AIDecisionLog[]>([]);
 
   const triggerLiveSignalLog = useCallback((log: Partial<AIDecisionLog> & {
     symbol: string;
@@ -1023,9 +884,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     message: string;
   }) => {
     const curPrice = log.currentPrice || 0;
-    const targetPrice = log.targetPrice || (curPrice > 0 ? Math.round(curPrice * 1.12) : undefined);
-    const stopLossPrice = log.stopLossPrice || (curPrice > 0 ? Math.round(curPrice * 0.95) : undefined);
-    const targetGainPct = log.targetGainPct || (curPrice > 0 && targetPrice ? Math.round(((targetPrice - curPrice) / curPrice) * 1000) / 10 : 12.0);
+    const targetPrice = log.targetPrice ?? undefined;
+    const stopLossPrice = log.stopLossPrice ?? undefined;
+    const targetGainPct = Number.isFinite(log.targetGainPct) 
+      ? log.targetGainPct 
+      : (curPrice > 0 && targetPrice ? Math.round(((targetPrice - curPrice) / curPrice) * 1000) / 10 : undefined);
 
     const newLog: AIDecisionLog = {
       id: log.id || generateUniqueId("dec_signal"),
@@ -1035,14 +898,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       market: log.market,
       action: log.action,
       message: log.message,
-      confidence: log.confidence ?? 92,
+      confidence: Number.isFinite(log.confidence) ? log.confidence : undefined,
       currentPrice: curPrice,
       entryPrice: log.entryPrice || curPrice,
       targetPrice,
       stopLossPrice,
       targetGainPct,
-      volumeRatio: log.volumeRatio ?? 3.2,
-      rsi: log.rsi ?? 55,
+      volumeRatio: Number.isFinite(log.volumeRatio) ? log.volumeRatio : undefined,
+      rsi: Number.isFinite(log.rsi) ? log.rsi : undefined,
       safetyStatus: log.safetyStatus || {
         holdingsLimit: "PASS",
         dailyLossLimit: "PASS",
@@ -2401,13 +2264,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         window.dispatchEvent(new CustomEvent("open-api-connect-modal", { detail: targetBrokerKey }));
 
         addToast({
-          type: 'WARNING',
-          title: '🛡️ 모의투자 가상 체결 모드 전환',
-          message: `${brokerName} API Key 미등록 상태이므로 안전을 위해 이번 주문은 [모의투자 모드]로 안전하게 체결되었습니다. [증권사 API 연동] 메뉴에서 API Key를 연동해 주세요.`
+          type: 'ERROR',
+          title: '🛡️ 실거래 주문 차단',
+          message: `${brokerName} API Key가 미등록 상태입니다. 실거래 모드에서는 가상 체결로 자동 전환되지 않으며 주문이 차단됩니다. API Key 연동 후 다시 시도해 주세요.`
         });
 
-        // Fallback to paper simulation so the trade executes smoothly
-        isRealForThisMarket = false;
+        return { success: false, reason: 'BROKER_NOT_CONNECTED', error: `${brokerName} API Key 미등록` };
       }
 
       // -------------------------------------------------------------

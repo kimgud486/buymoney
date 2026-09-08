@@ -78,7 +78,7 @@ export const InteractivePredictionCanvasChart: React.FC<InteractivePredictionCan
   tradePlan,
   recommendation,
   actionSignal,
-  aiConfidence = 94.2,
+  aiConfidence = 0,
   onResyncAnchor
 }) => {
   const { placeOrder, addNotification, profile, updateProfileSettings, trades } = useApp();
@@ -132,11 +132,18 @@ export const InteractivePredictionCanvasChart: React.FC<InteractivePredictionCan
   const isUs = market === "US";
   const currencySymbol = isUs ? "$" : "₩";
 
-  // Trade plan metrics calculation
-  const entryP = tradePlan?.entryPrice || Math.round(currentPrice * 0.992);
-  const tp1P = tradePlan?.tp1 || Math.round(currentPrice * 1.052);
-  const tp2P = tradePlan?.tp2 || Math.round(currentPrice * 1.095);
-  const stopLossP = tradePlan?.stopLoss || Math.round(currentPrice * 0.962);
+  // Trade plan metrics calculation derived dynamically from candle ATR if available
+  const atr = useMemo(() => {
+    if (!effectiveCandles || effectiveCandles.length < 5) return currentPrice * 0.02;
+    const slice = effectiveCandles.slice(-14);
+    const sum = slice.reduce((acc, c) => acc + Math.abs(c.high - c.low), 0);
+    return sum / slice.length;
+  }, [effectiveCandles, currentPrice]);
+
+  const entryP = tradePlan?.entryPrice || currentPrice;
+  const tp1P = tradePlan?.tp1 || Math.round(currentPrice + atr * 2);
+  const tp2P = tradePlan?.tp2 || Math.round(currentPrice + atr * 3.5);
+  const stopLossP = tradePlan?.stopLoss || Math.round(Math.max(1, currentPrice - atr * 1.5));
 
   const gainPct1 = (((tp1P - currentPrice) / currentPrice) * 100).toFixed(1);
   const gainPct2 = (((tp2P - currentPrice) / currentPrice) * 100).toFixed(1);

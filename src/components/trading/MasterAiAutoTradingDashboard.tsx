@@ -41,6 +41,7 @@ import {
   Sparkles
 } from "lucide-react";
 import { useApp } from "../../context/AppContext";
+import { getMarketStatus } from "../../lib/marketHours";
 import { getAllStocks, StockItem } from "../../data/stockUniverse";
 import { calculateJarvisPositionAi } from "../../services/DynamicPositionEngine";
 import { JarvisPositionAiPanel } from "./JarvisPositionAiPanel";
@@ -88,6 +89,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
     addToast,
     positions = [],
     trades = [],
+    decisionLogs = [],
     profile,
     activeBots = [],
     totalTradingPnl = 0,
@@ -118,6 +120,8 @@ export const MasterAiAutoTradingDashboard: React.FC<{
   const [selectedPatternCategory, setSelectedPatternCategory] = useState<PatternCategory>("ALL");
   const [selectedPatternId, setSelectedPatternId] = useState<string | null>(null);
   const [isAiModeOn, setIsAiModeOn] = useState<boolean>(true);
+  const [liveTradingState, setLiveTradingState] = useState<string>("NO_TRADE");
+  const [liveTechnicalScore, setLiveTechnicalScore] = useState<number | null>(null);
   const [activeIndicators, setActiveIndicators] = useState<{
     ma: boolean;
     bb: boolean;
@@ -677,6 +681,33 @@ export const MasterAiAutoTradingDashboard: React.FC<{
 
   // AI Autonomous Buy/Sell Triggering
   const triggerAiExecution = async (type: "BUY" | "SELL", symbolArg: string, price: number) => {
+    if (!isAiModeOn) {
+      addToast?.({
+        type: "warning",
+        title: "[주문 거부] AI MODE OFF",
+        message: "AI MODE가 OFF 상태입니다. 자율 매매를 실행하려면 상단 AI MODE를 ON으로 전환하세요."
+      });
+      return { success: false, reason: "AI_MODE_OFF" };
+    }
+
+    if (type === "BUY" && liveTradingState !== "BUY") {
+      addToast?.({
+        type: "warning",
+        title: "[매수 실행 거부] 상태 불일치",
+        message: `현재 엔진 상태가 BUY가 아닌 '${liveTradingState}' 입니다. 진입 시그널 확정 시에만 실행됩니다.`
+      });
+      return { success: false, reason: "NOT_BUY_STATE" };
+    }
+
+    if (type === "SELL" && liveTradingState !== "SELL") {
+      addToast?.({
+        type: "warning",
+        title: "[매도 실행 거부] 상태 불일치",
+        message: `현재 엔진 상태가 SELL이 아닌 '${liveTradingState}' 입니다. 청산 시그널 확정 시에만 실행됩니다.`
+      });
+      return { success: false, reason: "NOT_SELL_STATE" };
+    }
+
     const symbol = typeof symbolArg === "string" ? symbolArg : String((symbolArg as any)?.symbol || symbolArg || "");
     const stockName = watchlist.find(w => w.symbol === symbol)?.name || symbol;
     const isUs = currentStock.market === "US" || (!/^\d{6}$/.test(symbol) && !symbol.startsWith("KRW-"));
@@ -931,9 +962,13 @@ export const MasterAiAutoTradingDashboard: React.FC<{
             <span className="text-[11px] font-semibold">Real-time Analysis</span>
           </div>
 
-          <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full ${isWhiteTheme ? "bg-emerald-50 border border-emerald-200 text-emerald-800" : "bg-[#0a182e] border border-emerald-900/60 text-emerald-300"} text-xs font-medium`}>
-            <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
-            <span className="text-[11px] font-semibold">Market Open</span>
+          <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full ${
+            getMarketStatus(currentStock?.market === 'US' ? 'US' : currentStock?.market === 'UPBIT' ? 'BTC' : 'KOREA').isOpen
+              ? (isWhiteTheme ? "bg-emerald-50 border border-emerald-200 text-emerald-800" : "bg-[#0a182e] border border-emerald-900/60 text-emerald-300")
+              : (isWhiteTheme ? "bg-slate-100 border border-slate-300 text-slate-700" : "bg-slate-900 border border-slate-800 text-slate-400")
+          } text-xs font-medium`}>
+            <span className={`w-2 h-2 rounded-full ${getMarketStatus(currentStock?.market === 'US' ? 'US' : currentStock?.market === 'UPBIT' ? 'BTC' : 'KOREA').isOpen ? "bg-emerald-500 animate-pulse" : "bg-slate-400"} inline-block`} />
+            <span className="text-[11px] font-semibold">{getMarketStatus(currentStock?.market === 'US' ? 'US' : currentStock?.market === 'UPBIT' ? 'BTC' : 'KOREA').statusBadgeText}</span>
           </div>
 
           <div className={`px-3 py-1 rounded-full ${isWhiteTheme ? "bg-slate-100 border border-slate-300 text-slate-700" : "bg-[#081222] border border-slate-800 text-slate-300"} font-mono text-xs tracking-wider flex items-center gap-1.5`}>
@@ -1710,6 +1745,10 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                 volume: c.volume
               }))}
               isWhiteTheme={isWhiteTheme}
+              onStateChange={(state, conf) => {
+                setLiveTradingState(state);
+                setLiveTechnicalScore(conf);
+              }}
             />
           ) : mainChartDisplayMode === "DUAL_SPLIT" ? (
             <div className={`${isWhiteTheme ? "bg-white border-slate-200 shadow-sm" : "bg-[#081222] border-[#13233c] shadow-sm"} border rounded-xl p-3`}>
@@ -1727,16 +1766,9 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                 }))}
                 timeframe={selectedTimeframe}
                 horizonMode="MEDIUM"
-                tradePlan={{
-                  entryPrice: currentStock.price,
-                  tp1: Math.round(currentStock.price * 1.05),
-                  tp2: Math.round(currentStock.price * 1.10),
-                  stopLoss: Math.round(currentStock.price * 0.97),
-                  riskRewardRatio: 2.85
-                }}
-                recommendation="BUY"
-                actionSignal="BUY_CANDIDATE"
-                aiConfidence={currentStock?.price > 0 ? 80 : 0}
+                recommendation={liveTradingState}
+                actionSignal={liveTradingState === "BUY" ? "BUY_CANDIDATE" : liveTradingState === "SELL" ? "SELL_SIGNAL" : "WAIT_OBSERVE"}
+                aiConfidence={liveTechnicalScore ?? 0}
               />
             </div>
           ) : (
@@ -2998,20 +3030,37 @@ export const MasterAiAutoTradingDashboard: React.FC<{
               </span>
             </div>
 
-            {/* Signal Card 1: ACTIVE STOCK REALTIME SIGNAL */}
-            <div className={`p-3 rounded-xl ${isWhiteTheme ? "bg-emerald-50/70 border-emerald-300" : "bg-gradient-to-r from-[#071f1a] to-[#081726] border-emerald-500/40"} border space-y-2`}>
+            {/* Real-time State Machine Engine Signal Panel */}
+            <div className={`p-3.5 rounded-xl ${
+              liveTradingState === "BUY"
+                ? (isWhiteTheme ? "bg-emerald-50/80 border-emerald-300" : "bg-gradient-to-r from-[#071f1a] to-[#081726] border-emerald-500/50")
+                : liveTradingState === "SELL"
+                ? (isWhiteTheme ? "bg-rose-50/80 border-rose-300" : "bg-gradient-to-r from-[#240c15] to-[#12081c] border-rose-500/50")
+                : (isWhiteTheme ? "bg-slate-50 border-slate-200" : "bg-slate-900/60 border-slate-800")
+            } border space-y-3`}>
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <div className={`w-2 h-2 rounded-full ${isWhiteTheme ? "bg-emerald-600" : "bg-emerald-400"} animate-ping`} />
-                  <span className={`font-bold text-xs ${isWhiteTheme ? "text-emerald-800" : "text-emerald-300"}`}>BUY SIGNAL 매수 신호</span>
+                <div className="flex items-center gap-2">
+                  <div className={`w-2.5 h-2.5 rounded-full ${
+                    liveTradingState === "BUY" ? "bg-emerald-500 animate-ping" :
+                    liveTradingState === "SELL" ? "bg-rose-500 animate-ping" : "bg-amber-500"
+                  }`} />
+                  <span className={`font-bold text-xs font-mono tracking-wider ${
+                    liveTradingState === "BUY" ? (isWhiteTheme ? "text-emerald-800" : "text-emerald-300") :
+                    liveTradingState === "SELL" ? (isWhiteTheme ? "text-rose-800" : "text-rose-300") :
+                    (isWhiteTheme ? "text-slate-700" : "text-slate-300")
+                  }`}>
+                    STATE: {liveTradingState}
+                  </span>
                 </div>
-                <span className={`font-mono font-black text-sm ${isWhiteTheme ? "text-emerald-700" : "text-emerald-400"}`}>
+                <span className="font-mono font-black text-sm">
                   {formatPrice(currentStock.price)}
                 </span>
               </div>
 
               <div className="flex items-center justify-between text-xs gap-2">
-                <span className={`${isWhiteTheme ? "text-slate-800" : "text-slate-300"} font-medium truncate`}>{currentStock.name} ({currentStock.symbol})</span>
+                <span className={`${isWhiteTheme ? "text-slate-800" : "text-slate-300"} font-medium truncate`}>
+                  {currentStock.name} ({currentStock.symbol})
+                </span>
                 <div className="flex items-center gap-1.5 shrink-0">
                   {currentStock.market === "US" && (
                     <button
@@ -3026,60 +3075,39 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                   )}
                   <button
                     onClick={() => triggerAiExecution("BUY", currentStock.symbol, currentStock.price)}
-                    className={`px-2.5 py-1 rounded ${isWhiteTheme ? "bg-emerald-600 hover:bg-emerald-500 text-white" : "bg-emerald-500 hover:bg-emerald-400 text-[#07101e]"} text-xs font-black shadow-md transition cursor-pointer`}
+                    disabled={liveTradingState !== "BUY" || !isAiModeOn}
+                    className={`px-2.5 py-1 rounded ${
+                      liveTradingState === "BUY" && isAiModeOn
+                        ? (isWhiteTheme ? "bg-emerald-600 hover:bg-emerald-500 text-white" : "bg-emerald-500 hover:bg-emerald-400 text-[#07101e]")
+                        : "bg-slate-300 text-slate-500 dark:bg-slate-800 dark:text-slate-500 cursor-not-allowed opacity-50"
+                    } text-xs font-black shadow-md transition`}
                   >
                     자율 매수 체결
+                  </button>
+                  <button
+                    onClick={() => triggerAiExecution("SELL", currentStock.symbol, currentStock.price)}
+                    disabled={liveTradingState !== "SELL" || !isAiModeOn}
+                    className={`px-2.5 py-1 rounded ${
+                      liveTradingState === "SELL" && isAiModeOn
+                        ? (isWhiteTheme ? "bg-rose-600 hover:bg-rose-500 text-white" : "bg-rose-500 hover:bg-rose-400 text-white")
+                        : "bg-slate-300 text-slate-500 dark:bg-slate-800 dark:text-slate-500 cursor-not-allowed opacity-50"
+                    } text-xs font-black shadow-md transition`}
+                  >
+                    자율 매도 체결
                   </button>
                 </div>
               </div>
 
-              <div className={`flex items-center justify-between pt-1 border-t ${isWhiteTheme ? "border-emerald-200 text-slate-600" : "border-emerald-900/40 text-slate-400"} text-[10px] font-mono`}>
-                <div className="flex items-center gap-1">
-                  <span>신호 강도</span>
-                  <div className="flex gap-0.5">
-                    {[1, 2, 3, 4, 5].map((b) => (
-                      <div key={b} className={`w-1.5 h-1.5 rounded-xs ${isWhiteTheme ? "bg-emerald-600" : "bg-emerald-400"}`} />
-                    ))}
-                  </div>
-                  <span className={`${isWhiteTheme ? "text-emerald-800 font-bold" : "text-emerald-300"} ml-1`}>89%</span>
-                </div>
-                <span>패턴 합의 일치</span>
-              </div>
-            </div>
-
-            {/* Signal Card 2: SECONDARY REBALANCING SIGNAL */}
-            <div className={`p-3 rounded-xl ${isWhiteTheme ? "bg-rose-50/70 border-rose-300" : "bg-gradient-to-r from-[#240c15] to-[#12081c] border-rose-500/40"} border space-y-2`}>
-              <div className="flex items-center justify-between">
+              <div className={`flex items-center justify-between pt-1.5 border-t ${
+                isWhiteTheme ? "border-slate-200 text-slate-600" : "border-slate-800 text-slate-400"
+              } text-[11px] font-mono`}>
                 <div className="flex items-center gap-1.5">
-                  <div className={`w-2 h-2 rounded-full ${isWhiteTheme ? "bg-rose-600" : "bg-rose-400"} animate-ping`} />
-                  <span className={`font-bold text-xs ${isWhiteTheme ? "text-rose-800" : "text-rose-300"}`}>SELL SIGNAL 익절/분할매도</span>
+                  <span>기술 점수 (Technical Score):</span>
+                  <span className={`font-bold ${isWhiteTheme ? "text-purple-700" : "text-purple-400"}`}>
+                    {liveTechnicalScore !== null ? `${liveTechnicalScore} / 100` : "계산 중..."}
+                  </span>
                 </div>
-                <span className={`font-mono font-black text-sm ${isWhiteTheme ? "text-rose-700" : "text-rose-400"}`}>
-                  {formatPrice(Math.round(currentStock.price * 1.05))}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between text-xs">
-                <span className={`${isWhiteTheme ? "text-slate-800" : "text-slate-300"} font-medium`}>{currentStock.name} 목표 도달시</span>
-                <button
-                  onClick={() => triggerAiExecution("SELL", currentStock.symbol, Math.round(currentStock.price * 1.05))}
-                  className={`px-2.5 py-1 rounded ${isWhiteTheme ? "bg-rose-600 hover:bg-rose-500 text-white" : "bg-rose-500 hover:bg-rose-400 text-white"} text-xs font-black shadow-md transition`}
-                >
-                  예약 매도
-                </button>
-              </div>
-
-              <div className={`flex items-center justify-between pt-1 border-t ${isWhiteTheme ? "border-rose-200 text-slate-600" : "border-rose-900/40 text-slate-400"} text-[10px] font-mono`}>
-                <div className="flex items-center gap-1">
-                  <span>신호 강도</span>
-                  <div className="flex gap-0.5">
-                    {[1, 2, 3, 4].map((b) => (
-                      <div key={b} className={`w-1.5 h-1.5 rounded-xs ${isWhiteTheme ? "bg-rose-600" : "bg-rose-500"}`} />
-                    ))}
-                  </div>
-                  <span className={`${isWhiteTheme ? "text-rose-800 font-bold" : "text-rose-300"} ml-1`}>82%</span>
-                </div>
-                <span>추세 이탈 방어</span>
+                <span>엔진 검증 상태</span>
               </div>
             </div>
           </div>
@@ -3153,16 +3181,20 @@ export const MasterAiAutoTradingDashboard: React.FC<{
               AI MARKET ALERT
             </span>
             <span className={`${isWhiteTheme ? "text-slate-800 font-medium" : "text-slate-300"} truncate text-[11px]`}>
-              삼성전자 AI 모델이 강한 매수 신호를 감지했습니다.
+              {decisionLogs && decisionLogs.length > 0 
+                ? decisionLogs[0].message 
+                : `${currentStock?.name || "전종목"} 실시간 AI 상태머신 감시 가동 중`}
             </span>
           </div>
 
           <div className={`hidden md:flex items-center gap-2 shrink-0 pl-4 border-l ${isWhiteTheme ? "border-slate-200" : "border-slate-800"}`}>
             <span className={`px-2 py-0.5 rounded ${isWhiteTheme ? "bg-amber-100 border border-amber-300 text-amber-800 font-bold" : "bg-amber-950/80 border border-amber-700/80 text-amber-300 font-bold"} text-[10px]`}>
-              BREAKING NEWS
+              REALTIME STATUS
             </span>
             <span className={`${isWhiteTheme ? "text-slate-600" : "text-slate-400"} truncate text-[11px]`}>
-              미국 고용지표 호조로 시장 상승세 지속
+              {decisionLogs && decisionLogs.length > 1
+                ? decisionLogs[1].message
+                : "증권사 WebSocket / REST 실시간 데이터 피드 동기화 완료"}
             </span>
           </div>
         </div>
@@ -3170,9 +3202,13 @@ export const MasterAiAutoTradingDashboard: React.FC<{
         {/* System Operational Badge */}
         <div className="flex items-center gap-2 shrink-0">
           <span className={`${isWhiteTheme ? "text-slate-500" : "text-slate-400"} text-[11px] hidden sm:inline`}>System Status</span>
-          <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full ${isWhiteTheme ? "bg-emerald-100 border border-emerald-300 text-emerald-800" : "bg-emerald-950/80 border border-emerald-800/80 text-emerald-300"} text-[10px] font-mono`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${isWhiteTheme ? "bg-emerald-600" : "bg-emerald-400"} animate-pulse`} />
-            <span>All Systems Operational</span>
+          <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full ${
+            isAiModeOn
+              ? (isWhiteTheme ? "bg-emerald-100 border border-emerald-300 text-emerald-800" : "bg-emerald-950/80 border border-emerald-800/80 text-emerald-300")
+              : (isWhiteTheme ? "bg-slate-100 border border-slate-300 text-slate-700" : "bg-slate-900 border border-slate-800 text-slate-400")
+          } text-[10px] font-mono`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${isAiModeOn ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`} />
+            <span>{isAiModeOn ? "AI ENGINE ONLINE" : "AI ENGINE STANDBY (OFF)"}</span>
           </div>
         </div>
       </footer>
@@ -3384,16 +3420,9 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                 }))}
                 timeframe={selectedTimeframe}
                 horizonMode="MEDIUM"
-                tradePlan={{
-                  entryPrice: currentStock.price,
-                  tp1: Math.round(currentStock.price * 1.05),
-                  tp2: Math.round(currentStock.price * 1.10),
-                  stopLoss: Math.round(currentStock.price * 0.97),
-                  riskRewardRatio: 2.85
-                }}
-                recommendation="BUY"
-                actionSignal="BUY_CANDIDATE"
-                aiConfidence={currentStock?.price > 0 ? 80 : 0}
+                recommendation={liveTradingState}
+                actionSignal={liveTradingState === "BUY" ? "BUY_CANDIDATE" : liveTradingState === "SELL" ? "SELL_SIGNAL" : "WAIT_OBSERVE"}
+                aiConfidence={liveTechnicalScore ?? 0}
               />
             </div>
           </div>
