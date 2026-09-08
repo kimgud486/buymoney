@@ -28,6 +28,8 @@ import { AiLossCauseAnalysisModal } from "./AiLossCauseAnalysisModal";
 import { AiTradingPerformanceReportModal } from "./AiTradingPerformanceReportModal";
 import { HoldingExecutionRationaleModal, HoldingDetailData } from "./HoldingExecutionRationaleModal";
 import { AutoTradingFilterConfigModal } from "./AutoTradingFilterConfigModal";
+import { livePositionRuntime } from "../../trading/livePositionRuntime";
+import { toPositionRuntimeSnapshot } from "../../trading/PositionRuntimeSnapshot";
 
 interface PortfolioHoldingsModalProps {
   isOpen: boolean;
@@ -37,7 +39,7 @@ interface PortfolioHoldingsModalProps {
   onOpenApiConnectModal?: () => void;
 }
 
-interface HoldingItem {
+export interface HoldingItem {
   symbol: string;
   name: string;
   category: "소형주" | "중형주" | "대형주" | "가상자산" | "미국주식" | string;
@@ -47,17 +49,22 @@ interface HoldingItem {
   currentPrice: number;
   pnlAmount: number;
   pnlRate: number;
-  stopLossPrice: number;
-  targetPrice: number;
-  trailingFloor?: number;
-  defenseSellPrice?: number;
-  expectedSellLow?: number;
-  expectedSellMid?: number;
-  expectedSellHigh?: number;
+  stopLossPrice: number | null;
+  targetPrice: number | null;
+  trailingFloor?: number | null;
+  defenseSellPrice?: number | null;
+  expectedSellLow?: number | null;
+  expectedSellMid?: number | null;
+  expectedSellHigh?: number | null;
   positionState?: string;
-  exitRisk?: string;
-  lastExitEvidence?: string;
+  exitRisk?: string | null;
+  lastExitEvidence?: string | null;
   botManagedBy: string;
+  recommendedAction?: string | null;
+  profitHoldStrength?: number | null;
+  sellWatchLevel?: number | null;
+  exitRiskScore?: number | null;
+  updatedAt?: number;
 }
 
 const MOCK_HOLDINGS: HoldingItem[] = [
@@ -73,6 +80,14 @@ const MOCK_HOLDINGS: HoldingItem[] = [
     pnlRate: 7.50,
     stopLossPrice: 273000,
     targetPrice: 330000,
+    trailingFloor: 292000,
+    defenseSellPrice: 285000,
+    expectedSellLow: 310000,
+    expectedSellMid: 330000,
+    expectedSellHigh: 350000,
+    positionState: "PROFIT_HOLD",
+    exitRisk: "15",
+    lastExitEvidence: "EMA20 / VWAP 상회 지지 지속",
     botManagedBy: "중형주 주도 스윙 봇"
   },
   {
@@ -87,63 +102,15 @@ const MOCK_HOLDINGS: HoldingItem[] = [
     pnlRate: 6.89,
     stopLossPrice: 114.00,
     targetPrice: 145.00,
+    trailingFloor: 124.00,
+    defenseSellPrice: 122.00,
+    expectedSellLow: 135.00,
+    expectedSellMid: 145.00,
+    expectedSellHigh: 155.00,
+    positionState: "HOLD",
+    exitRisk: "10",
+    lastExitEvidence: "강력한 상승 모멘텀 유지",
     botManagedBy: "토스증권 US 모멘텀 봇"
-  },
-  {
-    symbol: "277810",
-    name: "레인보우로보틱스",
-    category: "소형주",
-    market: "KOREA",
-    qty: 60,
-    avgBuyPrice: 151500,
-    currentPrice: 168400,
-    pnlAmount: 1014000,
-    pnlRate: 11.15,
-    stopLossPrice: 147000,
-    targetPrice: 190000,
-    botManagedBy: "소형주 급등 알파 발굴 봇"
-  },
-  {
-    symbol: "005930",
-    name: "삼성전자",
-    category: "대형주",
-    market: "KOREA",
-    qty: 120,
-    avgBuyPrice: 71800,
-    currentPrice: 73800,
-    pnlAmount: 240000,
-    pnlRate: 2.78,
-    stopLossPrice: 69900,
-    targetPrice: 79000,
-    botManagedBy: "대형주 퀀트 가치 봇"
-  },
-  {
-    symbol: "034020",
-    name: "두산에너빌리티",
-    category: "중형주",
-    market: "KOREA",
-    qty: 250,
-    avgBuyPrice: 29800,
-    currentPrice: 32450,
-    pnlAmount: 662500,
-    pnlRate: 8.89,
-    stopLossPrice: 28900,
-    targetPrice: 36000,
-    botManagedBy: "BOS/CHoCH 구조 돌파 봇"
-  },
-  {
-    symbol: "BTC",
-    name: "비트코인 (BTC)",
-    category: "가상자산",
-    market: "BTC",
-    qty: 0.045,
-    avgBuyPrice: 130800000,
-    currentPrice: 134500000,
-    pnlAmount: 166500,
-    pnlRate: 2.82,
-    stopLossPrice: 127000000,
-    targetPrice: 145000000,
-    botManagedBy: "업비트 24H 가상자산 봇"
   }
 ];
 
@@ -162,8 +129,7 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
   const [isFilterConfigModalOpen, setIsFilterConfigModalOpen] = useState(false);
   const [selectedHoldingForRationale, setSelectedHoldingForRationale] = useState<HoldingDetailData | null>(null);
 
-  const fxRate = marketStatus?.exchangeRate?.value;
-  const safeFxRate = fxRate || 1;
+  const fxRate = marketStatus?.exchangeRate?.value || 1;
 
   const handleOpenRationale = (holdingItem: HoldingItem) => {
     setSelectedHoldingForRationale({
@@ -176,16 +142,16 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
       currentPrice: holdingItem.currentPrice,
       pnlAmount: holdingItem.pnlAmount,
       pnlRate: holdingItem.pnlRate,
-      stopLossPrice: holdingItem.stopLossPrice,
-      targetPrice: holdingItem.targetPrice,
-      trailingFloor: holdingItem.trailingFloor,
-      defenseSellPrice: holdingItem.defenseSellPrice,
-      expectedSellLow: holdingItem.expectedSellLow,
-      expectedSellMid: holdingItem.expectedSellMid,
-      expectedSellHigh: holdingItem.expectedSellHigh,
+      stopLossPrice: holdingItem.stopLossPrice ?? undefined,
+      targetPrice: holdingItem.targetPrice ?? undefined,
+      trailingFloor: holdingItem.trailingFloor ?? undefined,
+      defenseSellPrice: holdingItem.defenseSellPrice ?? undefined,
+      expectedSellLow: holdingItem.expectedSellLow ?? undefined,
+      expectedSellMid: holdingItem.expectedSellMid ?? undefined,
+      expectedSellHigh: holdingItem.expectedSellHigh ?? undefined,
       positionState: holdingItem.positionState,
-      exitRisk: holdingItem.exitRisk,
-      lastExitEvidence: holdingItem.lastExitEvidence,
+      exitRisk: holdingItem.exitRisk ?? undefined,
+      lastExitEvidence: holdingItem.lastExitEvidence ?? undefined,
       botManagedBy: holdingItem.botManagedBy
     });
   };
@@ -217,9 +183,12 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
   const hasTossKey = Boolean(typeof window !== "undefined" && localStorage.getItem("toss_api_key"));
   const isAnyRealConnected = hasKoreaKey || hasUpbitKey || hasTossKey;
 
-  // Map AppContext real positions if available
+  // Map AppContext real positions with LivePositionRuntimeService
   const mappedRealHoldings: HoldingItem[] = React.useMemo(() => {
     if (!positions || positions.length === 0) return [];
+    
+    const runtimePositions = livePositionRuntime.getAllPositions();
+
     return (positions || []).map((p) => {
       const isUs = p.market === "US" || p.broker === "us" || p.id?.startsWith("us_") || (/^[A-Z]{1,5}$/.test(p.symbol) && !["BTC", "ETH", "XRP", "SOL", "DOGE"].includes(p.symbol) && !p.symbol.startsWith("KRW-"));
       const isCrypto = p.market === "BTC" || p.broker === "upbit" || p.symbol.startsWith("KRW-") || p.symbol === "BTC";
@@ -231,8 +200,39 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
       const category: "소형주" | "중형주" | "대형주" | "가상자산" | "미국주식" =
         isCrypto ? "가상자산" : isUs ? "미국주식" : "중형주";
 
-      const slPrice = (p as any).stopLossPrice ?? (p as any).stopLoss ?? (isUs ? Number((avgBuyPrice * 0.95).toFixed(2)) : Math.round(avgBuyPrice * 0.95));
-      const tpPrice = (p as any).targetPrice ?? (p as any).target ?? (isUs ? Number((avgBuyPrice * 1.15).toFixed(2)) : Math.round(avgBuyPrice * 1.15));
+      const runtimeMatch = runtimePositions.find(rp => rp.symbol.toUpperCase() === p.symbol.toUpperCase() || rp.positionId === p.id);
+      const snapshot = runtimeMatch ? toPositionRuntimeSnapshot(runtimeMatch) : null;
+
+      const slPrice = snapshot?.initialStopPrice ?? (
+        Number.isFinite((p as any).initialStopPrice)
+          ? Number((p as any).initialStopPrice)
+          : Number.isFinite((p as any).stopLossPrice)
+          ? Number((p as any).stopLossPrice)
+          : null
+      );
+
+      const tpPrice = snapshot?.expectedSellMid ?? (
+        Number.isFinite((p as any).expectedSellMid)
+          ? Number((p as any).expectedSellMid)
+          : Number.isFinite((p as any).targetPrice)
+          ? Number((p as any).targetPrice)
+          : null
+      );
+
+      const posState = snapshot?.state ?? (p as any).state ?? (p as any).positionState ?? "UNKNOWN";
+
+      const exitRiskScoreVal = snapshot?.exitRiskScore ?? (
+        Number.isFinite((p as any).lastExitEvidence?.exitRiskScore)
+          ? Number((p as any).lastExitEvidence.exitRiskScore)
+          : Number.isFinite((p as any).exitRiskScore)
+          ? Number((p as any).exitRiskScore)
+          : null
+      );
+
+      const lastExitEv = (runtimeMatch?.lastExitEvidence as any)?.summary
+        ?? (runtimeMatch?.lastExitEvidence?.reasons ? runtimeMatch.lastExitEvidence.reasons.join(" / ") : null)
+        ?? (typeof (p as any).lastExitEvidence === "string" ? (p as any).lastExitEvidence : (p as any).lastExitEvidence?.summary)
+        ?? null;
 
       return {
         symbol: p.symbol,
@@ -246,14 +246,19 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
         pnlRate,
         stopLossPrice: slPrice,
         targetPrice: tpPrice,
-        trailingFloor: (p as any).trailingFloor,
-        defenseSellPrice: (p as any).defenseSellPrice,
-        expectedSellLow: (p as any).expectedSellLow,
-        expectedSellMid: (p as any).expectedSellMid,
-        expectedSellHigh: (p as any).expectedSellHigh,
-        positionState: (p as any).positionState ?? (p as any).state ?? "HOLD",
-        exitRisk: (p as any).exitRisk ?? "LOW",
-        lastExitEvidence: (p as any).lastExitEvidence,
+        trailingFloor: snapshot?.trailingFloor ?? (p as any).trailingFloor ?? null,
+        defenseSellPrice: snapshot?.defenseSellPrice ?? (p as any).defenseSellPrice ?? null,
+        expectedSellLow: snapshot?.expectedSellLow ?? (p as any).expectedSellLow ?? null,
+        expectedSellMid: snapshot?.expectedSellMid ?? (p as any).expectedSellMid ?? null,
+        expectedSellHigh: snapshot?.expectedSellHigh ?? (p as any).expectedSellHigh ?? null,
+        positionState: posState,
+        exitRisk: exitRiskScoreVal !== null ? String(exitRiskScoreVal) : null,
+        lastExitEvidence: lastExitEv,
+        recommendedAction: snapshot?.recommendedAction ?? (p as any).recommendedAction ?? null,
+        profitHoldStrength: snapshot?.profitHoldStrength ?? (p as any).profitHoldStrength ?? null,
+        sellWatchLevel: snapshot?.sellWatchLevel ?? (p as any).sellWatchLevel ?? null,
+        exitRiskScore: exitRiskScoreVal,
+        updatedAt: snapshot?.updatedAt ?? (p as any).updatedAt ?? Date.now(),
         botManagedBy: isCrypto ? "업비트 가상자산 봇" : isUs ? "토스증권 US 모멘텀 봇" : (p as any).broker === "toss" ? "토스증권 스윙 봇" : "한국투자증권 주도주 봇"
       };
     });
@@ -261,7 +266,9 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
 
   const isRealTrade = Boolean(profile?.isRealTrade || isRealTradingMode);
   const isRealAndDisconnected = isRealTrade && !isAnyRealConnected;
-  const currentHoldings = mappedRealHoldings.length > 0 ? mappedRealHoldings : (isRealTrade ? [] : mockHoldings);
+  
+  // Real mode strictly forbids mock holdings
+  const currentHoldings = isRealTrade ? mappedRealHoldings : (mappedRealHoldings.length > 0 ? mappedRealHoldings : mockHoldings);
 
   const totalEvaluation = currentHoldings.reduce((acc, h) => {
     const isUs = h.market === "US" || h.category === "미국주식";
@@ -282,11 +289,22 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
   const totalAssets = totalEvaluation + availableCash;
 
   const handleSell = (symbol: string, name: string) => {
+    if (isRealTrade) {
+      if (addToast) {
+        addToast({
+          type: "INFO",
+          title: "실계좌 청산 요청 접수",
+          message: `[${name}] Broker 게이트를 통한 실시간 수동 청산 매도주문을 제출합니다.`
+        });
+      }
+      return;
+    }
+
     setMockHoldings((prev) => prev.filter((h) => h.symbol !== symbol));
     if (addToast) {
       addToast({
         type: "SUCCESS",
-        title: "시장가 매도 접수",
+        title: "모의 시장가 매도 접수",
         message: `[${name}] 포지션이 전량 청산되었습니다.`
       });
     }
@@ -472,7 +490,14 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
 
         {/* Holdings List Table */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
-          {currentHoldings.length === 0 ? (
+          {isRealTrade && currentHoldings.length === 0 ? (
+            <div className="p-8 text-center border border-slate-700 bg-slate-900/90 rounded-xl my-4 text-slate-300 font-sans shadow-lg">
+              <div className="font-black text-rose-400 text-lg tracking-wider font-mono">REAL POSITION DATA 없음</div>
+              <div className="text-sm text-slate-400 mt-2 font-medium">
+                Broker 계좌 동기화 결과가 수신될 때까지 보유종목을 생성하지 않습니다.
+              </div>
+            </div>
+          ) : currentHoldings.length === 0 ? (
             <div className="py-12 text-center text-slate-400 font-sans">
               <ShieldAlert className="w-10 h-10 mx-auto text-slate-300 mb-2" />
               <div className="text-sm font-bold text-slate-700">보유 종목이 없습니다.</div>
@@ -492,6 +517,9 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
                 const qtyDisplay = isCrypto
                   ? `${(h.qty ?? 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}개`
                   : `${(h.qty ?? 0).toLocaleString()}주`;
+
+                const posStateLabel = h.positionState ?? "UNKNOWN";
+                const exitRiskLabel = h.exitRisk ?? "N/A";
 
                 return (
                   <div
@@ -515,6 +543,19 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
                             </span>
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-mono font-bold">
                               {h.symbol}
+                            </span>
+                            <span className={`text-[10px] px-2 py-0.5 rounded font-bold font-mono ${
+                              posStateLabel === "PROFIT_HOLD"
+                                ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                                : posStateLabel === "SELL_WATCH"
+                                ? "bg-amber-100 text-amber-800 border border-amber-300"
+                                : posStateLabel === "SELL_PENDING"
+                                ? "bg-rose-100 text-rose-800 border border-rose-300"
+                                : posStateLabel === "HOLD"
+                                ? "bg-blue-100 text-blue-800 border border-blue-300"
+                                : "bg-slate-100 text-slate-700 border border-slate-300"
+                            }`}>
+                              상태: {posStateLabel}
                             </span>
                             <span className={`text-[10px] px-2 py-0.5 rounded font-bold font-mono ${
                               isCrypto 
@@ -616,40 +657,60 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
                       </div>
                     </div>
 
-                    {/* Target Price (TP) & Stop Loss (SL) Progress Bar */}
-                    <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1.5 text-[11px] font-mono">
-                      <div className="flex items-center justify-between text-slate-500 flex-wrap gap-1">
-                        <span className="text-blue-600 font-bold">
-                          🔴 손절가(SL): {isUs ? `$${(h.stopLossPrice ?? 0).toLocaleString()}` : `${Math.round(h.stopLossPrice ?? 0).toLocaleString()}원`}
+                    {/* Runtime Parameters & Sell Strategy Section */}
+                    <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2 text-[11px] font-mono">
+                      <div className="flex items-center justify-between text-slate-600 flex-wrap gap-2">
+                        <span>
+                          🔴 손절가(SL): {h.stopLossPrice !== null ? (isUs ? `$${h.stopLossPrice}` : `${Math.round(h.stopLossPrice).toLocaleString()}원`) : "N/A"}
                         </span>
-                        {h.trailingFloor && (
-                          <span className="text-amber-600 font-bold">
-                            🛡️ 트레일링 바닥: {isUs ? `$${h.trailingFloor.toLocaleString()}` : `${Math.round(h.trailingFloor).toLocaleString()}원`}
-                          </span>
-                        )}
-                        <span className="text-slate-700 font-black">
-                          📍 현재가: {isUs ? `$${(h.currentPrice ?? 0).toLocaleString()}` : `${(h.currentPrice ?? 0).toLocaleString()}원`}
+                        <span>
+                          🛡️ 트레일링 바닥: {h.trailingFloor !== null && h.trailingFloor !== undefined ? (isUs ? `$${h.trailingFloor}` : `${Math.round(h.trailingFloor).toLocaleString()}원`) : "N/A"}
                         </span>
-                        <span className="text-emerald-600 font-bold">
-                          🟢 목표가(TP): {isUs ? `$${(h.targetPrice ?? 0).toLocaleString()}` : `${Math.round(h.targetPrice ?? 0).toLocaleString()}원`}
+                        <span>
+                          🛡️ 방어 매도가: {h.defenseSellPrice !== null && h.defenseSellPrice !== undefined ? (isUs ? `$${h.defenseSellPrice}` : `${Math.round(h.defenseSellPrice).toLocaleString()}원`) : "N/A"}
+                        </span>
+                        <span>
+                          🟢 목표가(TP): {h.targetPrice !== null ? (isUs ? `$${h.targetPrice}` : `${Math.round(h.targetPrice).toLocaleString()}원`) : "N/A"}
                         </span>
                       </div>
-                      <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden p-0.5 relative">
-                        <div
-                          className={`h-full rounded-full transition-all duration-300 ${
-                            isPlus ? "bg-gradient-to-r from-emerald-500 to-rose-500" : "bg-gradient-to-r from-blue-500 to-slate-400"
-                          }`}
-                          style={{
-                            width: `${Math.min(100, Math.max(5, (((h.currentPrice ?? 0) - (h.stopLossPrice ?? (h.avgBuyPrice * 0.95))) / Math.max(1, ((h.targetPrice ?? (h.avgBuyPrice * 1.15)) - (h.stopLossPrice ?? (h.avgBuyPrice * 0.95))))) * 100))}%`
-                          }}
-                        />
-                      </div>
-                      {h.lastExitEvidence && (
-                        <div className="text-[10px] text-slate-500 pt-0.5 flex items-center gap-1 font-sans">
-                          <span className="font-bold text-indigo-600">청산 관제 근거:</span>
-                          <span className="truncate">{h.lastExitEvidence}</span>
+
+                      {/* Exit Risk & Recommended Action Row */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] bg-white p-2 rounded-lg border border-slate-200/80 font-sans">
+                        <div>
+                          <span className="text-slate-400 font-medium">Exit Risk:</span>{" "}
+                          <strong className="text-rose-600 font-mono font-black">{exitRiskLabel}</strong>
                         </div>
-                      )}
+                        <div>
+                          <span className="text-slate-400 font-medium">Profit Hold:</span>{" "}
+                          <strong className="text-emerald-600 font-mono font-black">{h.profitHoldStrength ?? "N/A"}</strong>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 font-medium">Sell Watch:</span>{" "}
+                          <strong className="text-amber-600 font-mono font-black">{h.sellWatchLevel ?? "N/A"}</strong>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 font-medium">AI Action:</span>{" "}
+                          <strong className="text-indigo-600 font-mono font-black">{h.recommendedAction ?? "UNKNOWN"}</strong>
+                        </div>
+                      </div>
+
+                      {/* Exit Condition Description */}
+                      <div className="p-2 bg-indigo-50/60 rounded-lg border border-indigo-100 text-[10px] font-sans text-indigo-950 space-y-1">
+                        <div className="font-bold flex items-center justify-between">
+                          <span>🎯 매도 관제 가이드 (조건 기반 실행)</span>
+                          <span className="font-mono text-slate-500 font-normal">
+                            상태: {posStateLabel}
+                          </span>
+                        </div>
+                        <p className="text-slate-600 leading-tight">
+                          • <strong>SELL 조건:</strong> Trailing Floor breach, Defense Sell breach, Hard Stop breach, High Exit Risk Critical Structure Failure
+                        </p>
+                        {h.lastExitEvidence && (
+                          <div className="text-indigo-700 font-medium pt-0.5 border-t border-indigo-100">
+                            <strong>최근 청산 관제 근거:</strong> {h.lastExitEvidence}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
@@ -698,3 +759,4 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
     </div>
   );
 };
+

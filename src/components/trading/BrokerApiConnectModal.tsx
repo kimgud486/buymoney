@@ -1078,6 +1078,7 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({
             </button>
 
             <button
+              data-testid="broker-api-save"
               onClick={activeTab === "ALL" ? executeSaveAll : (activeTab === "UPBIT" ? executeSaveUpbit : executeSaveKorea)}
               disabled={isSaving}
               className={`px-4 py-2 rounded-xl text-xs font-bold text-white transition cursor-pointer shadow-xs flex items-center gap-1.5 ${

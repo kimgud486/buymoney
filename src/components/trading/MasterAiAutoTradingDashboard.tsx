@@ -63,6 +63,7 @@ import { FractionalStockOrderModal } from "./FractionalStockOrderModal";
 import { UploadedStrategyFileReaderModal } from "./UploadedStrategyFileReaderModal";
 import { AistockV11ExecutionConsole } from "../AistockV11ExecutionConsole";
 import { RealtimeScannerTileBoard } from "../RealtimeScannerTileBoard";
+import { uiActionExecutor } from "../../ui/UiActionExecutor";
 import { realtimeMarketFeedService } from "../../services/realtimeMarketFeedService";
 import { AiFutureTrendOverlayChart } from "../AiFutureTrendOverlayChart";
 import { InteractivePredictionCanvasChart } from "../InteractivePredictionCanvasChart";
@@ -1004,6 +1005,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
 
           {/* Quick Integration Hub buttons for 100% full feature retention */}
           <button
+            data-testid="open-holdings"
             onClick={() => setIsBalanceModalOpen(true)}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${isWhiteTheme ? "bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700" : "bg-[#0e1d35] hover:bg-[#152a4e] border-slate-700/80 text-slate-200"} border text-xs transition cursor-pointer`}
             title="실계좌 잔고 및 포지션 상세"
@@ -1022,6 +1024,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
           </button>
 
           <button
+            data-testid="open-consensus-modal"
             onClick={() => {
               if (onOpenConsensusModal) onOpenConsensusModal(selectedSymbol);
               else setIsConsensusModalOpen(true);
@@ -1035,6 +1038,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
 
           {/* Manual Entry Gate (Scanner Omission Inspection Engine) */}
           <button
+            data-testid="open-manual-entry"
             onClick={() => setIsManualGateOpen(true)}
             className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white border border-blue-400/40 text-xs font-bold transition shadow-sm cursor-pointer"
             title="스캐너 밖 종목 직접 입력 및 AI BUY 정밀 검증 (Manual Entry Gate)"
@@ -1055,15 +1059,17 @@ export const MasterAiAutoTradingDashboard: React.FC<{
 
           {/* Settings Modal (API & Risk Governance) */}
           <button
-            onClick={() => setIsGovernanceModalOpen(true)}
+            data-testid="open-broker-api"
+            onClick={() => setIsBrokerApiModalOpen(true)}
             className={`p-1.5 rounded-lg ${isWhiteTheme ? "text-slate-600 hover:text-slate-900 hover:bg-slate-100" : "text-slate-400 hover:text-white hover:bg-[#13233c]"} transition`}
-            title="리스크 거버넌스 및 설정"
+            title="증권사 API 설정 모달"
           >
             <Settings className="w-4 h-4" />
           </button>
 
           {/* Overseas Fractional Trading Button */}
           <button
+            data-testid="open-fractional-order"
             onClick={() => setIsFractionalModalOpen(true)}
             className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${
               isWhiteTheme
@@ -1074,6 +1080,21 @@ export const MasterAiAutoTradingDashboard: React.FC<{
           >
             <Coins className="w-3.5 h-3.5 text-cyan-500" />
             <span>소수점 매매 ($1~)</span>
+          </button>
+
+          {/* US Scalper Super Brain Modal Button */}
+          <button
+            data-testid="open-us-brain"
+            onClick={() => setIsUsBrainModalOpen(true)}
+            className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${
+              isWhiteTheme
+                ? "bg-purple-50 hover:bg-purple-100 border-purple-300 text-purple-800 font-bold shadow-xs"
+                : "bg-purple-950/70 hover:bg-purple-900/80 border-purple-700/60 text-purple-300 font-bold shadow-md shadow-purple-950/40"
+            } border text-xs transition cursor-pointer`}
+            title="US Scalper Super Brain 모달 열기"
+          >
+            <Cpu className="w-3.5 h-3.5 text-purple-400" />
+            <span>US Brain</span>
           </button>
 
           {/* SMC Structure Visualizer */}
@@ -1188,6 +1209,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                 </span>
               </div>
               <button
+                data-testid="open-stock-search"
                 onClick={() => setIsSearchModalOpen(true)}
                 className={`text-[10px] flex items-center gap-1 px-2 py-0.5 rounded ${isWhiteTheme ? "bg-slate-100 hover:bg-slate-200 text-cyan-800 border border-slate-200" : "bg-[#0e1d35] hover:bg-[#152a4e] text-cyan-300"} transition`}
                 title="종목 상세 검색 모달"
@@ -1537,7 +1559,29 @@ export const MasterAiAutoTradingDashboard: React.FC<{
 
               {/* Timeframe Controls (1m, 5m, 15m, 30m, 1H, 4H, D, W) */}
               <div className={`flex items-center gap-1 ${isWhiteTheme ? "bg-slate-100 border-slate-300" : "bg-[#060e1b] border-slate-800"} p-1 rounded-lg border text-xs font-mono`}>
-                {["1m", "5m", "15m", "30m", "1H", "4H", "D", "W"].map((tf) => (
+                <button
+                  data-testid="chart-timeframe-1m"
+                  onClick={() => setSelectedTimeframe("1m")}
+                  className={`px-2 py-0.5 rounded transition ${
+                    selectedTimeframe === "1m"
+                      ? (isWhiteTheme ? "bg-cyan-600 text-white font-bold shadow-xs" : "bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/40")
+                      : (isWhiteTheme ? "text-slate-600 hover:text-slate-900 hover:bg-white" : "text-slate-400 hover:text-white")
+                  }`}
+                >
+                  1m
+                </button>
+                <button
+                  data-testid="chart-timeframe-5m"
+                  onClick={() => setSelectedTimeframe("5m")}
+                  className={`px-2 py-0.5 rounded transition ${
+                    selectedTimeframe === "5m"
+                      ? (isWhiteTheme ? "bg-cyan-600 text-white font-bold shadow-xs" : "bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/40")
+                      : (isWhiteTheme ? "text-slate-600 hover:text-slate-900 hover:bg-white" : "text-slate-400 hover:text-white")
+                  }`}
+                >
+                  5m
+                </button>
+                {["15m", "30m", "1H", "4H", "D", "W"].map((tf) => (
                   <button
                     key={tf}
                     onClick={() => setSelectedTimeframe(tf)}
@@ -1566,9 +1610,27 @@ export const MasterAiAutoTradingDashboard: React.FC<{
 
                   {isIndicatorsDropdownOpen && (
                     <div className={`absolute right-0 top-full mt-1 w-44 ${isWhiteTheme ? "bg-white border-slate-300 shadow-xl" : "bg-[#0a1526] border-slate-700 shadow-xl"} border rounded-xl p-2 z-40 space-y-1.5 text-xs`}>
+                      <label className={`flex items-center justify-between cursor-pointer p-1 rounded ${isWhiteTheme ? "hover:bg-slate-100" : "hover:bg-slate-800"}`}>
+                        <span className={isWhiteTheme ? "text-slate-800 font-medium" : "text-slate-200"}>이동평균선 (EMA 5/20/60)</span>
+                        <input
+                          type="checkbox"
+                          data-testid="chart-indicator-ema"
+                          checked={activeIndicators.ma}
+                          onChange={(e) => setActiveIndicators(prev => ({ ...prev, ma: e.target.checked }))}
+                          className="rounded text-cyan-500 focus:ring-0"
+                        />
+                      </label>
+                      <label className={`flex items-center justify-between cursor-pointer p-1 rounded ${isWhiteTheme ? "hover:bg-slate-100" : "hover:bg-slate-800"}`}>
+                        <span className={isWhiteTheme ? "text-slate-800 font-medium" : "text-slate-200"}>VWAP (거래량가중평균가)</span>
+                        <input
+                          type="checkbox"
+                          data-testid="chart-indicator-vwap"
+                          checked={activeIndicators.vwap}
+                          onChange={(e) => setActiveIndicators(prev => ({ ...prev, vwap: e.target.checked }))}
+                          className="rounded text-cyan-500 focus:ring-0"
+                        />
+                      </label>
                       {[
-                        { key: "ma", label: "이동평균선 (EMA 5/20/60)" },
-                        { key: "vwap", label: "VWAP (거래량가중평균가)" },
                         { key: "bb", label: "볼린저 밴드 (BB 20,2)" },
                         { key: "atrBand", label: "동적 ATR 변동성 밴드" },
                         { key: "srLines", label: "동적 지지/저항선 (S/R)" },
@@ -1598,6 +1660,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
 
                 {/* File / Strategy Upload Reader Button */}
                 <button
+                  data-testid="open-strategy-reader"
                   onClick={() => setIsStrategyFileReaderOpen(true)}
                   className={`flex items-center gap-1 px-2.5 py-1 rounded ${
                     isWhiteTheme
@@ -3074,7 +3137,17 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                     </button>
                   )}
                   <button
-                    onClick={() => triggerAiExecution("BUY", currentStock.symbol, currentStock.price)}
+                    data-testid="manual-buy"
+                    onClick={() => {
+                      uiActionExecutor.execute(
+                        "manual-buy",
+                        () => null,
+                        async () => {
+                          await triggerAiExecution("BUY", currentStock.symbol, currentStock.price);
+                          return { ok: true, status: "FILLED", code: "SUCCESS" };
+                        }
+                      );
+                    }}
                     disabled={liveTradingState !== "BUY" || !isAiModeOn}
                     className={`px-2.5 py-1 rounded ${
                       liveTradingState === "BUY" && isAiModeOn
@@ -3085,7 +3158,17 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                     자율 매수 체결
                   </button>
                   <button
-                    onClick={() => triggerAiExecution("SELL", currentStock.symbol, currentStock.price)}
+                    data-testid="manual-sell"
+                    onClick={() => {
+                      uiActionExecutor.execute(
+                        "manual-sell",
+                        () => null,
+                        async () => {
+                          await triggerAiExecution("SELL", currentStock.symbol, currentStock.price);
+                          return { ok: true, status: "FILLED", code: "SUCCESS" };
+                        }
+                      );
+                    }}
                     disabled={liveTradingState !== "SELL" || !isAiModeOn}
                     className={`px-2.5 py-1 rounded ${
                       liveTradingState === "SELL" && isAiModeOn
@@ -3427,6 +3510,28 @@ export const MasterAiAutoTradingDashboard: React.FC<{
             </div>
           </div>
         </div>
+      )}
+
+      {/* Broker API Connect Modal */}
+      {isBrokerApiModalOpen && (
+        <BrokerApiConnectModal
+          isOpen={isBrokerApiModalOpen}
+          onClose={() => setIsBrokerApiModalOpen(false)}
+        />
+      )}
+
+      {/* US Scalper Super Brain Modal */}
+      {isUsBrainModalOpen && (
+        <UsScalperSuperBrainModal
+          isOpen={isUsBrainModalOpen}
+          onClose={() => setIsUsBrainModalOpen(false)}
+          stock={{
+            symbol: currentStock.symbol,
+            name: currentStock.name,
+            price: currentStock.price,
+            market: currentStock.market
+          }}
+        />
       )}
 
     </div>

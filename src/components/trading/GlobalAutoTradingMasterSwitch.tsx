@@ -13,7 +13,7 @@ export const GlobalAutoTradingMasterSwitch: React.FC<GlobalAutoTradingMasterSwit
   isAutoTradingActive,
   onToggleAutoTrading,
 }) => {
-  const { profile, updateProfileSettings, addToast, isKillSwitchActive } = useApp();
+  const { profile, updateProfileSettings, addToast, isKillSwitchActive, systemHealth } = useApp();
   const allBots = getAllBots();
   const activeBotsCount = isAutoTradingActive ? allBots.length : 0;
 
@@ -22,88 +22,106 @@ export const GlobalAutoTradingMasterSwitch: React.FC<GlobalAutoTradingMasterSwit
   const hasTossKey = Boolean(typeof window !== "undefined" && localStorage.getItem("toss_api_key"));
   const hasRealCredentials = hasKoreaKey || hasUpbitKey || hasTossKey;
 
-  const handleResumeAll = () => {
-    // Safety Gate 1: Check Kill Switch
+  const isRealTradeMode = profile?.isRealTrade ?? false;
+  const brokerHealthy = systemHealth ? systemHealth.brokerConnected : true;
+  const accountSynced = systemHealth ? systemHealth.accountSynced : true;
+  const feedFresh = systemHealth ? systemHealth.feedFresh : true;
+
+  const realAutoTradingReady =
+    (!isRealTradeMode || hasRealCredentials) &&
+    brokerHealthy &&
+    accountSynced &&
+    feedFresh &&
+    !isKillSwitchActive;
+
+  const handleResumeAll = async () => {
     if (isKillSwitchActive) {
-      if (addToast) {
-        addToast({
-          type: "ERROR",
-          title: "🛑 [자율매매 재개 불가]",
-          message: "Emergency Kill Switch가 활성화되어 있습니다. 킬스위치 해제 후 가동하십시오."
-        });
-      }
+      addToast?.({
+        type: "ERROR",
+        title: "🛑 [자율매매 재개 불가]",
+        message: "Emergency Kill Switch가 활성화되어 있습니다. 킬스위치 해제 후 가동하십시오."
+      });
       return;
     }
 
-    // Safety Gate 2: Check Real Trading API Credentials if in Real Mode
-    if (profile?.isRealTrade && !hasRealCredentials) {
-      if (addToast) {
-        addToast({
-          type: "ERROR",
-          title: "❌ [실거래 자율매매 가동 불가]",
-          message: "연결된 증권사(KIS/토스) 또는 거래소(업비트) API Key가 없습니다. API 설정 후 가동하십시오."
-        });
-      }
+    if (isRealTradeMode && !hasRealCredentials) {
+      addToast?.({
+        type: "ERROR",
+        title: "❌ [실거래 자율매매 가동 불가]",
+        message: "연결된 증권사(KIS/토스) 또는 거래소(업비트) API Key가 없습니다. API 설정 후 가동하십시오."
+      });
       return;
     }
 
-    onToggleAutoTrading(true);
-    
-    // Update all bots status immediately
-    allBots.forEach(b => {
-      try {
-        saveCustomBot({
-          ...b,
-          status: "ONLINE",
-          statusText: "자율 매매 가동중"
-        });
-        aiDynamicBotThresholdEngine.updateBotThreshold(b.id, { operationalState: "ACTIVE" });
-      } catch (e) {
-        console.warn("Failed to update bot state:", b.id, e);
-      }
-    });
+    if (!realAutoTradingReady) {
+      addToast?.({
+        type: "ERROR",
+        title: "❌ [실거래 실행 Gate 미충족]",
+        message: "브로커 연결 또는 실시간 데이터 동기화 상태를 확인하십시오."
+      });
+      return;
+    }
 
-    // Async persist profile in background without blocking UI
     try {
-      updateProfileSettings({ autoTradingEnabled: true }).catch(() => {});
-    } catch (_) {}
+      await updateProfileSettings({ autoTradingEnabled: true });
+      onToggleAutoTrading(true);
 
-    if (addToast) {
-      addToast({
+      allBots.forEach(b => {
+        try {
+          saveCustomBot({
+            ...b,
+            status: "ONLINE",
+            statusText: "실거래 가동중"
+          });
+          aiDynamicBotThresholdEngine.updateBotThreshold(b.id, { operationalState: "ACTIVE" });
+        } catch (e) {
+          console.warn("Failed to update bot state:", b.id, e);
+        }
+      });
+
+      addToast?.({
         type: "SUCCESS",
         title: "⚡ [AI 전 종목 자율매매 일괄 재개]",
-        message: `총 ${allBots.length}개 AI 봇의 실시간 자동 주문 및 퀀트 엔진이 즉시 가동되었습니다.`
+        message: `총 ${allBots.length}개 AI 봇의 실시간 자동 주문 및 퀀트 엔진이 가동되었습니다.`
+      });
+    } catch (error) {
+      onToggleAutoTrading(false);
+      addToast?.({
+        type: "ERROR",
+        title: "자율매매 활성화 실패",
+        message: "설정 저장 또는 실행 준비 확인에 실패했습니다."
       });
     }
   };
 
-  const handlePauseAll = () => {
-    onToggleAutoTrading(false);
-
-    // Pause all bots status immediately
-    allBots.forEach(b => {
-      try {
-        saveCustomBot({
-          ...b,
-          status: "IDLE",
-          statusText: "일시 정지됨"
-        });
-        aiDynamicBotThresholdEngine.updateBotThreshold(b.id, { operationalState: "PAUSED" });
-      } catch (e) {
-        console.warn("Failed to pause bot state:", b.id, e);
-      }
-    });
-
-    // Async persist profile in background without blocking UI
+  const handlePauseAll = async () => {
     try {
-      updateProfileSettings({ autoTradingEnabled: false }).catch(() => {});
-    } catch (_) {}
+      await updateProfileSettings({ autoTradingEnabled: false });
+      onToggleAutoTrading(false);
 
-    if (addToast) {
-      addToast({
+      allBots.forEach(b => {
+        try {
+          saveCustomBot({
+            ...b,
+            status: "IDLE",
+            statusText: "일시 정지됨"
+          });
+          aiDynamicBotThresholdEngine.updateBotThreshold(b.id, { operationalState: "PAUSED" });
+        } catch (e) {
+          console.warn("Failed to pause bot state:", b.id, e);
+        }
+      });
+
+      addToast?.({
         type: "WARNING",
         title: "🛑 [AI 전 종목 자율매매 일괄 일시정지]",
         message: `모든 AI 봇의 실시간 매수/매도 자동 실행이 동결되었습니다. (안전 방어 유지)`
+      });
+    } catch (error) {
+      addToast?.({
+        type: "ERROR",
+        title: "일시정지 설정 저장 실패",
+        message: "설정 저장 중 오류가 발생했습니다."
       });
     }
   };
@@ -138,6 +156,37 @@ export const GlobalAutoTradingMasterSwitch: React.FC<GlobalAutoTradingMasterSwit
             <p className="text-xs text-slate-300 font-sans mt-0.5">
               전체 {allBots.length}개 AI 트레이딩 봇의 실시간 매매 파이프라인을 일괄 제어합니다. (현재 {activeBotsCount}개 봇 가동 중)
             </p>
+
+            {/* Status Reason Badges */}
+            {!realAutoTradingReady && (
+              <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                {isKillSwitchActive && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-rose-500/20 border border-rose-500/40 text-rose-300 rounded">
+                    KILL SWITCH ACTIVE
+                  </span>
+                )}
+                {isRealTradeMode && !hasRealCredentials && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-amber-500/20 border border-amber-500/40 text-amber-300 rounded">
+                    NO CREDENTIALS
+                  </span>
+                )}
+                {!brokerHealthy && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-rose-500/20 border border-rose-500/40 text-rose-300 rounded">
+                    BROKER DISCONNECTED
+                  </span>
+                )}
+                {!accountSynced && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-amber-500/20 border border-amber-500/40 text-amber-300 rounded">
+                    ACCOUNT NOT SYNCED
+                  </span>
+                )}
+                {!feedFresh && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-rose-500/20 border border-rose-500/40 text-rose-300 rounded">
+                    REALTIME FEED STALE
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -145,19 +194,26 @@ export const GlobalAutoTradingMasterSwitch: React.FC<GlobalAutoTradingMasterSwit
         <div className="flex items-center gap-2.5 w-full md:w-auto justify-end">
           <button
             type="button"
+            data-testid="auto-trading-start"
             onClick={handleResumeAll}
-            disabled={(isAutoTradingActive && !isKillSwitchActive) || isKillSwitchActive || (Boolean(profile?.isRealTrade) && !hasRealCredentials)}
+            disabled={(isAutoTradingActive && !isKillSwitchActive) || !realAutoTradingReady}
             title={
               isKillSwitchActive
                 ? "Emergency Kill Switch가 발동 중입니다."
-                : profile?.isRealTrade && !hasRealCredentials
+                : isRealTradeMode && !hasRealCredentials
                 ? "증권사/거래소 API Key가 등록되지 않았습니다."
+                : !brokerHealthy
+                ? "브로커 서버와 연결되지 않았습니다."
+                : !accountSynced
+                ? "계좌 상태가 동기화되지 않았습니다."
+                : !feedFresh
+                ? "실시간 데이터 피드가 오래되었습니다."
                 : isAutoTradingActive
                 ? "자율매매가 이미 가동 중입니다."
                 : "전체 AI 봇 자율매매 시작"
             }
             className={`flex-1 md:flex-initial flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-black text-xs transition cursor-pointer shadow-sm ${
-              (isAutoTradingActive && !isKillSwitchActive) || isKillSwitchActive || (Boolean(profile?.isRealTrade) && !hasRealCredentials)
+              (isAutoTradingActive && !isKillSwitchActive) || !realAutoTradingReady
                 ? "bg-emerald-600/30 text-emerald-200 border border-emerald-500/30 opacity-60 cursor-not-allowed"
                 : "bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black shadow-emerald-500/30"
             }`}
@@ -168,6 +224,7 @@ export const GlobalAutoTradingMasterSwitch: React.FC<GlobalAutoTradingMasterSwit
 
           <button
             type="button"
+            data-testid="auto-trading-pause"
             onClick={handlePauseAll}
             disabled={!isAutoTradingActive}
             className={`flex-1 md:flex-initial flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-black text-xs transition cursor-pointer shadow-sm ${

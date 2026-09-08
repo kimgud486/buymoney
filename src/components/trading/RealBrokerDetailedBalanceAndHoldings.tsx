@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from "react";
+import { uiActionExecutor } from "../../ui/UiActionExecutor";
 import {
   Wallet,
   Building2,
@@ -994,31 +995,40 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
                     {/* 1-Click Action Controls */}
                     <div className="flex items-center gap-1.5 pt-2 border-t border-slate-800/80">
                       <button
+                        data-testid="manual-sell"
                         onClick={async () => {
-                          try {
-                            await executeTrade(
-                              pos.symbol,
-                              pos.name,
-                              pos.market,
-                              "SELL",
-                              pos.quantity,
-                              pos.currentPrice,
-                              "실거래 보유종목 1-Click 즉시 매도",
-                              "보유종목 전량 익절/매도 청산",
-                              true
-                            );
-                            addToast({
-                              type: "SUCCESS",
-                              title: "⚡ 즉시 매도 주문 접수",
-                              message: `[${pos.name}] ${formatQty(pos.quantity, pos.market)} 전량 즉시 매도 주문이 접수되었습니다.`
-                            });
-                          } catch (e: any) {
-                            addToast({
-                              type: "ERROR",
-                              title: "즉시 매도 주문 실패",
-                              message: e?.message || "주문 실행 중 오류가 발생했습니다."
-                            });
-                          }
+                          await uiActionExecutor.execute(
+                            "manual-sell",
+                            () => null,
+                            async () => {
+                              try {
+                                await executeTrade(
+                                  pos.symbol,
+                                  pos.name,
+                                  pos.market,
+                                  "SELL",
+                                  pos.quantity,
+                                  pos.currentPrice,
+                                  "실거래 보유종목 1-Click 즉시 매도",
+                                  "보유종목 전량 익절/매도 청산",
+                                  true
+                                );
+                                addToast({
+                                  type: "SUCCESS",
+                                  title: "⚡ 즉시 매도 주문 접수",
+                                  message: `[${pos.name}] ${formatQty(pos.quantity, pos.market)} 전량 즉시 매도 주문이 접수되었습니다.`
+                                });
+                                return { ok: true, status: "FILLED", code: "SUCCESS" };
+                              } catch (e: any) {
+                                addToast({
+                                  type: "ERROR",
+                                  title: "즉시 매도 주문 실패",
+                                  message: e?.message || "주문 실행 중 오류가 발생했습니다."
+                                });
+                                return { ok: false, status: "FAILED", code: "EXECUTION_ERROR" };
+                              }
+                            }
+                          );
                         }}
                         className="flex-1 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs transition cursor-pointer flex items-center justify-center gap-1 shadow-xs"
                       >
@@ -1027,6 +1037,7 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
                       </button>
 
                       <button
+                        data-testid="partial-sell"
                         onClick={async () => {
                           const halfQty = pos.market === "BTC"
                             ? Number((pos.quantity * 0.5).toFixed(6))
@@ -1037,30 +1048,38 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
                             return;
                           }
 
-                          try {
-                            await executeTrade(
-                              pos.symbol,
-                              pos.name,
-                              pos.market,
-                              "SELL",
-                              halfQty,
-                              pos.currentPrice,
-                              "실거래 50% 분할 익절",
-                              "보유종목 50% 부분 매도",
-                              true
-                            );
-                            addToast({
-                              type: "INFO",
-                              title: "🛡️ 50% 분할 매도 접수",
-                              message: `[${pos.name}] ${halfQty} 50% 분할 매도 주문이 접수되었습니다.`
-                            });
-                          } catch (e: any) {
-                            addToast({
-                              type: "ERROR",
-                              title: "분할 매도 주문 실패",
-                              message: e?.message || "주문 실행 중 오류가 발생했습니다."
-                            });
-                          }
+                          await uiActionExecutor.execute(
+                            "partial-sell",
+                            () => null,
+                            async () => {
+                              try {
+                                await executeTrade(
+                                  pos.symbol,
+                                  pos.name,
+                                  pos.market,
+                                  "SELL",
+                                  halfQty,
+                                  pos.currentPrice,
+                                  "실거래 50% 분할 익절",
+                                  "보유종목 50% 부분 매도",
+                                  true
+                                );
+                                addToast({
+                                  type: "INFO",
+                                  title: "🛡️ 50% 분할 매도 접수",
+                                  message: `[${pos.name}] ${halfQty} 50% 분할 매도 주문이 접수되었습니다.`
+                                });
+                                return { ok: true, status: "FILLED", code: "SUCCESS" };
+                              } catch (e: any) {
+                                addToast({
+                                  type: "ERROR",
+                                  title: "분할 매도 주문 실패",
+                                  message: e?.message || "주문 실행 중 오류가 발생했습니다."
+                                });
+                                return { ok: false, status: "FAILED", code: "EXECUTION_ERROR" };
+                              }
+                            }
+                          );
                         }}
                         className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-bold text-xs border border-slate-700 transition cursor-pointer"
                         title="50% 절반 분할 매도"

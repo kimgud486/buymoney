@@ -351,6 +351,7 @@ export const StockSearchAndAddModal: React.FC<StockSearchAndAddModalProps> = ({
               return (
                 <div
                   key={stock.symbol}
+                  data-testid="stock-search-select"
                   onClick={() => {
                     onSelectStock({
                       ...stock,

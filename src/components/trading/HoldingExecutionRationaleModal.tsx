@@ -100,8 +100,8 @@ export const HoldingExecutionRationaleModal: React.FC<HoldingExecutionRationaleM
   const isPlus = (holding?.pnlRate ?? 0) >= 0;
   const currentPrice = holding?.currentPrice || holding?.avgBuyPrice || 10000;
   const avgBuyPrice = holding?.avgBuyPrice || currentPrice;
-  const targetPrice = holding?.targetPrice || Math.round(avgBuyPrice * 1.15);
-  const stopLossPrice = holding?.stopLossPrice || Math.round(avgBuyPrice * 0.95);
+  const targetPrice = holding?.targetPrice ?? holding?.expectedSellMid ?? null;
+  const stopLossPrice = holding?.stopLossPrice ?? holding?.defenseSellPrice ?? null;
 
   const evalAmount = (holding?.qty ?? 0) * currentPrice;
   const costAmount = (holding?.qty ?? 0) * avgBuyPrice;
