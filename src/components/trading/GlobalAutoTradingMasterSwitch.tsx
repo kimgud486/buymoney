@@ -17,7 +17,36 @@ export const GlobalAutoTradingMasterSwitch: React.FC<GlobalAutoTradingMasterSwit
   const allBots = getAllBots();
   const activeBotsCount = isAutoTradingActive ? allBots.length : 0;
 
+  const hasKoreaKey = Boolean(profile?.koreaAppKey && profile?.koreaAccountNo);
+  const hasUpbitKey = Boolean(profile?.upbitAccessKey);
+  const hasTossKey = Boolean(typeof window !== "undefined" && localStorage.getItem("toss_api_key"));
+  const hasRealCredentials = hasKoreaKey || hasUpbitKey || hasTossKey;
+
   const handleResumeAll = () => {
+    // Safety Gate 1: Check Kill Switch
+    if (isKillSwitchActive) {
+      if (addToast) {
+        addToast({
+          type: "ERROR",
+          title: "🛑 [자율매매 재개 불가]",
+          message: "Emergency Kill Switch가 활성화되어 있습니다. 킬스위치 해제 후 가동하십시오."
+        });
+      }
+      return;
+    }
+
+    // Safety Gate 2: Check Real Trading API Credentials if in Real Mode
+    if (profile?.isRealTrade && !hasRealCredentials) {
+      if (addToast) {
+        addToast({
+          type: "ERROR",
+          title: "❌ [실거래 자율매매 가동 불가]",
+          message: "연결된 증권사(KIS/토스) 또는 거래소(업비트) API Key가 없습니다. API 설정 후 가동하십시오."
+        });
+      }
+      return;
+    }
+
     onToggleAutoTrading(true);
     
     // Update all bots status immediately
@@ -117,9 +146,18 @@ export const GlobalAutoTradingMasterSwitch: React.FC<GlobalAutoTradingMasterSwit
           <button
             type="button"
             onClick={handleResumeAll}
-            disabled={isAutoTradingActive && !isKillSwitchActive}
+            disabled={(isAutoTradingActive && !isKillSwitchActive) || isKillSwitchActive || (Boolean(profile?.isRealTrade) && !hasRealCredentials)}
+            title={
+              isKillSwitchActive
+                ? "Emergency Kill Switch가 발동 중입니다."
+                : profile?.isRealTrade && !hasRealCredentials
+                ? "증권사/거래소 API Key가 등록되지 않았습니다."
+                : isAutoTradingActive
+                ? "자율매매가 이미 가동 중입니다."
+                : "전체 AI 봇 자율매매 시작"
+            }
             className={`flex-1 md:flex-initial flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-black text-xs transition cursor-pointer shadow-sm ${
-              isAutoTradingActive && !isKillSwitchActive
+              (isAutoTradingActive && !isKillSwitchActive) || isKillSwitchActive || (Boolean(profile?.isRealTrade) && !hasRealCredentials)
                 ? "bg-emerald-600/30 text-emerald-200 border border-emerald-500/30 opacity-60 cursor-not-allowed"
                 : "bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black shadow-emerald-500/30"
             }`}

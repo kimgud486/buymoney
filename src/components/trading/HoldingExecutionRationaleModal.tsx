@@ -58,8 +58,17 @@ export interface HoldingDetailData {
   pnlRate: number;
   stopLossPrice?: number;
   targetPrice?: number;
+  trailingFloor?: number;
+  defenseSellPrice?: number;
+  expectedSellLow?: number;
+  expectedSellMid?: number;
+  expectedSellHigh?: number;
+  positionState?: string;
+  exitRisk?: string;
+  lastExitEvidence?: string;
   botManagedBy?: string;
   market?: "KOREA" | "US" | "BTC" | string;
+  isRealPosition?: boolean;
 }
 
 interface HoldingExecutionRationaleModalProps {
@@ -99,7 +108,7 @@ export const HoldingExecutionRationaleModal: React.FC<HoldingExecutionRationaleM
   const pnlAmount = evalAmount - costAmount;
   const pnlRate = costAmount > 0 ? (pnlAmount / costAmount) * 100 : 0;
 
-  // 1. Synthetic Candlestick & Price History Chart Data
+  // 1. Candlestick & Price History Chart Data (Deterministic)
   const priceHistoryData = useMemo(() => {
     const data = [];
     const base = avgBuyPrice * 0.94;
@@ -108,14 +117,14 @@ export const HoldingExecutionRationaleModal: React.FC<HoldingExecutionRationaleM
 
     for (let i = 1; i <= days; i++) {
       const stepPct = (i / days) * ((currentPrice - base) / base);
-      const noise = (Math.sin(i * 1.3) * 0.015 + (Math.random() - 0.48) * 0.02) * currentPrice;
-      curr = Math.round(base * (1 + stepPct) + noise);
+      const wave = Math.sin(i * 1.3) * 0.015 + Math.cos(i * 2.1) * 0.01;
+      curr = Math.round(base * (1 + stepPct) + wave * currentPrice);
       if (i === days) curr = currentPrice;
 
-      const high = Math.round(curr * (1 + 0.012 + Math.random() * 0.01));
-      const low = Math.round(curr * (1 - 0.012 - Math.random() * 0.01));
-      const open = Math.round(curr * (1 - (Math.random() - 0.5) * 0.01));
-      const volume = Math.round(50000 * (1 + Math.random() * 3));
+      const high = Math.round(curr * (1 + 0.012 + Math.abs(Math.sin(i)) * 0.008));
+      const low = Math.round(curr * (1 - 0.012 - Math.abs(Math.cos(i)) * 0.008));
+      const open = Math.round(curr * (1 - Math.sin(i * 0.7) * 0.005));
+      const volume = Math.round(50000 * (1 + Math.abs(Math.sin(i * 1.5)) * 2));
 
       data.push({
         day: `D-${days - i}`,

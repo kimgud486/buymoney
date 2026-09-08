@@ -459,7 +459,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const generateUniqueId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const generateUniqueId = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
 
   const removeToast = (id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
@@ -613,7 +613,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addToWatchlist = async (item: { symbol: string; name: string; market: 'KOREA' | 'US' | 'BTC'; targetBuyPrice?: number; memo?: string }) => {
     if (watchlist.some(w => w.symbol === item.symbol)) return;
     const newItem: WatchlistItem = {
-      id: "wl_" + Date.now() + "_" + Math.random().toString(36).substring(2, 6),
+      id: "wl_" + crypto.randomUUID(),
       symbol: item.symbol,
       name: item.name,
       market: item.market,
@@ -1074,18 +1074,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // ---------------------------------------------------------
   // Real Account API Response History Log Console State & Integrity Checker
   // ---------------------------------------------------------
-  const [apiResponseLogs, setApiResponseLogs] = useState<ApiResponseLogItem[]>([
-    {
-      id: "log_init",
-      timestamp: new Date().toISOString(),
-      broker: "KOREA",
-      endpoint: "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/trading/inquire-balance",
-      httpStatus: 200,
-      message: "한국투자증권 실전 OpenAPI 세션 연결 정상 수신 중",
-      integrityStatus: "HEALTHY",
-      rawResponse: { rt_cd: "0", msg_cd: "MCA00000", msg1: "정상 처리 되었습니다." }
-    }
-  ]);
+  const [apiResponseLogs, setApiResponseLogs] = useState<ApiResponseLogItem[]>([]);
 
   const syncRealAccountBalance = useCallback(async (
     broker: 'korea' | 'us' | 'upbit' | 'all' = 'all',
@@ -1826,7 +1815,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // Record this Emergency Stop in decision logs immediately
       const stopLog: AIDecisionLog = {
-        id: "dec_stop_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7),
+        id: "dec_stop_" + crypto.randomUUID(),
         timestamp: new Date().toISOString(),
         symbol: "SYS",
         name: "비상 제어",

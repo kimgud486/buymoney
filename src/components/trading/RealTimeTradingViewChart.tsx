@@ -40,6 +40,16 @@ import { PositionTrailingStateStoreV138 } from "../../services/v13_8/PositionTra
 import { generateForecastPath } from "../../realtime/ForecastPathEngine";
 import { realTimeMarketFeedManager } from "../../realtime/RealTimeMarketFeedService";
 
+export type LiveFeedHealth = "REALTIME" | "DELAYED" | "STALE" | "NO_DATA" | "INVALID";
+
+export interface FeedHealthState {
+  source: string;
+  quality: string;
+  health: LiveFeedHealth;
+  lastReceivedAt: number | null;
+  ageMs: number | null;
+}
+
 export interface RealTimeTradingViewChartProps {
   symbol: string;
   name: string;
@@ -84,6 +94,14 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
   const bearForecastSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const trailingExitSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const markersRef = useRef<any>(null);
+
+  const [feedHealth, setFeedHealth] = useState<FeedHealthState>({
+    source: "UNKNOWN",
+    quality: "UNKNOWN",
+    health: "NO_DATA",
+    lastReceivedAt: null,
+    ageMs: null
+  });
 
   // Current states
   const [selectedTf, setSelectedTf] = useState<"1m" | "3m" | "5m" | "15m" | "1D">(timeframe);
@@ -188,9 +206,22 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
     if (candles.length >= 30) {
       try {
         const verifiedCandles = candles.map(c => {
-          const src = (c as any).source || "KIS_REALTIME_WS";
-          const feedQual = (c as any).feedQuality || (src === "KIS_REALTIME_WS" ? "BROKER_REALTIME" : "POLLING_DELAYED");
-          const isVer = (c as any).verified ?? (src === "KIS_REALTIME_WS" && feedQual === "BROKER_REALTIME");
+          const src = typeof (c as any).source === "string" ? (c as any).source : "UNKNOWN";
+          const feedQual = typeof (c as any).feedQuality === "string" ? (c as any).feedQuality : "UNKNOWN";
+          const isVer = (c as any).verified === true && (feedQual === "BROKER_REALTIME" || feedQual === "EXCHANGE_REALTIME");
+          const integrityValid =
+            isVer &&
+            Number.isFinite(c.open) &&
+            Number.isFinite(c.high) &&
+            Number.isFinite(c.low) &&
+            Number.isFinite(c.close) &&
+            Number.isFinite(c.volume) &&
+            c.open > 0 &&
+            c.high > 0 &&
+            c.low > 0 &&
+            c.close > 0 &&
+            c.volume >= 0;
+
           return {
             symbol,
             market: market === "US" ? "US" : market === "UPBIT" || market === "CRYPTO" ? "CRYPTO" : "KOREA",
@@ -200,13 +231,23 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
             low: c.low,
             close: c.close,
             volume: c.volume,
-            startedAt: typeof c.time === 'number' ? c.time * 1000 : new Date(c.time).getTime(),
-            endedAt: (typeof c.time === 'number' ? c.time * 1000 : new Date(c.time).getTime()) + (selectedTf === "1m" ? 60000 : selectedTf === "3m" ? 180000 : selectedTf === "5m" ? 300000 : selectedTf === "15m" ? 900000 : 86400000),
+            startedAt: typeof c.time === "number" ? c.time * 1000 : new Date(c.time).getTime(),
+            endedAt:
+              (typeof c.time === "number" ? c.time * 1000 : new Date(c.time).getTime()) +
+              (selectedTf === "1m"
+                ? 60_000
+                : selectedTf === "3m"
+                ? 180_000
+                : selectedTf === "5m"
+                ? 300_000
+                : selectedTf === "15m"
+                ? 900_000
+                : 86_400_000),
             source: src,
-            receivedAt: (c as any).receivedAt || Date.now(),
+            receivedAt: Number.isFinite((c as any).receivedAt) ? (c as any).receivedAt : 0,
             verified: isVer,
             feedQuality: feedQual,
-            integrityValid: isVer
+            integrityValid
           };
         });
         const mlResult = runPredictionPipeline({
@@ -301,9 +342,10 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
         macdHist: indicators.macdHistogram
       });
 
-      previousTrailingFloorRef.current = res.trailingFloor;
-      trailingExitRef.current = res.trailingFloor;
-      setTrailingExitPrice(res.trailingFloor);
+      const nextFloor = Math.max(previousTrailingFloorRef.current, res.trailingFloor);
+      previousTrailingFloorRef.current = nextFloor;
+      trailingExitRef.current = nextFloor;
+      setTrailingExitPrice(nextFloor);
 
       const activeQty = entryPriceRef.current > 0 ? 1 : 0;
       const bridge = ExitDecisionBridgeV138.resolve({
@@ -351,8 +393,17 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
       }
     }
 
-    // 6. Generate 3-line forecast path
-    const forecast = generateForecastPath(candles, indicators, 8, modelVerified ? modelProb : undefined);
+    // 6. Generate 3-line forecast path ONLY if data is verified and ready
+    const forecastAllowed =
+      executionFeedValid &&
+      indicators.indicatorsReady === true &&
+      closedCandle.isClosed === true &&
+      candles.length >= 30;
+
+    const forecast = forecastAllowed
+      ? generateForecastPath(candles, indicators, 8, modelVerified ? modelProb : undefined)
+      : [];
+
     setLastForecast(forecast);
 
     if (forecastSeriesRef.current && bullForecastSeriesRef.current && bearForecastSeriesRef.current) {
@@ -601,8 +652,52 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
 
     // Subscribe to live tick stream
     const unsubscribeFeed = realTimeMarketFeedManager.subscribe(symbol, (tick: LiveTick) => {
+      const now = Date.now();
+
+      const receivedAt = Number.isFinite((tick as any).receivedAt)
+        ? (tick as any).receivedAt
+        : Number.isFinite(tick.timestamp)
+        ? tick.timestamp
+        : now;
+
+      const source = typeof (tick as any).source === "string"
+        ? (tick as any).source
+        : "UNKNOWN";
+
+      const quality = typeof (tick as any).feedQuality === "string"
+        ? (tick as any).feedQuality
+        : "UNKNOWN";
+
+      const validTick = Number.isFinite(tick.price) && tick.price > 0 && receivedAt > 0;
+
+      const ageMs = Math.max(0, now - receivedAt);
+
+      let health: LiveFeedHealth = "INVALID";
+
+      if (!validTick) {
+        health = "INVALID";
+      } else if (ageMs > 15_000) {
+        health = "STALE";
+      } else if (quality === "BROKER_REALTIME" || quality === "EXCHANGE_REALTIME") {
+        health = "REALTIME";
+      } else {
+        health = "DELAYED";
+      }
+
+      setFeedHealth({
+        source,
+        quality,
+        health,
+        lastReceivedAt: receivedAt,
+        ageMs
+      });
+
+      if (!validTick) {
+        return;
+      }
+
       setCurrentPrice(tick.price);
-      setLastTickTimeStr(new Date(tick.timestamp).toLocaleTimeString());
+      setLastTickTimeStr(new Date(receivedAt).toLocaleTimeString());
 
       const res = aggregatorRef.current.update(tick);
 
@@ -651,6 +746,34 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
     if (volumeSeriesRef.current) volumeSeriesRef.current.applyOptions({ visible: activeIndicators.volume });
   }, [activeIndicators]);
 
+  // Stale feed monitoring
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setFeedHealth(prev => {
+        if (!prev.lastReceivedAt) {
+          return prev;
+        }
+
+        const ageMs = Date.now() - prev.lastReceivedAt;
+
+        if (ageMs > 15_000 && prev.health !== "STALE") {
+          return {
+            ...prev,
+            ageMs,
+            health: "STALE"
+          };
+        }
+
+        return {
+          ...prev,
+          ageMs
+        };
+      });
+    }, 2_000);
+
+    return () => window.clearInterval(id);
+  }, []);
+
   const stateColors: Record<TradingState, { bg: string; text: string; border: string }> = {
     NO_TRADE: { bg: "bg-slate-700/40", text: "text-slate-300", border: "border-slate-600" },
     BUY_WATCH: { bg: "bg-amber-500/20", text: "text-amber-400", border: "border-amber-500/50" },
@@ -681,9 +804,31 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
           </div>
 
           {/* Live Tick Pulse Indicator */}
-          <div className="flex items-center gap-1 text-[11px] font-mono text-emerald-400">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-            <span className="font-bold">LIVE TICK</span>
+          <div className="flex items-center gap-1 text-[11px] font-mono">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                feedHealth.health === "REALTIME"
+                  ? "bg-emerald-500 animate-ping"
+                  : feedHealth.health === "STALE"
+                  ? "bg-amber-500"
+                  : "bg-slate-600"
+              }`}
+            />
+            <span
+              className={`font-bold ${
+                feedHealth.health === "REALTIME"
+                  ? "text-emerald-400"
+                  : feedHealth.health === "STALE"
+                  ? "text-amber-400"
+                  : "text-slate-500"
+              }`}
+            >
+              {feedHealth.health === "REALTIME"
+                ? "LIVE TICK"
+                : feedHealth.health === "STALE"
+                ? "STALE"
+                : "WAITING"}
+            </span>
             {lastTickTimeStr && <span className="text-slate-400 text-[10px]">({lastTickTimeStr})</span>}
           </div>
         </div>
@@ -703,9 +848,17 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
           </div>
 
           {/* Feed Quality Badge */}
-          <div className="px-2 py-1 rounded-lg bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 text-xs font-mono font-bold flex items-center gap-1">
-            <ShieldCheck className="w-3 h-3 text-emerald-400" />
-            <span>FEED: BROKER REALTIME</span>
+          <div
+            className={`px-2 py-1 rounded-lg border text-xs font-mono font-bold flex items-center gap-1 ${
+              feedHealth.health === "REALTIME"
+                ? "bg-emerald-950/60 border-emerald-800/60 text-emerald-300"
+                : feedHealth.health === "STALE"
+                ? "bg-amber-950/60 border-amber-800/60 text-amber-300"
+                : "bg-slate-900 border-slate-700 text-slate-400"
+            }`}
+          >
+            <ShieldCheck className="w-3 h-3 text-current" />
+            <span>FEED: {feedHealth.health}</span>
           </div>
 
           {/* Trailing Stop Display if Active */}
@@ -721,8 +874,15 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
       {/* Model Metadata Status Bar */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-2 py-1 bg-slate-900/90 rounded border border-slate-800 text-[10px] font-mono text-slate-400">
         <div className="flex items-center gap-3">
-          <span>SOURCE: <strong className="text-cyan-400">KIS_REALTIME_WS</strong></span>
-          <span>QUALITY: <strong className="text-emerald-400">BROKER_REALTIME</strong></span>
+          <span>
+            SOURCE: <strong className="text-cyan-400">{feedHealth.source}</strong>
+          </span>
+          <span>
+            QUALITY: <strong className="text-emerald-400">{feedHealth.quality}</strong>
+          </span>
+          <span>
+            AGE: <strong>{feedHealth.ageMs !== null ? `${feedHealth.ageMs}ms` : "N/A"}</strong>
+          </span>
           <span>TIMEFRAME: <strong className="text-amber-400">{selectedTf}</strong></span>
           <span>MODEL: <strong className="text-purple-400">TECHNICAL PROJECTION</strong></span>
         </div>

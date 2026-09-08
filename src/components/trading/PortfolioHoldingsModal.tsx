@@ -49,6 +49,14 @@ interface HoldingItem {
   pnlRate: number;
   stopLossPrice: number;
   targetPrice: number;
+  trailingFloor?: number;
+  defenseSellPrice?: number;
+  expectedSellLow?: number;
+  expectedSellMid?: number;
+  expectedSellHigh?: number;
+  positionState?: string;
+  exitRisk?: string;
+  lastExitEvidence?: string;
   botManagedBy: string;
 }
 
@@ -170,6 +178,14 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
       pnlRate: holdingItem.pnlRate,
       stopLossPrice: holdingItem.stopLossPrice,
       targetPrice: holdingItem.targetPrice,
+      trailingFloor: holdingItem.trailingFloor,
+      defenseSellPrice: holdingItem.defenseSellPrice,
+      expectedSellLow: holdingItem.expectedSellLow,
+      expectedSellMid: holdingItem.expectedSellMid,
+      expectedSellHigh: holdingItem.expectedSellHigh,
+      positionState: holdingItem.positionState,
+      exitRisk: holdingItem.exitRisk,
+      lastExitEvidence: holdingItem.lastExitEvidence,
       botManagedBy: holdingItem.botManagedBy
     });
   };
@@ -215,6 +231,9 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
       const category: "소형주" | "중형주" | "대형주" | "가상자산" | "미국주식" =
         isCrypto ? "가상자산" : isUs ? "미국주식" : "중형주";
 
+      const slPrice = (p as any).stopLossPrice ?? (p as any).stopLoss ?? (isUs ? Number((avgBuyPrice * 0.95).toFixed(2)) : Math.round(avgBuyPrice * 0.95));
+      const tpPrice = (p as any).targetPrice ?? (p as any).target ?? (isUs ? Number((avgBuyPrice * 1.15).toFixed(2)) : Math.round(avgBuyPrice * 1.15));
+
       return {
         symbol: p.symbol,
         name: p.name,
@@ -225,8 +244,16 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
         currentPrice: curPrice,
         pnlAmount,
         pnlRate,
-        stopLossPrice: isUs ? Number((avgBuyPrice * 0.95).toFixed(2)) : Math.round(avgBuyPrice * 0.95),
-        targetPrice: isUs ? Number((avgBuyPrice * 1.15).toFixed(2)) : Math.round(avgBuyPrice * 1.15),
+        stopLossPrice: slPrice,
+        targetPrice: tpPrice,
+        trailingFloor: (p as any).trailingFloor,
+        defenseSellPrice: (p as any).defenseSellPrice,
+        expectedSellLow: (p as any).expectedSellLow,
+        expectedSellMid: (p as any).expectedSellMid,
+        expectedSellHigh: (p as any).expectedSellHigh,
+        positionState: (p as any).positionState ?? (p as any).state ?? "HOLD",
+        exitRisk: (p as any).exitRisk ?? "LOW",
+        lastExitEvidence: (p as any).lastExitEvidence,
         botManagedBy: isCrypto ? "업비트 가상자산 봇" : isUs ? "토스증권 US 모멘텀 봇" : (p as any).broker === "toss" ? "토스증권 스윙 봇" : "한국투자증권 주도주 봇"
       };
     });
@@ -590,11 +617,22 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
                     </div>
 
                     {/* Target Price (TP) & Stop Loss (SL) Progress Bar */}
-                    <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1 text-[11px] font-mono">
-                      <div className="flex items-center justify-between text-slate-500">
-                        <span className="text-blue-600 font-bold">🔴 손절가(SL -2.5%): {Math.round(h.avgBuyPrice * 0.975).toLocaleString()}원</span>
-                        <span className="text-slate-700 font-black">📍 현재가: {(h.currentPrice ?? 0).toLocaleString()}원</span>
-                        <span className="text-emerald-600 font-bold">🟢 1차 목표가(TP +3.5%): {Math.round(h.avgBuyPrice * 1.035).toLocaleString()}원</span>
+                    <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1.5 text-[11px] font-mono">
+                      <div className="flex items-center justify-between text-slate-500 flex-wrap gap-1">
+                        <span className="text-blue-600 font-bold">
+                          🔴 손절가(SL): {isUs ? `$${(h.stopLossPrice ?? 0).toLocaleString()}` : `${Math.round(h.stopLossPrice ?? 0).toLocaleString()}원`}
+                        </span>
+                        {h.trailingFloor && (
+                          <span className="text-amber-600 font-bold">
+                            🛡️ 트레일링 바닥: {isUs ? `$${h.trailingFloor.toLocaleString()}` : `${Math.round(h.trailingFloor).toLocaleString()}원`}
+                          </span>
+                        )}
+                        <span className="text-slate-700 font-black">
+                          📍 현재가: {isUs ? `$${(h.currentPrice ?? 0).toLocaleString()}` : `${(h.currentPrice ?? 0).toLocaleString()}원`}
+                        </span>
+                        <span className="text-emerald-600 font-bold">
+                          🟢 목표가(TP): {isUs ? `$${(h.targetPrice ?? 0).toLocaleString()}` : `${Math.round(h.targetPrice ?? 0).toLocaleString()}원`}
+                        </span>
                       </div>
                       <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden p-0.5 relative">
                         <div
@@ -602,10 +640,16 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
                             isPlus ? "bg-gradient-to-r from-emerald-500 to-rose-500" : "bg-gradient-to-r from-blue-500 to-slate-400"
                           }`}
                           style={{
-                            width: `${Math.min(100, Math.max(5, ((h.currentPrice - (h.avgBuyPrice * 0.975)) / ((h.avgBuyPrice * 1.035) - (h.avgBuyPrice * 0.975))) * 100))}%`
+                            width: `${Math.min(100, Math.max(5, (((h.currentPrice ?? 0) - (h.stopLossPrice ?? (h.avgBuyPrice * 0.95))) / Math.max(1, ((h.targetPrice ?? (h.avgBuyPrice * 1.15)) - (h.stopLossPrice ?? (h.avgBuyPrice * 0.95))))) * 100))}%`
                           }}
                         />
                       </div>
+                      {h.lastExitEvidence && (
+                        <div className="text-[10px] text-slate-500 pt-0.5 flex items-center gap-1 font-sans">
+                          <span className="font-bold text-indigo-600">청산 관제 근거:</span>
+                          <span className="truncate">{h.lastExitEvidence}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );

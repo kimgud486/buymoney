@@ -132,22 +132,50 @@ export const InteractivePredictionCanvasChart: React.FC<InteractivePredictionCan
   const isUs = market === "US";
   const currencySymbol = isUs ? "$" : "₩";
 
-  // Trade plan metrics calculation derived dynamically from candle ATR if available
-  const atr = useMemo(() => {
-    if (!effectiveCandles || effectiveCandles.length < 5) return currentPrice * 0.02;
-    const slice = effectiveCandles.slice(-14);
-    const sum = slice.reduce((acc, c) => acc + Math.abs(c.high - c.low), 0);
-    return sum / slice.length;
-  }, [effectiveCandles, currentPrice]);
+  // Trade plan validation (Strict Approved Trade Plan check)
+  const approvedTradePlan = useMemo(() => {
+    if (!tradePlan) return null;
 
-  const entryP = tradePlan?.entryPrice || currentPrice;
-  const tp1P = tradePlan?.tp1 || Math.round(currentPrice + atr * 2);
-  const tp2P = tradePlan?.tp2 || Math.round(currentPrice + atr * 3.5);
-  const stopLossP = tradePlan?.stopLoss || Math.round(Math.max(1, currentPrice - atr * 1.5));
+    const entry = Number(tradePlan.entryPrice);
+    const tp1 = Number(tradePlan.tp1);
+    const tp2 = Number(tradePlan.tp2);
+    const stop = Number(tradePlan.stopLoss);
 
-  const gainPct1 = (((tp1P - currentPrice) / currentPrice) * 100).toFixed(1);
-  const gainPct2 = (((tp2P - currentPrice) / currentPrice) * 100).toFixed(1);
-  const lossPct = (((stopLossP - currentPrice) / currentPrice) * 100).toFixed(1);
+    if (
+      !Number.isFinite(entry) ||
+      !Number.isFinite(tp1) ||
+      !Number.isFinite(tp2) ||
+      !Number.isFinite(stop)
+    ) {
+      return null;
+    }
+
+    if (
+      entry <= 0 ||
+      stop <= 0 ||
+      stop >= entry ||
+      tp1 <= entry ||
+      tp2 <= tp1
+    ) {
+      return null;
+    }
+
+    return {
+      entryPrice: entry,
+      tp1,
+      tp2,
+      stopLoss: stop
+    };
+  }, [tradePlan]);
+
+  const entryP = approvedTradePlan?.entryPrice ?? null;
+  const tp1P = approvedTradePlan?.tp1 ?? null;
+  const tp2P = approvedTradePlan?.tp2 ?? null;
+  const stopLossP = approvedTradePlan?.stopLoss ?? null;
+
+  const gainPct1 = (entryP && tp1P) ? (((tp1P - entryP) / entryP) * 100).toFixed(1) : "0.0";
+  const gainPct2 = (entryP && tp2P) ? (((tp2P - entryP) / entryP) * 100).toFixed(1) : "0.0";
+  const lossPct = (entryP && stopLossP) ? (((stopLossP - entryP) / entryP) * 100).toFixed(1) : "0.0";
 
   // 🛡️ RISK GATE PARAMETERS & REALTIME INDICATOR LINKAGE
   const dailyLossLimit = profile?.dailyLossLimit ?? 2.5;
@@ -346,14 +374,14 @@ export const InteractivePredictionCanvasChart: React.FC<InteractivePredictionCan
         timeLabel: "T+1 (1차목표)",
         timestamp: Date.now() + 86400000,
         actualPrice: null,
-        bullPrice: tp1P,
-        basePrice: Math.round((entryP + tp1P) / 2),
+        bullPrice: tp1P ?? currentPrice * 1.02,
+        basePrice: Math.round(((entryP ?? currentPrice) + (tp1P ?? currentPrice * 1.02)) / 2),
         bearPrice: riskGateStopPrice,
-        upperBand: tp2P,
+        upperBand: tp2P ?? currentPrice * 1.05,
         lowerBand: riskGateStopPrice,
         ma5: currentPrice,
         ma20: currentPrice,
-        bollingerUpper: tp2P,
+        bollingerUpper: tp2P ?? currentPrice * 1.05,
         bollingerLower: riskGateStopPrice,
         bollingerMiddle: currentPrice,
         isFuturePredict: true,
@@ -866,7 +894,19 @@ export const InteractivePredictionCanvasChart: React.FC<InteractivePredictionCan
         </div>
       </div>
 
-      {/* 2. 📢 LARGE PROMINENT BUY & SELL TIMING BILLBOARD PANELS (매수 및 매도 타이밍 대형 전광판) */}
+      {/* 2. 📢 NO APPROVED TRADE PLAN BANNER OR PROMINENT BILLBOARD PANELS */}
+      {!approvedTradePlan && (
+        <div className="rounded-2xl border border-amber-600/50 bg-amber-950/30 p-4 text-xs font-mono text-amber-200 space-y-1 shadow-lg">
+          <div className="font-bold text-amber-400 text-sm flex items-center gap-1.5">
+            <AlertTriangle className="w-4 h-4 text-amber-400" />
+            NO APPROVED TRADE PLAN
+          </div>
+          <p className="text-amber-200/90 leading-relaxed">
+            실제 Entry / Stop / Target 근거가 확정될 때까지 임의의 주문 계획을 생성하지 않고 관망(HOLD)을 유지합니다.
+          </p>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* LARGE BUY TIMING BILLBOARD */}
         <div className="bg-gradient-to-br from-emerald-950/70 via-zinc-900 to-teal-950/70 border-2 border-emerald-500/70 rounded-3xl p-4 sm:p-5 shadow-2xl relative overflow-hidden group hover:border-emerald-400 transition-all">
