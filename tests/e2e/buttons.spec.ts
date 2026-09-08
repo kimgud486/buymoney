@@ -22,6 +22,11 @@ test.describe("Production Buttons E2E Smoke Tests", () => {
         await page.click('[data-testid="open-broker-api"]');
         await expect(element).toBeVisible();
         await page.keyboard.press("Escape");
+      } else if (["open-performance-report", "open-loss-analysis", "open-filter-settings", "partial-sell"].includes(btn.id)) {
+        // Holdings modal sub-buttons
+        await page.click('[data-testid="open-holdings"]');
+        await expect(element.first()).toBeAttached();
+        await page.keyboard.press("Escape");
       } else if (btn.id.startsWith("chart-indicator-")) {
         // Indicators are in the indicators dropdown
         const dropDownBtn = page.getByRole("button", { name: "지표 설정" });

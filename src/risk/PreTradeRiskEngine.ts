@@ -81,7 +81,7 @@ export function evaluatePreTrade(
     return { pass: false, reason: slipCheck.reason };
   }
 
-  const idempotencyKey = `auto_buy_${ctx.decision.symbol}_${Date.now()}`;
+  const idempotencyKey = `auto_buy_${ctx.decision.symbol}_${Date.now()}_${Math.floor(performance.now() * 1000)}`;
   const approvedQuantity = 1; // Default minimum unit calculated by position sizing
 
   return {

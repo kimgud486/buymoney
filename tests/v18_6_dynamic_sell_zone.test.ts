@@ -222,7 +222,16 @@ test("Requirement 5: Fast-path tick breach triggers SELL_PENDING, NOT immediate 
   service.registerPosition(pos);
 
   // Tick breaches defense sell floor (505 < 510)
-  const evalResult = service.onVerifiedTick("POS_001", 505);
+  const evalResult = service.onVerifiedTick("POS_001", {
+    symbol: "005930",
+    market: "KR",
+    price: 505,
+    sourceTimestamp: Date.now(),
+    receivedAt: Date.now(),
+    ageMs: 0,
+    sequence: 1,
+    dataStatus: "REALTIME_VERIFIED"
+  });
 
   assert.equal(evalResult.nextState, "SELL_PENDING");
   assert.equal(evalResult.actionRequired, "SUBMIT_SELL_ORDER");

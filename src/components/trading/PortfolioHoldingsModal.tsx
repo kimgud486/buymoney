@@ -23,6 +23,7 @@ import {
   Sparkles
 } from "lucide-react";
 import { useApp } from "../../context/AppContext";
+import { uiActionExecutor } from "../../ui/UiActionExecutor";
 import { useBodyScrollLock } from "../../hooks/useBodyScrollLock";
 import { AiLossCauseAnalysisModal } from "./AiLossCauseAnalysisModal";
 import { AiTradingPerformanceReportModal } from "./AiTradingPerformanceReportModal";
@@ -67,53 +68,6 @@ export interface HoldingItem {
   updatedAt?: number;
 }
 
-const MOCK_HOLDINGS: HoldingItem[] = [
-  {
-    symbol: "012450",
-    name: "한화에어로스페이스",
-    category: "중형주",
-    market: "KOREA",
-    qty: 35,
-    avgBuyPrice: 280000,
-    currentPrice: 301000,
-    pnlAmount: 735000,
-    pnlRate: 7.50,
-    stopLossPrice: 273000,
-    targetPrice: 330000,
-    trailingFloor: 292000,
-    defenseSellPrice: 285000,
-    expectedSellLow: 310000,
-    expectedSellMid: 330000,
-    expectedSellHigh: 350000,
-    positionState: "PROFIT_HOLD",
-    exitRisk: "15",
-    lastExitEvidence: "EMA20 / VWAP 상회 지지 지속",
-    botManagedBy: "중형주 주도 스윙 봇"
-  },
-  {
-    symbol: "NVDA",
-    name: "엔비디아 (NVIDIA)",
-    category: "미국주식",
-    market: "US",
-    qty: 15,
-    avgBuyPrice: 120.50,
-    currentPrice: 128.80,
-    pnlAmount: 124.50,
-    pnlRate: 6.89,
-    stopLossPrice: 114.00,
-    targetPrice: 145.00,
-    trailingFloor: 124.00,
-    defenseSellPrice: 122.00,
-    expectedSellLow: 135.00,
-    expectedSellMid: 145.00,
-    expectedSellHigh: 155.00,
-    positionState: "HOLD",
-    exitRisk: "10",
-    lastExitEvidence: "강력한 상승 모멘텀 유지",
-    botManagedBy: "토스증권 US 모멘텀 봇"
-  }
-];
-
 export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
   isOpen,
   onClose,
@@ -121,8 +75,7 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
   isRealTradingMode = false,
   onOpenApiConnectModal
 }) => {
-  const { profile, positions, cashBreakdown, marketStatus, purgeAllMockData, addToast } = useApp();
-  const [mockHoldings, setMockHoldings] = useState<HoldingItem[]>(MOCK_HOLDINGS);
+  const { profile, positions, cashBreakdown, marketStatus, purgeAllMockData, addToast, executeTrade } = useApp();
   const [isLossModalOpen, setIsLossModalOpen] = useState(false);
   const [selectedSymbolForLoss, setSelectedSymbolForLoss] = useState<string | null>(null);
   const [isPerformanceReportOpen, setIsPerformanceReportOpen] = useState(false);
@@ -164,7 +117,6 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
   const handlePurgeMockData = async () => {
     try {
       await purgeAllMockData();
-      setMockHoldings([]);
       if (addToast) {
         addToast({
           type: "SUCCESS",
@@ -268,7 +220,7 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
   const isRealAndDisconnected = isRealTrade && !isAnyRealConnected;
   
   // Real mode strictly forbids mock holdings
-  const currentHoldings = isRealTrade ? mappedRealHoldings : (mappedRealHoldings.length > 0 ? mappedRealHoldings : mockHoldings);
+  const currentHoldings = mappedRealHoldings;
 
   const totalEvaluation = currentHoldings.reduce((acc, h) => {
     const isUs = h.market === "US" || h.category === "미국주식";
@@ -288,26 +240,55 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
   const availableCash = cashBreakdown?.totalCash ?? profile?.cash ?? profile?.balance ?? 0;
   const totalAssets = totalEvaluation + availableCash;
 
-  const handleSell = (symbol: string, name: string) => {
-    if (isRealTrade) {
-      if (addToast) {
-        addToast({
-          type: "INFO",
-          title: "실계좌 청산 요청 접수",
-          message: `[${name}] Broker 게이트를 통한 실시간 수동 청산 매도주문을 제출합니다.`
-        });
+  const handleSell = async (symbol: string, name: string, qty: number) => {
+    await uiActionExecutor.execute(
+      "manual-sell",
+      () => null,
+      async () => {
+        if (executeTrade) {
+          await executeTrade({
+            symbol,
+            type: "SELL",
+            quantity: qty,
+            price: 0
+          });
+        }
+        if (addToast) {
+          addToast({
+            type: "SUCCESS",
+            title: "전량 매도 청산 제출 완료",
+            message: `[${name}] (${symbol}) ${qty}주 전량 시장가 매도 주문이 제출되었습니다.`
+          });
+        }
+        return { ok: true, status: "SUCCESS", code: "OK" };
       }
-      return;
-    }
+    );
+  };
 
-    setMockHoldings((prev) => prev.filter((h) => h.symbol !== symbol));
-    if (addToast) {
-      addToast({
-        type: "SUCCESS",
-        title: "모의 시장가 매도 접수",
-        message: `[${name}] 포지션이 전량 청산되었습니다.`
-      });
-    }
+  const handlePartialSell = async (symbol: string, name: string, qty: number) => {
+    const halfQty = Math.max(1, Math.floor(qty * 0.5));
+    await uiActionExecutor.execute(
+      "partial-sell",
+      () => null,
+      async () => {
+        if (executeTrade) {
+          await executeTrade({
+            symbol,
+            type: "SELL",
+            quantity: halfQty,
+            price: 0
+          });
+        }
+        if (addToast) {
+          addToast({
+            type: "SUCCESS",
+            title: "50% 부분 분할매도 제출 완료",
+            message: `[${name}] (${symbol}) ${halfQty}주(50%) 분할 매도 주문이 제출되었습니다.`
+          });
+        }
+        return { ok: true, status: "SUCCESS", code: "OK" };
+      }
+    );
   };
 
   // Lock body scrolling when modal is active
@@ -348,6 +329,7 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
 
           <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
             <button
+              data-testid="open-filter-settings"
               onClick={() => setIsFilterConfigModalOpen(true)}
               className="px-2.5 py-1.5 text-[11px] bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-md"
               title="무차별 매수 방지 및 업비트 코인 엄선 필터 설정"
@@ -356,6 +338,7 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
               <span>자율매매 필터 설정</span>
             </button>
             <button
+              data-testid="open-performance-report"
               onClick={() => setIsPerformanceReportOpen(true)}
               className="px-2.5 py-1.5 text-[11px] bg-gradient-to-r from-indigo-600 via-cyan-600 to-teal-600 hover:from-indigo-500 hover:to-teal-500 text-white font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-md"
               title="모의투자 자율매매 승률 및 매수/매도 시점 AI 성과 리포트"
@@ -364,6 +347,7 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
               <span>AI 성과 리포트</span>
             </button>
             <button
+              data-testid="open-loss-analysis"
               onClick={() => handleOpenLossAnalysis()}
               className="px-2.5 py-1.5 text-[11px] bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white font-bold rounded-xl transition flex items-center gap-1 cursor-pointer shadow-xs"
               title="마이너스 종목 손실 원인 정밀 분석"
@@ -379,6 +363,7 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
               <span>모의자산 삭제</span>
             </button>
             <button
+              data-testid="modal-close-button"
               onClick={onClose}
               className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-full transition cursor-pointer"
             >
@@ -648,10 +633,20 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
                             차트
                           </button>
                           <button
-                            onClick={() => handleSell(h.symbol, h.name)}
+                            type="button"
+                            data-testid="partial-sell"
+                            onClick={() => handlePartialSell(h.symbol, h.name, h.qty)}
+                            className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-xl text-[11px] font-bold transition cursor-pointer"
+                          >
+                            50% 청산
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="manual-sell"
+                            onClick={() => handleSell(h.symbol, h.name, h.qty)}
                             className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-[11px] font-bold transition cursor-pointer"
                           >
-                            청산
+                            전량 청산
                           </button>
                         </div>
                       </div>
@@ -694,19 +689,24 @@ export const PortfolioHoldingsModal: React.FC<PortfolioHoldingsModalProps> = ({
                         </div>
                       </div>
 
-                      {/* Exit Condition Description */}
-                      <div className="p-2 bg-indigo-50/60 rounded-lg border border-indigo-100 text-[10px] font-sans text-indigo-950 space-y-1">
+                      {/* Exit Condition Description & Status Meanings */}
+                      <div className="p-2.5 bg-indigo-50/70 rounded-lg border border-indigo-100 text-[10px] font-sans text-indigo-950 space-y-1.5">
                         <div className="font-bold flex items-center justify-between">
-                          <span>🎯 매도 관제 가이드 (조건 기반 실행)</span>
-                          <span className="font-mono text-slate-500 font-normal">
+                          <span>🎯 매도 관제 가이드 (언제 매도?)</span>
+                          <span className="font-mono text-indigo-700 font-bold bg-indigo-100 px-2 py-0.5 rounded">
                             상태: {posStateLabel}
                           </span>
                         </div>
-                        <p className="text-slate-600 leading-tight">
-                          • <strong>SELL 조건:</strong> Trailing Floor breach, Defense Sell breach, Hard Stop breach, High Exit Risk Critical Structure Failure
-                        </p>
+                        <div className="text-slate-700 leading-tight space-y-0.5">
+                          <p>• <strong>HOLD:</strong> 현재 매도 조건 미충족 (포지션 유지)</p>
+                          <p>• <strong>PROFIT HOLD:</strong> 목표 영역 진입 및 수익 추적 트레일링 가동</p>
+                          <p>• <strong>SELL WATCH:</strong> 매도 경고 지표 감지 및 조건 강화 중</p>
+                          <p>• <strong>SELL_PENDING:</strong> Broker 게이트로 매도 주문 전송 제출 중</p>
+                          <p>• <strong>SELL_PARTIAL:</strong> 일부 수량 체결 완료</p>
+                          <p>• <strong>CLOSED:</strong> 전량 매도 체결 및 포지션 종료</p>
+                        </div>
                         {h.lastExitEvidence && (
-                          <div className="text-indigo-700 font-medium pt-0.5 border-t border-indigo-100">
+                          <div className="text-indigo-800 font-medium pt-1 border-t border-indigo-200/60">
                             <strong>최근 청산 관제 근거:</strong> {h.lastExitEvidence}
                           </div>
                         )}

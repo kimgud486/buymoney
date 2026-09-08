@@ -67,14 +67,14 @@ test("KISRealtimeStreamBus - Official H0STASP0 Orderbook Depth Parsing", () => {
 });
 
 test("KISRealtimeStreamBus - Official H0STCNI0 Account Execution Notice Parsing", () => {
-  const rawNoticeData = new Array(10).fill("");
+  const rawNoticeData = new Array(20).fill("");
   rawNoticeData[H0STCNI0.ACCOUNT_NO] = "5012345601";
   rawNoticeData[H0STCNI0.ORDER_ID] = "ORD_0099";
   rawNoticeData[H0STCNI0.SYMBOL] = "005930";
   rawNoticeData[H0STCNI0.SIDE_CODE] = "01"; // SELL
   rawNoticeData[H0STCNI0.EXEC_QTY] = "50";
   rawNoticeData[H0STCNI0.EXEC_PRICE] = "70800";
-  rawNoticeData[H0STCNI0.REMAINING_QTY] = "0";
+  rawNoticeData[H0STCNI0.ORDER_QTY] = "50";
 
   const notice = KISRealtimeStreamBus.parseExecutionNotice(rawNoticeData);
 

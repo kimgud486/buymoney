@@ -158,8 +158,13 @@ export const GlobalAutoTradingMasterSwitch: React.FC<GlobalAutoTradingMasterSwit
             </p>
 
             {/* Status Reason Badges */}
-            {!realAutoTradingReady && (
+            {(!realAutoTradingReady || !isRealTradeMode) && (
               <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                {!isRealTradeMode && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-slate-500/20 border border-slate-500/40 text-slate-300 rounded">
+                    REAL MODE OFF
+                  </span>
+                )}
                 {isKillSwitchActive && (
                   <span className="text-[9px] font-bold px-1.5 py-0.5 bg-rose-500/20 border border-rose-500/40 text-rose-300 rounded">
                     KILL SWITCH ACTIVE
@@ -175,6 +180,11 @@ export const GlobalAutoTradingMasterSwitch: React.FC<GlobalAutoTradingMasterSwit
                     BROKER DISCONNECTED
                   </span>
                 )}
+                {systemHealth && systemHealth.brokerHealthy === false && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-rose-500/20 border border-rose-500/40 text-rose-300 rounded">
+                    BROKER UNHEALTHY
+                  </span>
+                )}
                 {!accountSynced && (
                   <span className="text-[9px] font-bold px-1.5 py-0.5 bg-amber-500/20 border border-amber-500/40 text-amber-300 rounded">
                     ACCOUNT NOT SYNCED
@@ -182,7 +192,12 @@ export const GlobalAutoTradingMasterSwitch: React.FC<GlobalAutoTradingMasterSwit
                 )}
                 {!feedFresh && (
                   <span className="text-[9px] font-bold px-1.5 py-0.5 bg-rose-500/20 border border-rose-500/40 text-rose-300 rounded">
-                    REALTIME FEED STALE
+                    STALE FEED
+                  </span>
+                )}
+                {systemHealth && systemHealth.feedVerified === false && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-amber-500/20 border border-amber-500/40 text-amber-300 rounded">
+                    UNVERIFIED DATA
                   </span>
                 )}
               </div>

@@ -188,6 +188,10 @@ test("06. ServerGlobalRealtimeScannerV20 - Evaluates S-grade candidate", () => {
     vwap: 77500,
     ema9: 78000,
     ema20: 77200,
+    ema50: 76000,
+    atr14: 1200,
+    rsi14: 68,
+    spreadBps: 10,
     structureTrend: "BULLISH",
     isBreakout: true,
     dataStatus: "REALTIME_VERIFIED"

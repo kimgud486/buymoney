@@ -42,13 +42,13 @@ export class KISOverseasParserV20 {
 
       // Support official 26-field array (LAST=11, RATE=14, PBID=15, PASK=16, EVOL=19, TVOL=20, TAMT=21)
       // and truncated arrays (> 21 vs 12~21)
-      const lastPrice = tokens.length > 21 ? parseFloat(tokens[11] || "0") : (parseFloat(tokens[11] || "0") || parseFloat(tokens[6] || "0"));
-      const ratePct = tokens.length > 21 ? parseFloat(tokens[14] || "0") : (parseFloat(tokens[14] || "0") || parseFloat(tokens[9] || "0"));
-      const bidPrice = tokens.length > 21 ? parseFloat(tokens[15] || "0") : (parseFloat(tokens[15] || "0") || parseFloat(tokens[10] || "0"));
-      const askPrice = tokens.length > 21 ? parseFloat(tokens[16] || "0") : (parseFloat(tokens[16] || "0") || parseFloat(tokens[11] || "0"));
-      const executedVolume = tokens.length > 21 ? parseFloat(tokens[19] || "0") : (parseFloat(tokens[19] || "0") || parseFloat(tokens[12] || "0"));
-      const totalVolume = tokens.length > 21 ? parseFloat(tokens[20] || "0") : (parseFloat(tokens[20] || "0") || parseFloat(tokens[13] || "0"));
-      const totalAmount = tokens.length > 21 ? parseFloat(tokens[21] || "0") : (parseFloat(tokens[21] || "0") || parseFloat(tokens[14] || "0"));
+      const lastPrice = tokens.length > 21 ? parseFloat(tokens[11] || "0") : parseFloat(tokens[6] || "0");
+      const ratePct = tokens.length > 21 ? parseFloat(tokens[14] || "0") : parseFloat(tokens[9] || "0");
+      const bidPrice = tokens.length > 21 ? parseFloat(tokens[15] || "0") : parseFloat(tokens[10] || "0");
+      const askPrice = tokens.length > 21 ? parseFloat(tokens[16] || "0") : parseFloat(tokens[11] || "0");
+      const executedVolume = tokens.length > 21 ? parseFloat(tokens[19] || "0") : parseFloat(tokens[12] || "0");
+      const totalVolume = tokens.length > 21 ? parseFloat(tokens[20] || "0") : parseFloat(tokens[13] || "0");
+      const totalAmount = tokens.length > 21 ? parseFloat(tokens[21] || "0") : parseFloat(tokens[14] || "0");
 
       if (isNaN(lastPrice) || lastPrice <= 0) {
         return null;

@@ -70,8 +70,8 @@ export class LiveTradeSignalTrackerV20 {
       // 1. Update Highest Price & Monotonic Trailing Floor
       if (price > signal.highestPriceSinceSignal) {
         signal.highestPriceSinceSignal = price;
-        // Trail floor upward as price moves above TP1 (ratchet effect)
-        if (price > signal.plan.tp1) {
+        // Trail floor upward as price reaches or moves above TP1 (ratchet effect)
+        if (price >= signal.plan.tp1) {
           const newFloor = Math.max(
             signal.currentTrailingFloor,
             signal.plan.entryPrice // Move stop to breakeven once TP1 breached

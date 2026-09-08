@@ -355,13 +355,13 @@ describe("AISTOCK v23 Autonomous AI Scanner & Trading Architecture Tests", () =>
     const kisGateway = router.getKisGateway();
     const orderId = positions[0].pendingOrderId!;
 
-    // Simulate Partial Fill
+    // Simulate Full Fill (100% filled quantity)
     const partialEvent = kisGateway.simulateFill(orderId, 75000, 1);
     assert.notEqual(partialEvent, null);
     orchestrator.handleBrokerExecutionEvent(partialEvent!);
 
     positions = orchestrator.getManagedPositions();
-    assert.equal(positions[0].state, "BUY_FILLED"); // filled quantity matched
+    assert.equal(positions[0].state, "HOLD"); // FULL fill transitions position to active HOLD
   });
 
   it("9. SELL_WATCH recovery and Hard Exit in Orchestrator", async () => {
@@ -390,9 +390,10 @@ describe("AISTOCK v23 Autonomous AI Scanner & Trading Architecture Tests", () =>
       reasons: []
     };
 
-    await orchestrator.evaluateCandidateAndTrade(candidate, {
+    const evalRes = await orchestrator.evaluateCandidateAndTrade(candidate, {
       dailyPnlPct: 0, portfolioDrawdownPct: 0, spreadBps: 5, estimatedSlippageBps: 5, marketOpen: true
     });
+    assert.equal(evalRes.executed, true, `Expected executed=true but got: ${evalRes.reason}`);
 
     const kisGateway = router.getKisGateway();
     const pos = orchestrator.getManagedPositions()[0];
@@ -457,16 +458,42 @@ describe("AISTOCK v23 Autonomous AI Scanner & Trading Architecture Tests", () =>
 
     const orchestrator = new AutonomousTradingOrchestrator(router, orderManager, killSwitch, reconciler);
 
-    // Reconcile when broker has 0 positions but local orchestrator has unverified phantom positions
-    const report = await reconciler.reconcile([
-      { symbol: "005930", quantity: 100, market: "KR" }
-    ]);
+    const candidate: AIScanDecision = {
+      symbol: "005930",
+      market: "KR",
+      action: "BUY_CANDIDATE",
+      setupScore: 90,
+      pattern: "Breakout",
+      patternStatus: "CONFIRMED",
+      evidence: {
+        relativeStrength: true, rvolExpansion: true, aboveVwap: true, trendAligned: true,
+        breakoutConfirmed: true, retestConfirmed: true, orderflowPositive: true, cvdPositive: true,
+        marketLeader: true, sectorLeader: true
+      },
+      risks: { chaseRisk: 0.01, exhaustionRisk: 0.1, falseBreakoutRisk: 0.1, slippageRisk: 0.05 },
+      invalidationPrice: 70000,
+      dataStatus: "REALTIME_VERIFIED",
+      reasons: []
+    };
 
-    assert.equal(report.synchronized, false);
-    assert.ok(report.discrepancies.length > 0);
+    // 1. Submit BUY order
+    await orchestrator.evaluateCandidateAndTrade(candidate, {
+      dailyPnlPct: 0, portfolioDrawdownPct: 0, spreadBps: 5, estimatedSlippageBps: 5, marketOpen: true
+    });
 
-    // Orchestrator reconciliation triggers kill switch
+    const kisGateway = router.getKisGateway();
+    const pos = orchestrator.getManagedPositions()[0];
+
+    // 2. Broker executes fill for 100 shares
+    kisGateway.simulateFill(pos.pendingOrderId!, 75000, 100);
+
+    // 3. Do NOT forward execution event to orchestrator (simulating dropped event/disconnect)
+    // Local quantity remains 0, while broker quantity is 100.
+
+    // 4. Reconcile positions between orchestrator and broker
     await orchestrator.reconcilePositions();
+
+    // 5. Verify Kill Switch is triggered due to position discrepancy
     assert.equal(killSwitch.active(), true);
   });
 });

@@ -982,6 +982,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
         <div className="flex items-center gap-2">
           {/* Theme Mode Toggle (White / Dark) */}
           <button
+            data-testid="theme-toggle"
             onClick={() => setIsWhiteTheme(!isWhiteTheme)}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-bold transition shadow-xs ${
               isWhiteTheme
@@ -1015,6 +1016,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
           </button>
 
           <button
+            data-testid="open-bot-fleet"
             onClick={() => setIsBotFleetModalOpen(true)}
             className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${isWhiteTheme ? "bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700" : "bg-[#0e1d35] hover:bg-[#152a4e] border-slate-700/80 text-slate-200"} border text-xs transition cursor-pointer`}
             title="30대 AI 봇 플릿 제어"
@@ -1049,6 +1051,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
 
           {/* Bell Notifications */}
           <button 
+            data-testid="open-history"
             onClick={() => setIsHistoryModalOpen(true)}
             className={`p-1.5 rounded-lg ${isWhiteTheme ? "text-slate-600 hover:text-slate-900 hover:bg-slate-100" : "text-slate-400 hover:text-white hover:bg-[#13233c]"} transition relative`}
             title="체결 히스토리 및 알림"
@@ -1099,6 +1102,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
 
           {/* SMC Structure Visualizer */}
           <button
+            data-testid="open-smc"
             onClick={() => setIsSmcModalOpen(true)}
             className={`p-1.5 rounded-lg ${isWhiteTheme ? "text-slate-600 hover:text-cyan-700 hover:bg-slate-100" : "text-slate-400 hover:text-cyan-300 hover:bg-[#13233c]"} transition`}
             title="SMC 마켓 구조 오더블럭 분석"

@@ -81,6 +81,70 @@ export const PRODUCTION_BUTTONS: ProductionButtonContract[] = [
     requiresApi: false,
     requiresE2E: true
   },
+  {
+    id: "open-bot-fleet",
+    category: "NAVIGATION",
+    description: "Opens 30 AI bots fleet status dashboard",
+    requiresHandler: true,
+    requiresApi: false,
+    requiresE2E: true
+  },
+  {
+    id: "open-history",
+    category: "NAVIGATION",
+    description: "Opens trade transaction history and alerts modal",
+    requiresHandler: true,
+    requiresApi: false,
+    requiresE2E: true
+  },
+  {
+    id: "open-smc",
+    category: "NAVIGATION",
+    description: "Opens SMC market structure orderblock visualizer modal",
+    requiresHandler: true,
+    requiresApi: false,
+    requiresE2E: true
+  },
+  {
+    id: "theme-toggle",
+    category: "SETTINGS",
+    description: "Toggles UI light/dark theme",
+    requiresHandler: true,
+    requiresApi: false,
+    requiresE2E: true
+  },
+  {
+    id: "open-filter-settings",
+    category: "SETTINGS",
+    description: "Opens auto-trading stock selection filter modal",
+    requiresHandler: true,
+    requiresApi: false,
+    requiresE2E: true
+  },
+  {
+    id: "open-performance-report",
+    category: "NAVIGATION",
+    description: "Opens AI performance report modal",
+    requiresHandler: true,
+    requiresApi: false,
+    requiresE2E: true
+  },
+  {
+    id: "open-loss-analysis",
+    category: "NAVIGATION",
+    description: "Opens loss cause analysis modal",
+    requiresHandler: true,
+    requiresApi: false,
+    requiresE2E: true
+  },
+  {
+    id: "modal-close-button",
+    category: "NAVIGATION",
+    description: "Closes open modal dialog",
+    requiresHandler: true,
+    requiresApi: false,
+    requiresE2E: true
+  },
 
   // Auto-Trading Switches
   {

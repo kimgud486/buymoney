@@ -3,8 +3,19 @@ import { getAuth, signOut, onAuthStateChanged, signInAnonymously } from "firebas
 import { initializeFirestore, getFirestore, doc, getDocFromServer, Firestore } from "firebase/firestore";
 import firebaseConfig from "../../firebase-applet-config.json";
 
+const apiKey =
+  (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_FIREBASE_API_KEY) ||
+  (typeof process !== "undefined" && process.env && process.env.VITE_FIREBASE_API_KEY) ||
+  firebaseConfig.apiKey ||
+  "AIzaSy_MOCK_KEY_FOR_LOCAL_DEV_AND_TESTING";
+
+const resolvedConfig = {
+  ...firebaseConfig,
+  apiKey
+};
+
 // Initialize Firebase App singleton
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+const app = getApps().length === 0 ? initializeApp(resolvedConfig) : getApp();
 
 const databaseId = firebaseConfig.firestoreDatabaseId || "ai-studio-6f3899c6-4891-40d1-b569-afb78466e4b7";
 
@@ -17,7 +28,12 @@ try {
   db = getFirestore(app, databaseId);
 }
 
-const auth = getAuth(app);
+let auth: ReturnType<typeof getAuth>;
+try {
+  auth = getAuth(app);
+} catch (e) {
+  auth = {} as ReturnType<typeof getAuth>;
+}
 
 // Connection test with silent fallback for offline/sandboxed environments
 async function testConnection() {
