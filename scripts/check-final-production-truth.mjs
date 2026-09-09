@@ -19,6 +19,7 @@ const requiredFiles = [
   "server/v20/ServerUpbitRealtimeClientV20.ts",
   "server/v20/ServerGlobalRealtimeScannerV20.ts",
   "server/v20/TrueMTFSignalGateV20.ts",
+  "server/v20/ServerTrueMTFEvidenceProviderV20.ts",
   "server/v20/VerifiedPerformanceGateV20.ts",
   "server/v20/BuyHoldDecisionEngineV20.ts",
   "server/v20/BuyHoldPerformanceStoreV20.ts",
@@ -29,6 +30,7 @@ const requiredFiles = [
   "src/scanner/patternExecutionAudit.ts",
   "src/components/BuyHoldSystemStatusPanel.tsx",
   "src/components/VerifiedAiOpportunityScanner.tsx",
+  "src/components/VerifiedIntradaySignalPanel.tsx",
   "src/services/KISRealtimeFieldSchema.ts",
   "src/trading/PositionStateMachine.ts",
   "src/trading/LivePositionRuntimeService.ts"
@@ -65,14 +67,40 @@ if (serverContent) {
     'detectedCandlePattern = liveChangePct >= 0 ? "Bullish Engulfing',
     'let detectedChartPattern = "Double Bottom (더블 바텀)"',
     'detectedChartPattern = "Inverse Head & Shoulders (역H&S 반전)"',
-    'Math.max(0.5, currentVol / (avgVol || 1))'
+    'Math.max(0.5, currentVol / (avgVol || 1))',
+    "Math.sin(i * 0.7)",
+    "Math.floor(Math.random() * 8000) + 1500",
+    "history = generateHistory(tickedPreset.price, 30)",
+    "Tier 3: Internal Universe fallback to ensure 100% endpoint reliability",
+    'compareToPreviousClosePrice: "500"',
+    'accumulatedTradingVolume: "1,000,000"',
+    "Live stock search failed, falling back to candidates:",
+    "return res.json(upbitPresets);",
+    "return res.json(DEMO_STOCKS);",
+    "return cached.data;",
+    "return preset;",
+    "data: stockRes, expiresAt:",
+    "meta.regularMarketPrice || defaultVal.value",
+    "Math.round(realRsi)",
+    "Falling back to index presets for ${symbol}"
   ]) {
     if (serverContent.includes(token)) errors.push(`Forbidden production fallback remains in server.ts: ${token}`);
   }
 
-  if (!serverContent.includes('app.post("/api/v20/final-buy-hold", finalBuyHoldHttpHandlerV20)')) {
-    errors.push("Production server must register /api/v20/final-buy-hold with FinalBuyHoldHttpHandlerV20");
+  for (const requiredToken of [
+    'app.post("/api/v20/final-buy-hold", finalBuyHoldHttpHandlerV20)',
+    "REAL_VERIFIED_PRECHECK_V192",
+    'authority: "REAL_PRECHECK_ONLY"',
+    'finalAuthority: "SERVER_V20_FINAL_REQUIRED"',
+    "PUBLIC_VERIFIED_QUOTE_SANITIZER",
+    'dataStatus: "NO_DATA", source: "NAVER_REAL_ONLY"',
+    'data: sanitizeVerifiedQuote(stockRes)',
+    'return sanitizeVerifiedQuote(cached.data)',
+    'history = []'
+  ]) {
+    if (!serverContent.includes(requiredToken)) errors.push(`Required production truth marker missing in server.ts: ${requiredToken}`);
   }
+
   if (!serverContent.includes('volume: item.volume') || !serverContent.includes('tradeValue: item.tradeValue')) {
     errors.push("V20 hot-list adapter must preserve authoritative absolute volume/tradeValue");
   }
@@ -90,12 +118,21 @@ if (scannerUi.includes("evaluateVerifiedSignal(")) errors.push("VerifiedAiOpport
 if (scannerUi.includes('verified && score >= 76 ? "BUY"')) errors.push("Browser must never promote PRECHECK score directly to BUY");
 if (!scannerUi.includes("PRECHECK는 후보 압축만 합니다")) errors.push("UI must visibly distinguish PRECHECK from FINAL BUY authority");
 
+const appContent = read("src/App.tsx");
+if (!appContent.includes("<BuyHoldSystemStatusPanel")) errors.push("App must keep BUY/HOLD system status UI");
+if (!appContent.includes("<VerifiedIntradaySignalPanel")) errors.push("Latest main intraday signal panel must survive final integration");
+
 const finalHttp = read("server/v20/FinalBuyHoldHttpHandlerV20.ts");
 if (!finalHttp.includes("FinalBuyHoldDecisionServiceV20.evaluate")) errors.push("Final HTTP handler must delegate to FinalBuyHoldDecisionServiceV20");
 if (!finalHttp.includes('execution: "DECISION_ONLY"')) errors.push("Final HTTP handler must remain decision-only");
+if (!finalHttp.includes("ServerTrueMTFEvidenceProviderV20")) errors.push("Final HTTP handler must use server-owned True MTF evidence");
 for (const forbiddenExecutionToken of ["placeOrder(", "submitOrder(", "sendOrder("]) {
   if (finalHttp.includes(forbiddenExecutionToken)) errors.push(`Final HTTP handler must not execute orders directly: ${forbiddenExecutionToken}`);
 }
+
+const mtfProvider = read("server/v20/ServerTrueMTFEvidenceProviderV20.ts");
+if (!mtfProvider.includes('dataStatus: "REALTIME_DERIVED"')) errors.push("3m evidence must be explicitly marked REALTIME_DERIVED");
+if (!mtfProvider.includes("aggregateThreeMinuteCandles")) errors.push("Server MTF provider must aggregate real 1m bars into 3m evidence");
 
 const v20Scanner = read("server/v20/ServerGlobalRealtimeScannerV20.ts");
 if (!v20Scanner.includes("ExecutablePatternGateV20.evaluate")) errors.push("ServerGlobalRealtimeScannerV20 must enforce executable-pattern evidence");
