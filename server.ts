@@ -17,7 +17,8 @@ import { ServerGlobalRealtimeScannerV20 } from "./server/v20/ServerGlobalRealtim
 import { ServerKISRealtimeClientV20 } from "./server/v20/ServerKISRealtimeClientV20";
 import { KISBrokerGatewayV121 } from "./server/broker/KISBrokerGatewayV121";
 import { DEMO_FIXTURE_STOCKS } from "./src/data/presetStocks.js";
-import { analyzeStockIdea, CandleRecord, ExplainableTradeIdea, filterYesOnlyCandidates } from "./src/scanner/ExplainableOpportunityScannerEngine.js";
+import { analyzeStockIdea, ExplainableTradeIdea, filterYesOnlyCandidates } from "./src/scanner/ExplainableOpportunityScannerEngine.js";
+import { fetchRealScannerCandles } from "./src/scanner/RealScannerCandleProvider.js";
 
 dotenv.config();
 
@@ -1152,21 +1153,21 @@ app.get(["/api/explainable-scanner", "/api/yes-only-scanner"], async (req, res) 
         const liveData = await fetchLiveStockData(dummyPreset);
         const currPrice = liveData.price || 10000;
 
-        const records: CandleRecord[] = [];
-        let curr = currPrice * 0.95;
-        const now = Date.now();
-        for (let i = 30; i >= 0; i--) {
-          const rand = (Math.sin(i * 0.7) * 0.015 + (Math.random() - 0.48) * 0.01) * curr;
-          const open = curr;
-          const close = i === 0 ? currPrice : curr + rand;
-          const high = Math.max(open, close) + Math.random() * 0.005 * curr;
-          const low = Math.min(open, close) - Math.random() * 0.005 * curr;
-          const volume = Math.floor(Math.random() * 8000) + 1500;
-          records.push({ open, high, low, close, volume, timestamp: now - i * 60000 });
-          curr = close;
-        }
+        // Fail-closed: use provider-backed OHLCV only. Never synthesize scanner candles.
+        const candleResult = await fetchRealScannerCandles(item.symbol, item.market);
+        const records = candleResult.candles;
 
-        const idea = analyzeStockIdea(item.symbol, item.name, item.market, records, currPrice, liveData.changePct);
+        const idea = analyzeStockIdea(
+          item.symbol,
+          item.name,
+          item.market,
+          records,
+          currPrice,
+          liveData.changePct
+        );
+        idea.bullishReasons.unshift(
+          `Verified candle source: ${candleResult.source} / ${candleResult.timeframe}`
+        );
         if (idea.wouldBuy && idea.score >= 82) {
           ideas.push(idea);
         } else {
@@ -1179,8 +1180,12 @@ app.get(["/api/explainable-scanner", "/api/yes-only-scanner"], async (req, res) 
             ideas.push(idea);
           }
         }
-      } catch (err) {
-        // quiet skip
+      } catch (err: any) {
+        rejectedLog.push({
+          symbol: item.symbol,
+          name: item.name,
+          reasons: [`REAL_CANDLE_REQUIRED: ${err?.message || String(err)}`]
+        });
       }
     }
 
