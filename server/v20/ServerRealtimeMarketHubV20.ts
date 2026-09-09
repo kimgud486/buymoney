@@ -52,7 +52,8 @@ export class ServerRealtimeMarketHubV20 {
     source: string,
     grade: DataGradeV20,
     askPrice?: number,
-    bidPrice?: number
+    bidPrice?: number,
+    candleTradeVolume?: number,
   ): ServerMarketQuoteV20 {
     const key = symbol.toUpperCase();
     this.sequenceCounter++;
@@ -75,7 +76,7 @@ export class ServerRealtimeMarketHubV20 {
     };
 
     this.quotes.set(key, quote);
-    this.updateCandleStore(key, price, volume);
+    this.updateCandleStore(key, price, Math.max(0, candleTradeVolume ?? volume));
 
     return quote;
   }
@@ -179,7 +180,7 @@ export class ServerRealtimeMarketHubV20 {
         high: price,
         low: price,
         close: price,
-        volume: volume
+        volume
       });
     } else {
       const last = candles[candles.length - 1];
@@ -197,7 +198,7 @@ export class ServerRealtimeMarketHubV20 {
           high: price,
           low: price,
           close: price,
-          volume: volume
+          volume
         });
         if (candles.length > 500) {
           candles.shift();
