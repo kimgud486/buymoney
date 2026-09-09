@@ -438,7 +438,7 @@ const RULES: Rule[] = [
   },
 ];
 
-export const MASTER_EXECUTABLE_PATTERN_RULES = RULES.map(({ id, direction, minBars }) => ({ id, direction, minBars })) as const;
+export const MASTER_EXECUTABLE_PATTERN_RULES = Object.freeze(RULES.map(({ id, direction, minBars }) => ({ id, direction, minBars })));
 
 function hitFromRule(rule: Rule, candles: ScannerCandle[]): VerifiedPatternHit | null {
   const catalog = catalogByCode.get(rule.id);
