@@ -1,7 +1,7 @@
 // ----------------------------------------------------------------------
-// TRUE MULTI-TIMEFRAME SIGNAL GATE V20.3
+// TRUE MULTI-TIMEFRAME SIGNAL GATE V20.4
 // 1m -> 3m -> 5m -> Daily confirmation before BUY promotion
-// Truth-first: missing/invalid timeframe evidence can never become BUY.
+// Truth-first: missing/invalid/stale timeframe evidence can never become BUY.
 // ----------------------------------------------------------------------
 
 export type TrueMTFTimeframeV20 = "1m" | "3m" | "5m" | "D";
@@ -19,8 +19,14 @@ export interface TrueMTFSnapshotV20 {
   dataStatus: TrueMTFDataStatusV20;
   source: string;
 
-  /** Last source candle timestamp in epoch milliseconds. */
+  /** Candle bucket/start timestamp in epoch milliseconds. */
   lastBarTimestamp: number;
+
+  /**
+   * Timestamp of the most recent real trade incorporated into this snapshot.
+   * V20.4 uses this, not the candle bucket timestamp, for intraday freshness.
+   */
+  lastTradeTimestamp?: number;
 
   /** Median/declared source bar interval in milliseconds. */
   barIntervalMs: number;
@@ -29,7 +35,8 @@ export interface TrueMTFSnapshotV20 {
   high: number;
   ema9: number;
   ema20: number;
-  ema50: number;
+  /** Daily higher-timeframe trend requires EMA50. Intraday frames do not. */
+  ema50?: number;
   rsi14: number;
   macdHist: number;
   rvol: number;
@@ -50,6 +57,10 @@ export interface TrueMTFGateConfigV20 {
   maxEntryRsi: number;
   hardOverheatRsi: number;
   maxVwapExtensionPct: number;
+  /** Maximum age of the last real intraday trade while scanning for a new BUY. */
+  maxIntradayTradeAgeMs: number;
+  /** Optional deterministic clock for tests. */
+  nowMs?: number;
 }
 
 export interface TrueMTFGateResultV20 {
@@ -64,7 +75,8 @@ const DEFAULT_CONFIG: TrueMTFGateConfigV20 = {
   minEntryRvol: 1.2,
   maxEntryRsi: 80,
   hardOverheatRsi: 82,
-  maxVwapExtensionPct: 4.5
+  maxVwapExtensionPct: 4.5,
+  maxIntradayTradeAgeMs: 120_000
 };
 
 const EXPECTED_INTERVAL_MS: Record<TrueMTFTimeframeV20, number> = {
@@ -97,7 +109,10 @@ function intervalMatches(timeframe: TrueMTFTimeframeV20, intervalMs: number): bo
 function validateSnapshot(
   key: TrueMTFTimeframeV20,
   snapshot: TrueMTFSnapshotV20,
-  blockers: string[]
+  blockers: string[],
+  confirmations: string[],
+  nowMs: number,
+  maxIntradayTradeAgeMs: number,
 ): boolean {
   if (snapshot.timeframe !== key) {
     blockers.push(`${key}:SOURCE_TIMEFRAME_MISMATCH:${snapshot.timeframe}`);
@@ -118,7 +133,7 @@ function validateSnapshot(
   }
 
   if (!positive(snapshot.lastBarTimestamp)) {
-    blockers.push(`${key}:INVALID_TIMESTAMP`);
+    blockers.push(`${key}:INVALID_BAR_TIMESTAMP`);
     return false;
   }
 
@@ -127,16 +142,40 @@ function validateSnapshot(
     return false;
   }
 
-  const requiredNumbers: Array<[string, number]> = [
+  // The daily frame is a higher-timeframe context bar. Intraday frames must
+  // prove that a recent real trade actually reached the candle. A 5m candle
+  // can begin several minutes ago and still be perfectly live, so bucket time
+  // is intentionally not used for this freshness decision.
+  if (key !== "D") {
+    if (!positive(snapshot.lastTradeTimestamp)) {
+      blockers.push(`${key}:MISSING_LAST_TRADE_TIMESTAMP`);
+      return false;
+    }
+
+    const ageMs = Math.max(0, nowMs - snapshot.lastTradeTimestamp);
+    if (ageMs > maxIntradayTradeAgeMs) {
+      blockers.push(`${key}:STALE_LAST_TRADE:${ageMs}`);
+      return false;
+    }
+    confirmations.push(`${key}:LAST_TRADE_FRESH:${ageMs}ms`);
+  }
+
+  const requiredNumbers: Array<[string, number | undefined]> = [
     ["close", snapshot.close],
     ["high", snapshot.high],
     ["ema9", snapshot.ema9],
     ["ema20", snapshot.ema20],
-    ["ema50", snapshot.ema50],
     ["rsi14", snapshot.rsi14],
     ["macdHist", snapshot.macdHist],
     ["rvol", snapshot.rvol]
   ];
+
+  // EMA50 is a Daily trend-context requirement. Requiring it on 3m/5m would
+  // force unnecessary 250+ one-minute bars even though the entry gate does not
+  // use intraday EMA50.
+  if (key === "D") {
+    requiredNumbers.push(["ema50", snapshot.ema50]);
+  }
 
   const invalid = requiredNumbers.find(([, value]) => !finite(value));
   if (invalid) {
@@ -144,8 +183,13 @@ function validateSnapshot(
     return false;
   }
 
-  if (!positive(snapshot.close) || !positive(snapshot.ema20) || !positive(snapshot.ema50)) {
+  if (!positive(snapshot.close) || !positive(snapshot.ema20)) {
     blockers.push(`${key}:INVALID_PRICE_OR_EMA`);
+    return false;
+  }
+
+  if (key === "D" && !positive(snapshot.ema50)) {
+    blockers.push("D:INVALID_EMA50");
     return false;
   }
 
@@ -169,6 +213,7 @@ export class TrueMTFSignalGateV20 {
     config?: Partial<TrueMTFGateConfigV20>
   ): TrueMTFGateResultV20 {
     const cfg = { ...DEFAULT_CONFIG, ...(config || {}) };
+    const nowMs = positive(cfg.nowMs) ? cfg.nowMs : Date.now();
     const blockers: string[] = [];
     const confirmations: string[] = [];
     const missingTimeframes: TrueMTFTimeframeV20[] = [];
@@ -191,7 +236,14 @@ export class TrueMTFSignalGateV20 {
         blockers.push(`${tf}:MISSING`);
         continue;
       }
-      validateSnapshot(tf, snapshot, blockers);
+      validateSnapshot(
+        tf,
+        snapshot,
+        blockers,
+        confirmations,
+        nowMs,
+        cfg.maxIntradayTradeAgeMs,
+      );
     }
 
     if (missingTimeframes.length > 0) {
@@ -209,7 +261,8 @@ export class TrueMTFSignalGateV20 {
     const m5 = evidence["5m"]!;
     const daily = evidence.D!;
 
-    // If source metadata is invalid, do not continue to directional checks.
+    // If source metadata is invalid or the real trade feed is stale, do not
+    // continue to directional checks and never promote a BUY candidate.
     if (blockers.length > 0) {
       return {
         passed: false,
@@ -265,7 +318,7 @@ export class TrueMTFSignalGateV20 {
     }
 
     // Daily higher-timeframe trend.
-    if (!(daily.close > daily.ema20 && daily.ema20 > daily.ema50)) {
+    if (!(positive(daily.ema50) && daily.close > daily.ema20 && daily.ema20 > daily.ema50)) {
       blockers.push("D:TREND_NOT_BULLISH");
     } else {
       confirmations.push("D:PRICE>EMA20>EMA50");

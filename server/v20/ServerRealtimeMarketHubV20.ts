@@ -23,10 +23,17 @@ export interface ServerMarketQuoteV20 {
   sequence: number;
 }
 
+export interface ServerMarketCandleV204 extends Candle {
+  /** Timestamp of the most recent real trade incorporated into this candle. */
+  lastTradeTimestamp: number;
+  /** Provenance is retained so synthetic/fallback candles cannot enter BUY gates. */
+  source?: string;
+}
+
 export class ServerRealtimeMarketHubV20 {
   private static instance: ServerRealtimeMarketHubV20;
   private quotes: Map<string, ServerMarketQuoteV20> = new Map();
-  private candleHistory: Map<string, Candle[]> = new Map();
+  private candleHistory: Map<string, ServerMarketCandleV204[]> = new Map();
   private sequenceCounter = 0;
 
   private constructor() {
@@ -54,9 +61,14 @@ export class ServerRealtimeMarketHubV20 {
     askPrice?: number,
     bidPrice?: number,
     candleTradeVolume?: number,
+    providerTradeTimestamp?: number,
   ): ServerMarketQuoteV20 {
     const key = symbol.toUpperCase();
     this.sequenceCounter++;
+    const receivedAt = Date.now();
+    const tradeTimestamp = providerTradeTimestamp && Number.isFinite(providerTradeTimestamp)
+      ? providerTradeTimestamp
+      : receivedAt;
 
     const quote: ServerMarketQuoteV20 = {
       symbol: key,
@@ -71,12 +83,18 @@ export class ServerRealtimeMarketHubV20 {
       bidPrice,
       source,
       grade,
-      updatedAt: Date.now(),
+      updatedAt: receivedAt,
       sequence: this.sequenceCounter
     };
 
     this.quotes.set(key, quote);
-    this.updateCandleStore(key, price, Math.max(0, candleTradeVolume ?? volume));
+    this.updateCandleStore(
+      key,
+      price,
+      Math.max(0, candleTradeVolume ?? volume),
+      tradeTimestamp,
+      source,
+    );
 
     return quote;
   }
@@ -97,7 +115,7 @@ export class ServerRealtimeMarketHubV20 {
     return q;
   }
 
-  public getCandles(symbol: string): Candle[] {
+  public getCandles(symbol: string): ServerMarketCandleV204[] {
     const key = symbol.toUpperCase();
     return this.candleHistory.get(key) || [];
   }
@@ -109,9 +127,9 @@ export class ServerRealtimeMarketHubV20 {
    */
   public getIntradayCandles(
     symbol: string,
-    timeframeMinutes: 1 | 5 = 1,
+    timeframeMinutes: 1 | 3 | 5 = 1,
     completedOnly = true,
-  ): Candle[] {
+  ): ServerMarketCandleV204[] {
     const oneMinute = this.getCandles(symbol).slice();
     if (!oneMinute.length) return [];
 
@@ -129,14 +147,38 @@ export class ServerRealtimeMarketHubV20 {
     });
   }
 
-  public setCandles(symbol: string, candles: Candle[]): void {
+  /**
+   * Seeds only externally verified candles. Missing bars are never fabricated.
+   */
+  public setCandles(symbol: string, candles: Array<Candle & Partial<Pick<ServerMarketCandleV204, "lastTradeTimestamp" | "source">>>): void {
     const key = symbol.toUpperCase();
-    this.candleHistory.set(key, candles);
+    const normalized = candles
+      .map((candle) => {
+        const ts = typeof candle.timestamp === "number"
+          ? candle.timestamp
+          : Date.parse(candle.timestamp) || 0;
+        const lastTradeTimestamp = Number.isFinite(candle.lastTradeTimestamp)
+          ? Number(candle.lastTradeTimestamp)
+          : ts;
+        return {
+          ...candle,
+          timestamp: ts,
+          lastTradeTimestamp,
+          source: candle.source || "VERIFIED_EXTERNAL"
+        } as ServerMarketCandleV204;
+      })
+      .filter((candle) => candle.timestamp && candle.close > 0)
+      .sort((a, b) => Number(a.timestamp) - Number(b.timestamp));
+
+    this.candleHistory.set(key, normalized);
   }
 
-  private aggregateCandles(candles: Candle[], timeframeMinutes: number): Candle[] {
+  public aggregateCandles(
+    candles: ServerMarketCandleV204[],
+    timeframeMinutes: number,
+  ): ServerMarketCandleV204[] {
     const bucketMs = timeframeMinutes * 60_000;
-    const out: Candle[] = [];
+    const out: ServerMarketCandleV204[] = [];
 
     for (const candle of candles) {
       const ts = typeof candle.timestamp === "number" ? candle.timestamp : Date.parse(candle.timestamp) || 0;
@@ -155,6 +197,8 @@ export class ServerRealtimeMarketHubV20 {
           low: candle.low,
           close: candle.close,
           volume: candle.volume,
+          lastTradeTimestamp: candle.lastTradeTimestamp || ts,
+          source: candle.source,
         });
         continue;
       }
@@ -163,15 +207,27 @@ export class ServerRealtimeMarketHubV20 {
       last.low = Math.min(last.low, candle.low);
       last.close = candle.close;
       last.volume += candle.volume;
+      last.lastTradeTimestamp = Math.max(
+        last.lastTradeTimestamp || 0,
+        candle.lastTradeTimestamp || ts,
+      );
+      if (last.source !== candle.source) {
+        last.source = "MIXED_VERIFIED";
+      }
     }
 
     return out;
   }
 
-  private updateCandleStore(symbol: string, price: number, volume: number): void {
+  private updateCandleStore(
+    symbol: string,
+    price: number,
+    volume: number,
+    tradeTimestamp: number,
+    source: string,
+  ): void {
     const candles = this.candleHistory.get(symbol) || [];
-    const now = Date.now();
-    const minuteTs = Math.floor(now / 60000) * 60000;
+    const minuteTs = Math.floor(tradeTimestamp / 60000) * 60000;
 
     if (candles.length === 0) {
       candles.push({
@@ -180,7 +236,9 @@ export class ServerRealtimeMarketHubV20 {
         high: price,
         low: price,
         close: price,
-        volume
+        volume,
+        lastTradeTimestamp: tradeTimestamp,
+        source,
       });
     } else {
       const last = candles[candles.length - 1];
@@ -191,6 +249,8 @@ export class ServerRealtimeMarketHubV20 {
         last.low = Math.min(last.low, price);
         last.close = price;
         last.volume += volume;
+        last.lastTradeTimestamp = Math.max(last.lastTradeTimestamp || 0, tradeTimestamp);
+        last.source = source || last.source;
       } else if (minuteTs > lastTs) {
         candles.push({
           timestamp: minuteTs,
@@ -198,7 +258,9 @@ export class ServerRealtimeMarketHubV20 {
           high: price,
           low: price,
           close: price,
-          volume
+          volume,
+          lastTradeTimestamp: tradeTimestamp,
+          source,
         });
         if (candles.length > 500) {
           candles.shift();
