@@ -4,6 +4,7 @@ import {
   ColorType,
   LineSeries,
   createChart,
+  createSeriesMarkers,
   type IChartApi,
   type ISeriesApi,
   type Time,
@@ -34,7 +35,7 @@ function toTime(raw: unknown, index: number): Time {
     if (Number.isFinite(ts)) return Math.floor(ts / 1000) as Time;
     if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw as Time;
   }
-  return Math.floor(Date.now() / 1000) - (1000 - index) * 86400 as Time;
+  return (Math.floor(Date.now() / 1000) - (1000 - index) * 86400) as Time;
 }
 
 function ema(values: number[], period: number): number[] {
@@ -137,7 +138,7 @@ export const VerifiedSignalOverlayChart: React.FC<Props> = ({ symbol, result }) 
         priceLines.forEach((p) => candles.createPriceLine({ price: p.price, color: p.color, lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: p.title }));
 
         const last = normalized[normalized.length - 1];
-        candles.setMarkers?.([
+        createSeriesMarkers(candles, [
           {
             time: last.time,
             position: "belowBar",
@@ -145,7 +146,7 @@ export const VerifiedSignalOverlayChart: React.FC<Props> = ({ symbol, result }) 
             shape: "arrowUp",
             text: result.decision === "BUY_APPROVED" ? `BUY ${result.score}` : `WATCH ${result.score}`,
           },
-        ] as any);
+        ]);
 
         chart.timeScale().fitContent();
         resizeObserver = new ResizeObserver((entries) => {
