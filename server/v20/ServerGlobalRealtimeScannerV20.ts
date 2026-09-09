@@ -1,8 +1,15 @@
 // ----------------------------------------------------------------------
-// SERVER GLOBAL REALTIME SCANNER V20.2
+// SERVER GLOBAL REALTIME SCANNER V20.3
 // TRUTH-FIRST / NO FABRICATED FALLBACKS
 // KR + US + UPBIT
+// BUY promotion requires verified 1m -> 3m -> 5m -> Daily evidence.
 // ----------------------------------------------------------------------
+
+import {
+  TrueMTFEvidenceV20,
+  TrueMTFGateResultV20,
+  TrueMTFSignalGateV20
+} from "./TrueMTFSignalGateV20";
 
 export type MarketType = "KR" | "US" | "CRYPTO";
 
@@ -67,6 +74,12 @@ export interface ScanCandidateInput {
   chaseRisk?: boolean;
   exhaustionRisk?: boolean;
 
+  /**
+   * Independent timeframe evidence. The final V20 BUY gate will not promote
+   * a candidate to BUY_CANDIDATE unless 1m, 3m, 5m and Daily all pass.
+   */
+  trueMtf?: TrueMTFEvidenceV20;
+
   dataStatus: DataTruthStatus;
 }
 
@@ -85,6 +98,8 @@ export interface ScanCandidateResult extends ScanCandidateInput {
   missingFields: string[];
   dataCoveragePct: number;
 
+  trueMtfGate: TrueMTFGateResultV20;
+
   timestamp: number;
 }
 
@@ -101,6 +116,7 @@ export class ServerGlobalRealtimeScannerV20 {
     input: ScanCandidateInput
   ): ScanCandidateResult {
     const timestamp = Date.now();
+    const trueMtfGate = TrueMTFSignalGateV20.evaluate(input.trueMtf);
 
     const reject = (
       reason: string,
@@ -113,6 +129,7 @@ export class ServerGlobalRealtimeScannerV20 {
       rejectionReason: reason,
       missingFields,
       dataCoveragePct: 0,
+      trueMtfGate,
       timestamp
     });
 
@@ -153,6 +170,14 @@ export class ServerGlobalRealtimeScannerV20 {
       return reject("EXHAUSTION_RISK_EXCEEDED");
     }
 
+    // True MTF hard blockers such as fake breakout / RSI overheat /
+    // extreme VWAP extension are immediate rejections.
+    if (trueMtfGate.hardReject) {
+      return reject(
+        `TRUE_MTF_HARD_REJECT:${trueMtfGate.blockers.join("|")}`
+      );
+    }
+
     // ------------------------------------------------------------
     // 2. DATA COVERAGE
     // Never replace unavailable fields with fake neutral values.
@@ -187,6 +212,10 @@ export class ServerGlobalRealtimeScannerV20 {
       missingFields.push("structureTrend");
     }
 
+    if (!trueMtfGate.passed) {
+      missingFields.push("trueMTF:1m+3m+5m+D");
+    }
+
     const coverageChecks = [
       rsValues.length > 0,
       positive(input.vwap),
@@ -197,7 +226,8 @@ export class ServerGlobalRealtimeScannerV20 {
       validNumber(input.rsi14),
       validNumber(input.spreadBps),
       Boolean(input.structureTrend),
-      Array.isArray(input.patterns)
+      Array.isArray(input.patterns),
+      trueMtfGate.passed
     ];
 
     const availableCount =
@@ -301,7 +331,7 @@ export class ServerGlobalRealtimeScannerV20 {
     );
 
     // ------------------------------------------------------------
-    // 4. QUALITY GATE
+    // 4. QUALITY + TRUE MTF FINAL BUY GATE
     // ------------------------------------------------------------
 
     const buyEvidenceComplete =
@@ -310,7 +340,8 @@ export class ServerGlobalRealtimeScannerV20 {
       rsValues.length > 0 &&
       positive(input.vwap) &&
       positive(input.ema20) &&
-      positive(input.rvol);
+      positive(input.rvol) &&
+      trueMtfGate.passed;
 
     let grade: ScanCandidateResult["grade"];
     let recommendation:
@@ -338,7 +369,8 @@ export class ServerGlobalRealtimeScannerV20 {
       recommendation = "WATCH";
     }
 
-    // Missing critical evidence never becomes BUY.
+    // Missing critical evidence or True MTF disagreement never becomes BUY.
+    // Keep it visible as WATCH instead of inventing a YES result.
     if (
       recommendation === "BUY_CANDIDATE" &&
       !buyEvidenceComplete
@@ -353,10 +385,14 @@ export class ServerGlobalRealtimeScannerV20 {
       recommendation,
       missingFields,
       dataCoveragePct,
+      trueMtfGate,
       timestamp
     };
   }
 
+  /**
+   * General ranked scan: WATCH items are retained for observation.
+   */
   public static scanCandidates(
     candidates: ScanCandidateInput[]
   ): ScanCandidateResult[] {
@@ -380,5 +416,21 @@ export class ServerGlobalRealtimeScannerV20 {
           a.dataCoveragePct
         );
       });
+  }
+
+  /**
+   * YES-only shortlist. Never fills empty ranks with WATCH/REJECT candidates.
+   * If only two symbols pass every gate, this returns exactly two.
+   */
+  public static scanBuyCandidates(
+    candidates: ScanCandidateInput[],
+    topN: number = 5
+  ): ScanCandidateResult[] {
+    const limit = Math.max(0, Math.floor(topN));
+    if (limit === 0 || !Array.isArray(candidates)) return [];
+
+    return this.scanCandidates(candidates)
+      .filter((result) => result.recommendation === "BUY_CANDIDATE")
+      .slice(0, limit);
   }
 }

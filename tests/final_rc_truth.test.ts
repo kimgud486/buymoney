@@ -170,7 +170,8 @@ test("05. ServerGlobalRealtimeScannerV20 - Rejects STALE / NO_DATA", () => {
   assert.ok(res.rejectionReason?.includes("DATA_TRUTH_REJECT"));
 });
 
-test("06. ServerGlobalRealtimeScannerV20 - Evaluates S-grade candidate", () => {
+test("06. ServerGlobalRealtimeScannerV20 - Evaluates S-grade candidate with True MTF confirmation", () => {
+  const now = Date.now();
   const res = ServerGlobalRealtimeScannerV20.evaluateCandidate({
     symbol: "005930",
     name: "삼성전자",
@@ -194,9 +195,76 @@ test("06. ServerGlobalRealtimeScannerV20 - Evaluates S-grade candidate", () => {
     spreadBps: 10,
     structureTrend: "BULLISH",
     isBreakout: true,
+    trueMtf: {
+      "1m": {
+        timeframe: "1m",
+        dataStatus: "REALTIME_VERIFIED",
+        source: "KIS_REALTIME_WS",
+        lastBarTimestamp: now,
+        barIntervalMs: 60000,
+        close: 78500,
+        high: 78600,
+        ema9: 78100,
+        ema20: 77800,
+        ema50: 77000,
+        rsi14: 66,
+        macdHist: 120,
+        rvol: 2.1,
+        vwap: 77900,
+        previousHigh20: 78300
+      },
+      "3m": {
+        timeframe: "3m",
+        dataStatus: "REALTIME_DERIVED",
+        source: "KIS_REALTIME_WS_1M_AGGREGATED_3M",
+        lastBarTimestamp: now,
+        barIntervalMs: 180000,
+        close: 78400,
+        high: 78600,
+        ema9: 78050,
+        ema20: 77700,
+        ema50: 76900,
+        rsi14: 64,
+        macdHist: 105,
+        rvol: 1.9,
+        vwap: 77800
+      },
+      "5m": {
+        timeframe: "5m",
+        dataStatus: "REALTIME_VERIFIED",
+        source: "KIS_REALTIME_5M",
+        lastBarTimestamp: now,
+        barIntervalMs: 300000,
+        close: 78300,
+        high: 78600,
+        ema9: 77950,
+        ema20: 77600,
+        ema50: 76800,
+        rsi14: 63,
+        macdHist: 95,
+        rvol: 1.8,
+        vwap: 77700
+      },
+      D: {
+        timeframe: "D",
+        dataStatus: "REALTIME_DERIVED",
+        source: "KIS_DAILY_CANDLE",
+        lastBarTimestamp: now,
+        barIntervalMs: 86400000,
+        close: 78500,
+        high: 79000,
+        ema9: 77000,
+        ema20: 76000,
+        ema50: 74000,
+        rsi14: 62,
+        macdHist: 350,
+        rvol: 1.4
+      }
+    },
     dataStatus: "REALTIME_VERIFIED"
   });
 
+  assert.equal(res.trueMtfGate.passed, true);
   assert.equal(res.recommendation, "BUY_CANDIDATE");
   assert.ok(res.setupScore >= 85);
   assert.equal(res.grade, "S");
