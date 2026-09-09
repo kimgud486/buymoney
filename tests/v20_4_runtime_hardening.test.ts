@@ -40,7 +40,7 @@ function makeSnapshot(
     rsi14: 60,
     macdHist: 1.2,
     rvol: 2.0,
-    vwap: 104,
+    vwap: 108,
     previousHigh20: 109,
     ...overrides,
   };
