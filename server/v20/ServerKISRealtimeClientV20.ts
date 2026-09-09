@@ -164,6 +164,7 @@ export class ServerKISRealtimeClientV20 {
           parsedDomestic.askPrice,
           parsedDomestic.bidPrice,
           parsedDomestic.executedVolume,
+          parsedDomestic.timestamp,
         );
       }
     } else if (trId === "HDFSCNT0") {
