@@ -4,6 +4,15 @@
  * Mathematical OHLCV pattern recognition for KOSPI / KOSDAQ / Crypto / US.
  */
 
+import {
+  computeBollingerBands,
+  computeRollingRvol,
+  computeSeededEma,
+  computeSeededMacd,
+  computeSessionVwap,
+  computeWilderRsi,
+} from "./ScannerFeatureMath";
+
 export interface CandleData {
   open: number;
   high: number;
@@ -58,142 +67,8 @@ export interface ShapeResult {
   };
 }
 
-// ----------------------------------------------------------------------
-// Helper Calculations (Pure TS without external native binaries)
-// ----------------------------------------------------------------------
-
-function computeEMA(values: number[], period: number): number[] {
-  if (values.length === 0) return [];
-  const k = 2 / (period + 1);
-  const result: number[] = [values[0]];
-  for (let i = 1; i < values.length; i++) {
-    result.push(values[i] * k + result[i - 1] * (1 - k));
-  }
-  return result;
-}
-
-function computeRSI(close: number[], period: number = 14): number[] {
-  if (close.length < period + 1) return new Array(close.length).fill(50);
-  const rsi: number[] = new Array(close.length).fill(50);
-  let gainSum = 0;
-  let lossSum = 0;
-
-  for (let i = 1; i <= period; i++) {
-    const diff = close[i] - close[i - 1];
-    if (diff >= 0) gainSum += diff;
-    else lossSum += Math.abs(diff);
-  }
-
-  let avgGain = gainSum / period;
-  let avgLoss = lossSum / period;
-
-  rsi[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
-
-  for (let i = period + 1; i < close.length; i++) {
-    const diff = close[i] - close[i - 1];
-    const gain = diff >= 0 ? diff : 0;
-    const loss = diff < 0 ? Math.abs(diff) : 0;
-
-    avgGain = (avgGain * (period - 1) + gain) / period;
-    avgLoss = (avgLoss * (period - 1) + loss) / period;
-
-    if (avgLoss === 0) {
-      rsi[i] = 100;
-    } else {
-      const rs = avgGain / avgLoss;
-      rsi[i] = 100 - 100 / (1 + rs);
-    }
-  }
-
-  return rsi;
-}
-
-function computeMACD(close: number[], fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
-  const fastEMA = computeEMA(close, fastPeriod);
-  const slowEMA = computeEMA(close, slowPeriod);
-  const macdLine: number[] = [];
-
-  for (let i = 0; i < close.length; i++) {
-    macdLine.push(fastEMA[i] - slowEMA[i]);
-  }
-
-  const signalLine = computeEMA(macdLine, signalPeriod);
-  const histogram: number[] = [];
-
-  for (let i = 0; i < close.length; i++) {
-    histogram.push(macdLine[i] - signalLine[i]);
-  }
-
-  return { macd: macdLine, signal: signalLine, hist: histogram };
-}
-
-function computeBollingerBands(close: number[], period = 20, stdDevMult = 2) {
-  const upper: number[] = [];
-  const middle: number[] = [];
-  const lower: number[] = [];
-  const bandwidth: number[] = [];
-
-  for (let i = 0; i < close.length; i++) {
-    if (i < period - 1) {
-      upper.push(close[i]);
-      middle.push(close[i]);
-      lower.push(close[i]);
-      bandwidth.push(0);
-      continue;
-    }
-
-    const slice = close.slice(i - period + 1, i + 1);
-    const mean = slice.reduce((a, b) => a + b, 0) / period;
-    const variance = slice.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / period;
-    const stdDev = Math.sqrt(variance);
-
-    const up = mean + stdDev * stdDevMult;
-    const low = mean - stdDev * stdDevMult;
-    const width = mean > 0 ? (up - low) / mean : 0;
-
-    middle.push(mean);
-    upper.push(up);
-    lower.push(low);
-    bandwidth.push(width);
-  }
-
-  return { upper, middle, lower, bandwidth };
-}
-
-function computeVWAP(candles: CandleData[]): number[] {
-  const vwap: number[] = [];
-  let cumTPV = 0;
-  let cumVol = 0;
-
-  for (let i = 0; i < candles.length; i++) {
-    const c = candles[i];
-    const typicalPrice = (c.high + c.low + c.close) / 3;
-    const tpv = typicalPrice * c.volume;
-
-    cumTPV += tpv;
-    cumVol += c.volume;
-
-    vwap.push(cumVol > 0 ? cumTPV / cumVol : c.close);
-  }
-
-  return vwap;
-}
-
-function computeRVOL(volume: number[], period = 20): number[] {
-  const rvol: number[] = [];
-  for (let i = 0; i < volume.length; i++) {
-    if (i < period - 1) {
-      rvol.push(1.0);
-      continue;
-    }
-    const slice = volume.slice(i - period + 1, i + 1);
-    const meanVol = slice.reduce((a, b) => a + b, 0) / period;
-    rvol.push(meanVol > 0 ? volume[i] / meanVol : 1.0);
-  }
-  return rvol;
-}
-
-// Candle Pattern Detection
+// Candle Pattern Detection stays local because these labels are specific to
+// GraphShapeScanner scoring, not generic indicator math.
 function detectCandlePatterns(candles: CandleData[]): string[] {
   if (candles.length < 3) return [];
   const result: string[] = [];
@@ -203,7 +78,6 @@ function detectCandlePatterns(candles: CandleData[]): string[] {
   const prev2 = candles[candles.length - 3];
 
   const bodyCurr = Math.abs(curr.close - curr.open);
-  const rangeCurr = Math.max(curr.high - curr.low, 0.00001);
   const lowerWickCurr = Math.min(curr.open, curr.close) - curr.low;
 
   // 1. BULLISH_ENGULFING
@@ -292,16 +166,17 @@ export class GraphShapeScanner {
     const lows = candles.map((c) => c.low);
     const volumes = candles.map((c) => c.volume);
 
-    // Calculate Indicators
-    const ema9 = computeEMA(closes, 9);
-    const ema20 = computeEMA(closes, 20);
-    const ema50 = computeEMA(closes, 50);
+    // Shared deterministic feature calculations. Formula modes intentionally
+    // preserve this scanner's historical outputs.
+    const ema9 = computeSeededEma(closes, 9);
+    const ema20 = computeSeededEma(closes, 20);
+    const ema50 = computeSeededEma(closes, 50);
 
-    const rsi = computeRSI(closes, 14);
-    const macdData = computeMACD(closes, 12, 26, 9);
+    const rsi = computeWilderRsi(closes, 14);
+    const macdData = computeSeededMacd(closes, 12, 26, 9);
     const bbData = computeBollingerBands(closes, 20, 2);
-    const vwap = computeVWAP(candles);
-    const rvol = computeRVOL(volumes, 20);
+    const vwap = computeSessionVwap(candles, "USE_CLOSE");
+    const rvol = computeRollingRvol(volumes, 20, "ONE");
 
     const len = candles.length;
     const nowIdx = len - 1;
