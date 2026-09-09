@@ -10,6 +10,7 @@ import { ToastContainer } from "./components/ToastContainer";
 import { RealtimeMarketStreamManager } from "./components/RealtimeMarketStreamManager";
 import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecuritiesConsensusModal";
 import { MasterAiAutoTradingDashboard } from "./components/trading/MasterAiAutoTradingDashboard";
+import { SafeAiAutotradeLauncher } from "./components/trading/SafeAiAutotradeLauncher";
 import { AiBotCommandCenterUi } from "./components/AiBotCommandCenterUi";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { VerifiedAiOpportunityScanner } from "./components/VerifiedAiOpportunityScanner";
@@ -88,8 +89,6 @@ function MainLayout() {
         const result = evaluateVerifiedSignal(candles);
         if (!result) throw new Error("verified signal engine returned no result");
 
-        // Forward every actually detected pattern, not only the strongest pattern.
-        // Unsupported/catalog-only names are never injected into the visual guide.
         const detectedPatternCodes = Array.from(
           new Set(
             result.patternHits
@@ -134,6 +133,10 @@ function MainLayout() {
   return (
     <div className="min-h-screen bg-white text-slate-800 flex flex-col font-sans relative">
       <RealtimeMarketStreamManager />
+
+      <ErrorBoundary>
+        <SafeAiAutotradeLauncher />
+      </ErrorBoundary>
 
       <ErrorBoundary>
         <VerifiedAiOpportunityScanner />
