@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   ChevronRight,
+  Clock3,
   Loader2,
   Play,
   Radar,
@@ -17,6 +18,10 @@ import {
   evaluateVerifiedSignal,
   type VerifiedSignalResult,
 } from "../scanner/verifiedSignalEngine";
+import {
+  evaluateVerifiedIntradayPatterns,
+  type VerifiedIntradayPatternResult,
+} from "../scanner/verifiedIntradayPatternEngine";
 
 interface UniverseItem {
   symbol: string;
@@ -30,6 +35,7 @@ interface UniverseItem {
 
 interface ScannedCandidate extends UniverseItem {
   result: VerifiedSignalResult;
+  intraday?: VerifiedIntradayPatternResult | null;
 }
 
 function num(v: unknown): number {
@@ -48,6 +54,13 @@ function compactPrice(value: number): string {
   if (!Number.isFinite(value)) return "-";
   return Math.round(value).toLocaleString("ko-KR");
 }
+
+const INTRADAY_LABELS: Record<string, string> = {
+  ORB_BREAKOUT: "ORB",
+  OPENING_DRIVE: "DRIVE",
+  VWAP_RETEST_HOLD: "VWAP RETEST",
+  FIRST_PULLBACK_HOLD_INTRADAY: "1ST PULLBACK",
+};
 
 async function fetchUniverse(): Promise<UniverseItem[]> {
   const merged = new Map<string, UniverseItem>();
@@ -86,7 +99,7 @@ async function fetchUniverse(): Promise<UniverseItem[]> {
           const price = num(row?.price);
           if (!symbol || price <= 0) continue;
           const market = normalizeMarket(row?.market, symbol);
-          // This scanner is intentionally limited to stocks. Crypto gets a separate risk model.
+          // Stock scanner only. Crypto must use a separate 24/7 session and risk model.
           if (market === "BTC") continue;
           merged.set(symbol, {
             symbol,
@@ -110,12 +123,30 @@ async function fetchUniverse(): Promise<UniverseItem[]> {
 async function analyzeItem(item: UniverseItem): Promise<ScannedCandidate | null> {
   const res = await fetch(
     `/api/market/realtime-candles?symbol=${encodeURIComponent(item.symbol)}&timeframe=D&count=70`,
+    { cache: "no-store" },
   );
   if (!res.ok) return null;
   const json = await res.json();
   if (!Array.isArray(json?.candles)) return null;
   const result = evaluateVerifiedSignal(json.candles);
-  return result ? { ...item, result } : null;
+  return result ? { ...item, result, intraday: null } : null;
+}
+
+async function analyzeIntraday(candidate: ScannedCandidate): Promise<ScannedCandidate> {
+  try {
+    const res = await fetch(
+      `/api/market/realtime-candles?symbol=${encodeURIComponent(candidate.symbol)}&timeframe=5m&count=120`,
+      { cache: "no-store" },
+    );
+    if (!res.ok) return candidate;
+    const json = await res.json();
+    if (!Array.isArray(json?.candles)) return candidate;
+    const intraday = evaluateVerifiedIntradayPatterns(json.candles, 5);
+    return { ...candidate, intraday };
+  } catch (error) {
+    console.warn(`[VerifiedScanner] intraday unavailable for ${candidate.symbol}`, error);
+    return candidate;
+  }
 }
 
 export const VerifiedAiOpportunityScanner: React.FC = () => {
@@ -134,6 +165,10 @@ export const VerifiedAiOpportunityScanner: React.FC = () => {
     () => results.filter((x) => x.result.decision === "BUY_WATCH"),
     [results],
   );
+  const intradayMatched = useMemo(
+    () => results.filter((x) => x.intraday && !x.intraday.blocked && x.intraday.hits.length > 0),
+    [results],
+  );
 
   const handleScan = async () => {
     if (isScanning) return;
@@ -147,8 +182,6 @@ export const VerifiedAiOpportunityScanner: React.FC = () => {
         throw new Error("실시간 종목 유니버스를 불러오지 못했습니다.");
       }
 
-      // Keep the scan responsive and avoid hammering the candle endpoint.
-      // Priority is liquidity + meaningful price movement, not a fabricated AI score.
       const shortlist = [...universe]
         .sort((a, b) => {
           const liquidityA = Math.log10(Math.max(1, a.tradingValue || a.volume || 1));
@@ -172,21 +205,41 @@ export const VerifiedAiOpportunityScanner: React.FC = () => {
         setProgress({ current: Math.min(i + batch.length, shortlist.length), total: shortlist.length });
       }
 
+      const rank = { BUY_APPROVED: 2, BUY_WATCH: 1, NO_BUY: 0 } as const;
       analyzed.sort((a, b) => {
-        const rank = { BUY_APPROVED: 2, BUY_WATCH: 1, NO_BUY: 0 } as const;
         const decisionDiff = rank[b.result.decision] - rank[a.result.decision];
         if (decisionDiff !== 0) return decisionDiff;
         return b.result.score - a.result.score;
       });
 
-      setResults(analyzed);
+      // Intraday calls are deliberately limited to the strongest daily candidates.
+      // This avoids doubling requests across the entire universe while still adding
+      // ORB/VWAP/First-Pullback confirmation where it matters most.
+      const intradayTargets = analyzed
+        .filter((candidate) => candidate.result.decision !== "NO_BUY")
+        .slice(0, 8);
+      const intradayResults = await Promise.all(intradayTargets.map(analyzeIntraday));
+      const intradayBySymbol = new Map(intradayResults.map((candidate) => [candidate.symbol, candidate]));
+      const enriched = analyzed.map((candidate) => intradayBySymbol.get(candidate.symbol) || candidate);
+
+      enriched.sort((a, b) => {
+        const decisionDiff = rank[b.result.decision] - rank[a.result.decision];
+        if (decisionDiff !== 0) return decisionDiff;
+        const intradayA = a.intraday?.hits.length || 0;
+        const intradayB = b.intraday?.hits.length || 0;
+        if (intradayB !== intradayA) return intradayB - intradayA;
+        return b.result.score - a.result.score;
+      });
+
+      setResults(enriched);
       setLastScanAt(new Date().toLocaleTimeString("ko-KR"));
 
-      const yesCount = analyzed.filter((x) => x.result.decision === "BUY_APPROVED").length;
+      const yesCount = enriched.filter((x) => x.result.decision === "BUY_APPROVED").length;
+      const intradayCount = enriched.filter((x) => x.intraday && !x.intraday.blocked && x.intraday.hits.length > 0).length;
       addToast?.({
         type: yesCount > 0 ? "SUCCESS" : "INFO",
         title: "검증형 AI 스캔 완료",
-        message: `검증 ${analyzed.length}종목 · BUY APPROVED ${yesCount}종목`,
+        message: `검증 ${enriched.length}종목 · BUY APPROVED ${yesCount} · 5M SETUP ${intradayCount}`,
       });
     } catch (error: any) {
       const message = error?.message || "스캔 중 오류가 발생했습니다.";
@@ -226,7 +279,7 @@ export const VerifiedAiOpportunityScanner: React.FC = () => {
               실시간 데이터 기반 AI 종목 스캔
             </h2>
             <p className="mt-1 text-sm text-slate-400 max-w-3xl">
-              등락률로 점수를 만들어내지 않습니다. 완료 봉의 EMA · VWAP · MACD · RSI · RVOL · HH/HL을 각각 검증한 뒤 후보만 압축합니다.
+              일봉 조건을 먼저 검증하고 상위 후보에만 5분 완료봉 ORB · Opening Drive · VWAP Retest · First Pullback을 추가 확인합니다.
             </p>
           </div>
 
@@ -244,7 +297,7 @@ export const VerifiedAiOpportunityScanner: React.FC = () => {
         {progress.total > 0 && (
           <div className="mt-5">
             <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-              <span>검증 진행</span>
+              <span>일봉 검증 진행</span>
               <span>{progress.current} / {progress.total}</span>
             </div>
             <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
@@ -268,9 +321,11 @@ export const VerifiedAiOpportunityScanner: React.FC = () => {
             <div className="mt-5 grid grid-cols-2 md:grid-cols-4 gap-3">
               <Stat label="검증 완료" value={`${results.length}`} icon={<Activity size={17} />} />
               <Stat label="BUY APPROVED" value={`${approved.length}`} icon={<CheckCircle2 size={17} />} />
-              <Stat label="BUY WATCH" value={`${watch.length}`} icon={<Target size={17} />} />
+              <Stat label="5M SETUP" value={`${intradayMatched.length}`} icon={<Clock3 size={17} />} />
               <Stat label="마지막 스캔" value={lastScanAt || "-"} icon={<ShieldCheck size={17} />} />
             </div>
+
+            <div className="mt-2 text-[11px] text-slate-500">BUY WATCH {watch.length}종목 · 5분 장중 분석은 상위 비-NO_BUY 후보 최대 8종목에만 수행</div>
 
             <div className="mt-5 grid grid-cols-1 xl:grid-cols-5 gap-3">
               {topFive.length === 0 ? (
@@ -309,6 +364,7 @@ const CandidateCard: React.FC<{
 }> = ({ rank, candidate, onSelect }) => {
   const { result } = candidate;
   const approved = result.decision === "BUY_APPROVED";
+  const intradayHits = candidate.intraday && !candidate.intraday.blocked ? candidate.intraday.hits : [];
 
   return (
     <button
@@ -334,8 +390,23 @@ const CandidateCard: React.FC<{
         </div>
         <div className="text-right">
           <div className="text-sm font-bold">{compactPrice(result.metrics.close)}</div>
-          <div className="text-xs text-slate-400">RVOL {result.metrics.rvol.toFixed(2)}x</div>
+          <div className="text-xs text-slate-400">D RVOL {result.metrics.rvol.toFixed(2)}x</div>
         </div>
+      </div>
+
+      <div className="mt-3 flex min-h-7 flex-wrap gap-1.5">
+        {intradayHits.length > 0 ? intradayHits.slice(0, 3).map((hit) => (
+          <span
+            key={hit.id}
+            className={`rounded-md px-2 py-1 text-[9px] font-black ${hit.confidence === "STRONG" ? "bg-emerald-400 text-emerald-950" : "bg-cyan-400/15 text-cyan-200"}`}
+          >
+            5M {INTRADAY_LABELS[hit.id] || hit.id}
+          </span>
+        )) : (
+          <span className="rounded-md bg-slate-800 px-2 py-1 text-[9px] font-bold text-slate-500">
+            5M NO VERIFIED SETUP
+          </span>
+        )}
       </div>
 
       <div className="mt-4 space-y-1.5">
