@@ -225,7 +225,7 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
     } catch (error) {
       console.warn("[RealTimeTradingViewChart] initial technical score failed", error);
       setAiConfidence(0);
-      onStateChangeRef.currrent?.(tradingStateRef.current, 0);
+      onStateChangeRef.current?.(tradingStateRef.current, 0);
     }
   }, [normalizedInitialCandles]);
 
