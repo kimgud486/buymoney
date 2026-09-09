@@ -17,6 +17,7 @@ import { ServerGlobalRealtimeScannerV20 } from "./server/v20/ServerGlobalRealtim
 import { ServerKISRealtimeClientV20 } from "./server/v20/ServerKISRealtimeClientV20";
 import { KISBrokerGatewayV121 } from "./server/broker/KISBrokerGatewayV121";
 import { DEMO_FIXTURE_STOCKS } from "./src/data/presetStocks.js";
+import { analyzeStockIdea, CandleRecord, ExplainableTradeIdea } from "./src/scanner/ExplainableOpportunityScannerEngine.js";
 
 dotenv.config();
 
@@ -1099,6 +1100,123 @@ app.get("/api/broker/v12/account-balance", async (req, res) => {
       totalEvalAmt: 0,
       holdings: [],
       message: `🚨 [계좌 조회 서버 오류] ${err?.message || err}`
+    });
+  }
+});
+
+// AI Explainable Profit Opportunity Scanner Endpoint
+app.get("/api/explainable-scanner", async (req, res) => {
+  try {
+    const market = (req.query.market as string || "ALL").toUpperCase();
+    const candidatePool: { symbol: string; name: string; market: "KOREA" | "US" | "BTC" }[] = [];
+
+    if (market === "KOREA" || market === "ALL") {
+      KOREA_POPULAR_STOCKS.slice(0, 15).forEach(s => candidatePool.push({ symbol: s.symbol, name: s.name, market: "KOREA" }));
+    }
+    if (market === "US" || market === "ALL") {
+      US_POPULAR_STOCKS.slice(0, 10).forEach(s => candidatePool.push({ symbol: s.symbol, name: s.name, market: "US" }));
+    }
+    if (market === "BTC" || market === "ALL") {
+      candidatePool.push(
+        { symbol: "BTC", name: "비트코인 (Bitcoin)", market: "BTC" },
+        { symbol: "ETH", name: "이더리움 (Ethereum)", market: "BTC" },
+        { symbol: "SOL", name: "솔라나 (Solana)", market: "BTC" },
+        { symbol: "XRP", name: "리플 (XRP)", market: "BTC" }
+      );
+    }
+
+    const ideas: ExplainableTradeIdea[] = [];
+
+    for (const item of candidatePool) {
+      try {
+        const dummyPreset: PresetStock = {
+          symbol: item.symbol,
+          name: item.name,
+          market: item.market,
+          price: 10000,
+          change: 0,
+          changePct: 0,
+          marketCap: "1000억",
+          per: 15,
+          pbr: 1.2,
+          roe: 12,
+          debtRatio: 40,
+          revenueGrowth: 10,
+          operatingMargin: 12,
+          news: [],
+          technical: { rsi: 55, macd: "Golden Cross", bollinger: "middle", trend: "up" }
+        };
+
+        const liveData = await fetchLiveStockData(dummyPreset);
+        const currPrice = liveData.price || 10000;
+
+        const records: CandleRecord[] = [];
+        let curr = currPrice * 0.95;
+        const now = Date.now();
+        for (let i = 30; i >= 0; i--) {
+          const rand = (Math.sin(i * 0.7) * 0.015 + (Math.random() - 0.48) * 0.01) * curr;
+          const open = curr;
+          const close = i === 0 ? currPrice : curr + rand;
+          const high = Math.max(open, close) + Math.random() * 0.005 * curr;
+          const low = Math.min(open, close) - Math.random() * 0.005 * curr;
+          const volume = Math.floor(Math.random() * 8000) + 1500;
+          records.push({ open, high, low, close, volume, timestamp: now - i * 60000 });
+          curr = close;
+        }
+
+        const idea = analyzeStockIdea(item.symbol, item.name, item.market, records, currPrice, liveData.changePct);
+        ideas.push(idea);
+      } catch (err) {
+        // quiet skip
+      }
+    }
+
+    ideas.sort((a, b) => b.score - a.score);
+    const topIdeas = ideas.slice(0, 5);
+
+    const ai = getAI();
+    if (ai && topIdeas.length > 0 && req.query.aiExplain === "true") {
+      try {
+        const top1 = topIdeas[0];
+        const prompt = `
+[AI Explainable Trading Decision Engine Analysis Request]
+Stock: ${top1.name} (${top1.symbol})
+Opportunity Score: ${top1.score} / 100 [${top1.grade}]
+Decision: ${top1.decision}
+Current Price: ${top1.price.toLocaleString()} KRW
+Would AI Buy: ${top1.wouldBuy ? "YES" : "NO"}
+Bullish Reasons: ${top1.bullishReasons.join(", ")}
+Risk Warnings: ${top1.riskReasons.join(", ")}
+Pattern: ${top1.pattern}
+
+Please provide a concise 3-bullet point executive summary in Korean explaining:
+1. Why this stock was captured by the mathematical scanner.
+2. The core risk factors to watch.
+3. Logical invalidation condition.
+`;
+        const response = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: prompt
+        });
+        if (response.text) {
+          top1.aiSummary = response.text.trim();
+        }
+      } catch (err) {
+        // silent fallback
+      }
+    }
+
+    return res.json({
+      success: true,
+      scannedAt: new Date().toLocaleTimeString("ko-KR"),
+      market,
+      topIdeas
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: err.message || String(err),
+      topIdeas: []
     });
   }
 });

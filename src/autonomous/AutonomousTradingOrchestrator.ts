@@ -117,6 +117,15 @@ export class AutonomousTradingOrchestrator {
     return Array.from(this.managedPositions.values());
   }
 
+  public hasPartialExposure(): boolean {
+    for (const pos of this.managedPositions.values()) {
+      if (pos.state === "BUY_PARTIAL" || pos.state === "SELL_PARTIAL") {
+        return true;
+      }
+    }
+    return false;
+  }
+
   public async evaluateCandidateAndTrade(
     candidate: AIScanDecision,
     marketContext: {
@@ -133,6 +142,11 @@ export class AutonomousTradingOrchestrator {
 
     if (this.policy.mode === "DISABLED") {
       return { executed: false, reason: "AUTONOMOUS_TRADING_DISABLED" };
+    }
+
+    // PARTIAL FILL EXPOSURE LOCK: Block new entries if partial fills exist
+    if (this.hasPartialExposure()) {
+      return { executed: false, reason: "PARTIAL_FILL_EXPOSURE_LOCKED" };
     }
 
     const gateway = this.brokerRouter.forMarket(candidate.market);

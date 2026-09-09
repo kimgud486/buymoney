@@ -38,7 +38,8 @@ import {
   Moon,
   Coins,
   Radar,
-  Sparkles
+  Sparkles,
+  Brain
 } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import { getMarketStatus } from "../../lib/marketHours";
@@ -68,6 +69,7 @@ import { realtimeMarketFeedService } from "../../services/realtimeMarketFeedServ
 import { AiFutureTrendOverlayChart } from "../AiFutureTrendOverlayChart";
 import { InteractivePredictionCanvasChart } from "../InteractivePredictionCanvasChart";
 import { RealTimeTradingViewChart } from "./RealTimeTradingViewChart";
+import { ExplainableOpportunityScanner } from "../ExplainableOpportunityScanner";
 import { 
   detectAllChartPatterns, 
   computeUnifiedMarketShape,
@@ -166,6 +168,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
   const [isIndicatorsDropdownOpen, setIsIndicatorsDropdownOpen] = useState(false);
   const [isStrategyFileReaderOpen, setIsStrategyFileReaderOpen] = useState(false);
   const [isManualGateOpen, setIsManualGateOpen] = useState(false);
+  const [isExplainableScannerOpen, setIsExplainableScannerOpen] = useState(false);
   const [customUploadedCandles, setCustomUploadedCandles] = useState<any[] | null>(null);
 
   // Clicked Prediction Point on Candlestick Chart
@@ -1047,6 +1050,17 @@ export const MasterAiAutoTradingDashboard: React.FC<{
           >
             <Radar className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
             <span>스캐너 밖 직접검증</span>
+          </button>
+
+          {/* AI Explainable Scanner Button */}
+          <button
+            data-testid="open-explainable-scanner"
+            onClick={() => setIsExplainableScannerOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white font-bold text-xs shadow-md shadow-indigo-600/30 transition cursor-pointer"
+            title="설명 가능한 AI 수익기회 스캐너 (TOP 5)"
+          >
+            <Brain className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+            <span>🔥 설명가능 스캐너</span>
           </button>
 
           {/* Bell Notifications */}
@@ -3536,6 +3550,29 @@ export const MasterAiAutoTradingDashboard: React.FC<{
             market: currentStock.market
           }}
         />
+      )}
+
+      {/* AI Explainable Profit Opportunity Scanner Modal */}
+      {isExplainableScannerOpen && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+          <div className="bg-[#081222] border border-indigo-500/40 rounded-2xl w-full max-w-7xl max-h-[92vh] overflow-y-auto p-4 sm:p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-indigo-900/60">
+              <div className="flex items-center gap-2">
+                <Brain className="w-5 h-5 text-indigo-400 animate-pulse" />
+                <h2 className="text-lg font-bold text-white tracking-tight">
+                  AI Explainable Profit Opportunity Scanner & Signal Gate
+                </h2>
+              </div>
+              <button
+                onClick={() => setIsExplainableScannerOpen(false)}
+                className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold font-mono transition cursor-pointer"
+              >
+                닫기 ✕
+              </button>
+            </div>
+            <ExplainableOpportunityScanner />
+          </div>
+        </div>
       )}
 
     </div>

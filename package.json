@@ -15,6 +15,7 @@
     "audit:buttons": "node scripts/check-production-buttons.mjs",
     "validate:v20": "node scripts/check-v20-production-truth.mjs && npm run audit:fake-data && npm run lint && npm test && npm run test:python && npm run build",
     "validate:final": "node scripts/check-final-production-truth.mjs && node scripts/check-v20-production-truth.mjs && npm run audit:fake-data && npm run audit:boundaries && npm run audit:buttons && npm run lint && npm test && npm run test:python && npm run build",
+    "validate:rc5": "node scripts/check-rc5-production-truth.mjs && node scripts/check-final-production-truth.mjs && node scripts/check-v20-production-truth.mjs && npm run audit:fake-data && npm run audit:boundaries && npm run audit:buttons && npm run lint && npm test && npm run test:python && npm run build",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
