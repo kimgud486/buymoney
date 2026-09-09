@@ -10,6 +10,7 @@ import { IndicatorTruthEngine } from "./IndicatorTruthEngine";
 import { PatternTruthEngineV192 } from "./PatternTruthEngineV192";
 import { Candle } from "./StructureBrain";
 import { koreaYesOnlyHotListRuntimeV204 } from "../../server/v20/KoreaYesOnlyHotListRuntimeV204";
+import { koreaServerDiscoveryV204 } from "../../server/v20/KoreaServerDiscoveryV204";
 
 export type UsExchange = "NASDAQ" | "NYSE" | "AMEX" | "UNKNOWN";
 
@@ -86,10 +87,11 @@ const US_EXCHANGE_MAP: Record<string, UsExchange> = {
 };
 
 /**
- * Universal V19.2 Stock Scanner Logic with Strict Real-Data Integrity
+ * Legacy/client-assisted V19.2 scan path. KOREA final publication no longer
+ * depends on this in V20.4; US/UPBIT continue to use it until equivalent
+ * server-side history validators are implemented.
  */
 export class GlobalRealtimeScannerV192 {
-  /** Normalize market input string (BTC/CRYPTO -> UPBIT). */
   public static normalizeMarketInput(marketInput?: string): "ALL" | "KOREA" | "US" | "UPBIT" {
     if (!marketInput || marketInput === "ALL") return "ALL";
     const u = marketInput.toUpperCase();
@@ -99,7 +101,6 @@ export class GlobalRealtimeScannerV192 {
     return "ALL";
   }
 
-  /** Scan market with strict live data requirement and PatternTruthEngineV192. */
   public static scanMarket(
     stocks: LiveStockItem[],
     marketType: "KOREA" | "US" | "UPBIT",
@@ -303,7 +304,11 @@ export class GlobalRealtimeScannerV192 {
   }
 }
 
-/** Top-level Scan Execution Function for AI Hot List V19.2 + Korea V20.4. */
+/**
+ * Top-level scan execution.
+ * KOREA: server discovery (DISPLAY_ONLY) -> KIS deep verification -> YES-only.
+ * US/UPBIT: existing V19.2 path until equivalent server history gates exist.
+ */
 export async function scanGlobalRealtimeHotListV192(options?: {
   marketFilter?: "ALL" | "KOREA" | "US" | "UPBIT" | "BTC" | "CRYPTO";
   exchangeFilter?: string;
@@ -319,25 +324,31 @@ export async function scanGlobalRealtimeHotListV192(options?: {
   const minSetupScore = options?.minSetupScore ?? 50;
 
   const allStocks = getAllStocks();
-
-  const krStocks = allStocks.filter(s => s.market === "KOSPI" || s.market === "KOSDAQ");
   const usStocks = allStocks.filter(s => s.market === "US");
   const upbitStocks = allStocks.filter(s => s.market === "UPBIT");
 
   let hotItems: HotListItemV192[] = [];
   let totalScanned = 0;
-
   let krCount = 0;
   let usCount = 0;
   let upbitCount = 0;
+  let v204Meta: ScanResultV192["v204"] | undefined;
 
   const scanOpts = { exchangeFilter, patternFilter, minObjectivePct, minSetupScore };
 
   if (normalizedMarket === "ALL" || normalizedMarket === "KOREA") {
-    const krRes = GlobalRealtimeScannerV192.scanMarket(krStocks, "KOREA", scanOpts);
-    hotItems.push(...krRes.items);
-    krCount = krRes.scannedCount;
-    totalScanned += krRes.scannedCount;
+    const discovery = await koreaServerDiscoveryV204.discover();
+    const strict = await koreaYesOnlyHotListRuntimeV204.filterYesOnly(discovery.candidates);
+    hotItems.push(...strict.approved);
+    krCount = discovery.scannedTotal;
+    totalScanned += discovery.scannedTotal;
+    v204Meta = {
+      koreaStrictEnabled: true,
+      yesOnly: true,
+      evaluatedCount: strict.evaluatedCount,
+      rejectedCount: strict.rejectedCount,
+      note: `KOREA ${discovery.receivedQuotes}개 실시간 발견값은 DISPLAY_ONLY로 후보 압축에만 사용. 최종 결과는 KIS 역사봉/현재가/1m·3m·5m·D/V20.4를 모두 통과한 YES만 표시합니다.`
+    };
   }
 
   if (normalizedMarket === "ALL" || normalizedMarket === "US") {
@@ -352,23 +363,6 @@ export async function scanGlobalRealtimeHotListV192(options?: {
     hotItems.push(...upbitRes.items);
     upbitCount = upbitRes.scannedCount;
     totalScanned += upbitRes.scannedCount;
-  }
-
-  let v204Meta: ScanResultV192["v204"] | undefined;
-
-  // Korea mode is now a strict YES-only publication path. The V19.2 scan is
-  // only a prefilter. A symbol is not returned to the user until KIS 1m +
-  // Daily history, 1m/3m/5m True MTF, freshness, and V20 setup gates all pass.
-  if (normalizedMarket === "KOREA") {
-    const strict = await koreaYesOnlyHotListRuntimeV204.filterYesOnly(hotItems);
-    hotItems = strict.approved;
-    v204Meta = {
-      koreaStrictEnabled: true,
-      yesOnly: true,
-      evaluatedCount: strict.evaluatedCount,
-      rejectedCount: strict.rejectedCount,
-      note: "KOREA 결과는 KIS 역사봉 + True MTF + V20.4 최종 게이트를 통과한 YES 후보만 표시합니다. 빈 순위는 WATCH/NO로 채우지 않습니다."
-    };
   }
 
   hotItems.sort((a, b) => b.setupScore - a.setupScore);
