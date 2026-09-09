@@ -13,6 +13,7 @@ export interface ServerMarketQuoteV20 {
   price: number;
   changeAmount: number;
   changePct: number;
+  /** Session cumulative volume when supplied by the exchange. */
   volume: number;
   tradeValue: number;
   askPrice?: number;
@@ -29,9 +30,7 @@ export class ServerRealtimeMarketHubV20 {
   private candleHistory: Map<string, Candle[]> = new Map();
   private sequenceCounter = 0;
 
-  private constructor() {
-    // Private constructor for singleton
-  }
+  private constructor() {}
 
   public static getInstance(): ServerRealtimeMarketHubV20 {
     if (!ServerRealtimeMarketHubV20.instance) {
@@ -52,10 +51,19 @@ export class ServerRealtimeMarketHubV20 {
     source: string,
     grade: DataGradeV20,
     askPrice?: number,
-    bidPrice?: number
+    bidPrice?: number,
+    /** Per-tick execution volume. Avoids summing cumulative volume into candles. */
+    tickVolume?: number,
+    /** Exchange event timestamp when available. */
+    sourceTimestamp?: number,
   ): ServerMarketQuoteV20 {
     const key = symbol.toUpperCase();
     this.sequenceCounter++;
+
+    const eventTimestamp =
+      typeof sourceTimestamp === "number" && Number.isFinite(sourceTimestamp)
+        ? sourceTimestamp
+        : Date.now();
 
     const quote: ServerMarketQuoteV20 = {
       symbol: key,
@@ -70,12 +78,16 @@ export class ServerRealtimeMarketHubV20 {
       bidPrice,
       source,
       grade,
-      updatedAt: Date.now(),
-      sequence: this.sequenceCounter
+      updatedAt: eventTimestamp,
+      sequence: this.sequenceCounter,
     };
 
     this.quotes.set(key, quote);
-    this.updateCandleStore(key, price, volume);
+    const candleVolume =
+      typeof tickVolume === "number" && Number.isFinite(tickVolume) && tickVolume >= 0
+        ? tickVolume
+        : volume;
+    this.updateCandleStore(key, price, candleVolume, eventTimestamp);
 
     return quote;
   }
@@ -85,11 +97,10 @@ export class ServerRealtimeMarketHubV20 {
     const q = this.quotes.get(key) || this.quotes.get(key.replace("KRW-", ""));
     if (!q) return null;
 
-    // Freshness check (15 seconds cutoff)
     if (Date.now() - q.updatedAt > 15000) {
       return {
         ...q,
-        grade: "DISPLAY_ONLY" // Stale data downgraded to DISPLAY_ONLY
+        grade: "DISPLAY_ONLY",
       };
     }
 
@@ -106,10 +117,14 @@ export class ServerRealtimeMarketHubV20 {
     this.candleHistory.set(key, candles);
   }
 
-  private updateCandleStore(symbol: string, price: number, volume: number): void {
+  private updateCandleStore(
+    symbol: string,
+    price: number,
+    tickVolume: number,
+    eventTimestamp: number,
+  ): void {
     const candles = this.candleHistory.get(symbol) || [];
-    const now = Date.now();
-    const minuteTs = Math.floor(now / 60000) * 60000;
+    const minuteTs = Math.floor(eventTimestamp / 60000) * 60000;
 
     if (candles.length === 0) {
       candles.push({
@@ -118,17 +133,20 @@ export class ServerRealtimeMarketHubV20 {
         high: price,
         low: price,
         close: price,
-        volume: volume
+        volume: tickVolume,
       });
     } else {
       const last = candles[candles.length - 1];
-      const lastTs = typeof last.timestamp === "number" ? last.timestamp : Date.parse(last.timestamp) || 0;
+      const lastTs =
+        typeof last.timestamp === "number"
+          ? last.timestamp
+          : Date.parse(last.timestamp) || 0;
 
       if (lastTs === minuteTs) {
         last.high = Math.max(last.high, price);
         last.low = Math.min(last.low, price);
         last.close = price;
-        last.volume += volume;
+        last.volume += tickVolume;
       } else if (minuteTs > lastTs) {
         candles.push({
           timestamp: minuteTs,
@@ -136,10 +154,10 @@ export class ServerRealtimeMarketHubV20 {
           high: price,
           low: price,
           close: price,
-          volume: volume
+          volume: tickVolume,
         });
-        if (candles.length > 200) {
-          candles.shift();
+        if (candles.length > 400) {
+          candles.splice(0, candles.length - 400);
         }
       }
     }
