@@ -3,6 +3,7 @@ import { BEARISH_PATTERN_CATALOG } from "../lib/bearishMasterEngine";
 import { VERIFIED_PATTERN_REGISTRY } from "./verifiedPatternEngine";
 import { VERIFIED_STRUCTURE_PATTERN_REGISTRY } from "./verifiedStructurePatternEngine";
 import { MASTER_EXECUTABLE_PATTERN_RULES } from "./masterPatternDetectionEngine";
+import { MASTER_PATTERN_EXPANSION_RULES } from "./masterPatternExpansionEngine";
 
 export type PatternAuditDirection = "BULLISH" | "BEARISH";
 
@@ -56,6 +57,9 @@ export function buildPatternExecutionAudit() {
   }
   for (const pattern of MASTER_EXECUTABLE_PATTERN_RULES) {
     addEngine(engineMap, pattern.id, pattern.direction, "MASTER");
+  }
+  for (const pattern of MASTER_PATTERN_EXPANSION_RULES) {
+    addEngine(engineMap, pattern.id, pattern.direction, "EXPANSION");
   }
 
   const catalogRows: PatternExecutionAuditRow[] = [
