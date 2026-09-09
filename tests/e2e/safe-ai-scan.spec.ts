@@ -34,7 +34,7 @@ const VERIFIED_SCANNER_RESPONSE = {
 
 async function openDashboardAndGetLauncher(page: Page) {
   const runtimeErrors: string[] = [];
-  page.on("pageerror", (error) => runtimeErrors.push(`pageerror: ${error.message}`));
+  page.on("pageerror", (error) => runtimeErrors.push(`pageerror: ${error.stack || error.message}`));
   page.on("console", (message) => {
     if (message.type() === "error") runtimeErrors.push(`console.error: ${message.text()}`);
   });
@@ -62,6 +62,8 @@ async function openDashboardAndGetLauncher(page: Page) {
 }
 
 test.describe("Safe AI scan-to-review E2E", () => {
+  test.describe.configure({ retries: 0 });
+
   test("launcher calls explainable scanner, ranks verified candidate, and moves it to final chart review", async ({ page }) => {
     let scannerCalls = 0;
 
