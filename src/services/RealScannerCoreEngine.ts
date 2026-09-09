@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------
-// REAL SCANNER CORE ENGINE (V14.1 TRUTH ENGINE INTEGRATED)
+// REAL SCANNER CORE ENGINE (V15.1 TRUTH-FIRST)
 // Pure Candle Technical Indicators, SMC & Multi-Timeframe Truth Analysis
 // ----------------------------------------------------------------------
 
@@ -20,7 +20,6 @@ export interface ScannerAnalysis {
     adx: number | null;
     ema20: number | null;
   };
-
   structure: {
     trend: "UP" | "DOWN" | "RANGE" | "NO_DATA";
     hh: boolean;
@@ -28,7 +27,6 @@ export interface ScannerAnalysis {
     bos: boolean;
     choch: boolean;
   };
-
   pattern: {
     orb: boolean;
     gapAndGo: boolean;
@@ -38,7 +36,6 @@ export interface ScannerAnalysis {
     vwapReclaim: boolean;
     bullFlag: boolean;
   };
-
   smc: {
     fvg: boolean;
     fvgFillRate: number | null;
@@ -46,7 +43,6 @@ export interface ScannerAnalysis {
     liquiditySweep: boolean;
     smcStructureScore: number | null;
   };
-
   risk: {
     chaseRisk: number | null;
     falseBreakoutRisk: number | null;
@@ -73,6 +69,71 @@ export interface RealScannerResult {
   summary: string;
 }
 
+const emptyMtf = (): MultiTimeframeResult => ({
+  m1: null,
+  m3: null,
+  m5: null,
+  m15: null,
+  m30: null,
+  h1: null,
+  d1: null,
+  bullishCount: 0,
+  bearishCount: 0,
+  timeframesEvaluated: 0,
+  consensus: "NO_DATA",
+});
+
+const emptyAnalysis = (): ScannerAnalysis => ({
+  indicator: {
+    vwap: null,
+    rvol: null,
+    atr: null,
+    rsi: null,
+    macdHistogram: null,
+    adx: null,
+    ema20: null,
+  },
+  structure: { trend: "NO_DATA", hh: false, hl: false, bos: false, choch: false },
+  pattern: {
+    orb: false,
+    gapAndGo: false,
+    firstPullback: false,
+    breakout: false,
+    retest: false,
+    vwapReclaim: false,
+    bullFlag: false,
+  },
+  smc: {
+    fvg: false,
+    fvgFillRate: null,
+    orderBlock: false,
+    liquiditySweep: false,
+    smcStructureScore: null,
+  },
+  risk: { chaseRisk: null, falseBreakoutRisk: null, spreadRisk: null },
+});
+
+function noDataResult(symbol: string, reason: string): RealScannerResult {
+  return {
+    symbol,
+    dataStatus: "NO_DATA",
+    analysisAllowed: false,
+    tradingAllowed: false,
+    score: null,
+    grade: null,
+    signal: "NO_DATA",
+    proposedRiskFloor: null,
+    projectedSellLow: null,
+    projectedSellMid: null,
+    projectedSellHigh: null,
+    analysis: emptyAnalysis(),
+    indicators: IndicatorTruthEngine.computeSnapshot([]),
+    mtfResult: emptyMtf(),
+    brainResult: null,
+    summary: `${reason} - AI 분석 및 주문 차단`,
+  };
+}
+
 export function calculateSetupScore(a: ScannerAnalysis): number | null {
   if (
     a.indicator.vwap == null ||
@@ -85,7 +146,6 @@ export function calculateSetupScore(a: ScannerAnalysis): number | null {
   }
 
   let score = 0;
-
   if (a.structure.trend === "UP") score += 12;
   if (a.structure.hh && a.structure.hl) score += 10;
   if (a.structure.bos) score += 8;
@@ -112,125 +172,156 @@ export function calculateSetupScore(a: ScannerAnalysis): number | null {
 }
 
 export class RealScannerCoreEngine {
-  /**
-   * Main Analysis Entry Point for Verified Candles & Real Live Quote
-   */
   public static analyze(
     symbol: string,
     rawCandles: Candle[],
     liveQuote?: LiveMarketQuote,
     market: "KR" | "US" | "CRYPTO" = "KR"
   ): RealScannerResult {
-    // 1. Fail-Closed Data Verification Gate
-    const candleVerification = MarketDataIntegrityGate.verifyCandles(rawCandles);
-    const quoteVerification = liveQuote
-      ? MarketDataIntegrityGate.verifyQuote(liveQuote)
-      : { isVerified: false, metadata: null };
-
-    if (!candleVerification.isVerified || rawCandles.length < 10) {
-      const emptyIndicators = IndicatorTruthEngine.computeSnapshot([]);
-      const emptyMTF: MultiTimeframeResult = {
-        m1: null, m3: null, m5: null, m15: null, m30: null, h1: null, d1: null,
-        bullishCount: 0, bearishCount: 0, timeframesEvaluated: 0, consensus: "NO_DATA"
-      };
-
-      return {
-        symbol,
-        dataStatus: "NO_DATA",
-        analysisAllowed: false,
-        tradingAllowed: false,
-        score: null,
-        grade: null,
-        signal: "NO_DATA",
-        proposedRiskFloor: null,
-        projectedSellLow: null,
-        projectedSellMid: null,
-        projectedSellHigh: null,
-        analysis: {
-          indicator: { vwap: null, rvol: null, atr: null, rsi: null, macdHistogram: null, adx: null, ema20: null },
-          structure: { trend: "NO_DATA", hh: false, hl: false, bos: false, choch: false },
-          pattern: { orb: false, gapAndGo: false, firstPullback: false, breakout: false, retest: false, vwapReclaim: false, bullFlag: false },
-          smc: { fvg: false, fvgFillRate: null, orderBlock: false, liquiditySweep: false, smcStructureScore: null },
-          risk: { chaseRisk: null, falseBreakoutRisk: null, spreadRisk: null }
-        },
-        indicators: emptyIndicators,
-        mtfResult: emptyMTF,
-        brainResult: null,
-        summary: "실시간 OHLCV 캔들 데이터 부족 (NO_DATA) - AI 분석 및 매수 차단"
-      };
+    const normalizedSymbol = String(symbol ?? "").trim().toUpperCase();
+    if (!normalizedSymbol) {
+      return noDataResult("", "INVALID_SYMBOL");
     }
 
-    const candles = rawCandles;
-    const len = candles.length;
-    const currentPrice = liveQuote?.price || candles[len - 1].close;
+    const candleVerification = MarketDataIntegrityGate.verifyCandles(rawCandles);
+    if (!candleVerification.isVerified || rawCandles.length < 10) {
+      return noDataResult(
+        normalizedSymbol,
+        `실시간 OHLCV 검증 실패 (${candleVerification.errorReason || "INSUFFICIENT_CANDLES"})`
+      );
+    }
 
-    // 2. Compute Pure Indicators via IndicatorTruthEngine with Session Reset
+    const normalizedQuoteSymbol = liveQuote
+      ? String(liveQuote.symbol ?? "").trim().toUpperCase()
+      : "";
+
+    if (liveQuote && normalizedQuoteSymbol !== normalizedSymbol) {
+      return noDataResult(
+        normalizedSymbol,
+        `SYMBOL_MISMATCH expected=${normalizedSymbol} got=${normalizedQuoteSymbol || "MISSING"}`
+      );
+    }
+
+    const quoteVerification = liveQuote
+      ? MarketDataIntegrityGate.verifyQuote(liveQuote, normalizedSymbol)
+      : { isVerified: false, metadata: null };
+
+    const candles = candleVerification.verifiedCandles.map((c) => ({
+      timestamp: c.timestamp,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      volume: c.volume,
+    }));
+
+    const len = candles.length;
+    const quoteCanSetPrice =
+      liveQuote != null &&
+      quoteVerification.isVerified &&
+      typeof liveQuote.price === "number" &&
+      liveQuote.price > 0;
+    const currentPrice = quoteCanSetPrice ? liveQuote!.price! : candles[len - 1].close;
+
     const sessionInfo = MarketSessionService.getSessionInfo(market);
     const sessionOpen = sessionInfo.openTimestamp || Number(candles[0]?.timestamp) || 0;
-    const indicators = IndicatorTruthEngine.computeSnapshot(candles, sessionOpen > 0 ? sessionOpen : undefined);
+    const indicators = IndicatorTruthEngine.computeSnapshot(
+      candles,
+      sessionOpen > 0 ? sessionOpen : undefined
+    );
 
-    // 3. Market Structure Analysis via StructureBrain
-    const brainResult = StructureBrain.analyze(candles, { swingWindowLeft: 2, swingWindowRight: 2 }, symbol);
+    const brainResult = StructureBrain.analyze(
+      candles,
+      { swingWindowLeft: 2, swingWindowRight: 2 },
+      normalizedSymbol
+    );
 
     const isUpTrend = brainResult.currentStructureTrend.startsWith("BULLISH");
     const isDownTrend = brainResult.currentStructureTrend.startsWith("BEARISH");
     const trendState = isUpTrend ? "UP" : isDownTrend ? "DOWN" : "RANGE";
 
-    const hasHh = brainResult.swingHighs.length > 1 &&
-      brainResult.swingHighs[brainResult.swingHighs.length - 1].price > brainResult.swingHighs[brainResult.swingHighs.length - 2].price;
-    const hasHl = brainResult.swingLows.length > 1 &&
-      brainResult.swingLows[brainResult.swingLows.length - 1].price > brainResult.swingLows[brainResult.swingLows.length - 2].price;
-    const hasBos = brainResult.structureBreaks.some((b) => b.type === "BOS" && b.direction === "BULLISH");
-    const hasChoch = brainResult.structureBreaks.some((b) => b.type === "CHOCH" && b.direction === "BULLISH");
+    const hasHh =
+      brainResult.swingHighs.length > 1 &&
+      brainResult.swingHighs[brainResult.swingHighs.length - 1].price >
+        brainResult.swingHighs[brainResult.swingHighs.length - 2].price;
+    const hasHl =
+      brainResult.swingLows.length > 1 &&
+      brainResult.swingLows[brainResult.swingLows.length - 1].price >
+        brainResult.swingLows[brainResult.swingLows.length - 2].price;
+    const hasBos = brainResult.structureBreaks.some(
+      (b) => b.type === "BOS" && b.direction === "BULLISH"
+    );
+    const hasChoch = brainResult.structureBreaks.some(
+      (b) => b.type === "CHOCH" && b.direction === "BULLISH"
+    );
 
-    // 4. Multi-Timeframe Analysis
-    const mtfResult = MultiTimeframeAnalysisEngine.analyzeSymbol(symbol);
+    const mtfResult = MultiTimeframeAnalysisEngine.analyzeSymbol(normalizedSymbol);
 
-    // 5. Session-Aware Pattern Recognition (ORB & Gap & Go)
     const rvol = indicators.rvol;
     const vwap = indicators.vwap;
     const ema20 = indicators.ema20;
 
-    // True Session ORB Calculation (First 15m of Regular Session)
     const openingRangeCandles = candles.filter((c) => {
       const ts = Number(c.timestamp);
-      return sessionOpen > 0 ? (ts >= sessionOpen && ts < sessionOpen + 15 * 60 * 1000) : false;
+      return sessionOpen > 0 && ts >= sessionOpen && ts < sessionOpen + 15 * 60 * 1000;
     });
 
     const orbHigh = openingRangeCandles.length > 0
       ? Math.max(...openingRangeCandles.map((c) => c.high))
       : Math.max(...candles.slice(0, Math.min(5, candles.length)).map((c) => c.high));
-
     const orb = orbHigh > 0 && currentPrice > orbHigh && (rvol ?? 0) >= 1.5;
 
-    // True Session Gap Calculation
-    const firstCandleInSession = candles.find((c) => Number(c.timestamp) >= sessionOpen) || candles[0];
+    const firstCandleInSession =
+      candles.find((c) => Number(c.timestamp) >= sessionOpen) || candles[0];
     const prevSessionCandles = candles.filter((c) => Number(c.timestamp) < sessionOpen);
     const prevRegularClose = prevSessionCandles.length > 0
       ? prevSessionCandles[prevSessionCandles.length - 1].close
-      : (candles[len - 2]?.close || currentPrice);
-
-    const sessionOpenPrice = firstCandleInSession ? firstCandleInSession.open : currentPrice;
-    const sessionGapPct = prevRegularClose > 0 ? ((sessionOpenPrice - prevRegularClose) / prevRegularClose) * 100 : 0;
+      : candles[len - 2]?.close || currentPrice;
+    const sessionOpenPrice = firstCandleInSession?.open ?? currentPrice;
+    const sessionGapPct = prevRegularClose > 0
+      ? ((sessionOpenPrice - prevRegularClose) / prevRegularClose) * 100
+      : 0;
     const gapAndGo = (rvol ?? 0) >= 1.8 && sessionGapPct >= 1.5;
 
     const recent20 = candles.slice(-20);
-    const breakout = currentPrice > Math.max(...recent20.slice(0, -1).map((c) => c.high));
-    const vwapReclaim = vwap != null && candles[len - 2].close < vwap && currentPrice > vwap;
-    const firstPullback = ema20 != null && isUpTrend && currentPrice <= ema20 * 1.01 && currentPrice >= ema20 * 0.99;
-    const retest = breakout && candles[len - 1].low <= Math.max(...recent20.slice(0, -2).map((c) => c.high));
-    const bullFlag = rvol != null && ema20 != null && ema20 > 0 && isUpTrend && rvol < 1.2 && Math.abs(currentPrice - ema20) / ema20 < 0.015;
+    const priorHighs = recent20.slice(0, -1).map((c) => c.high);
+    const breakout = priorHighs.length > 0 && currentPrice > Math.max(...priorHighs);
+    const vwapReclaim =
+      vwap != null && len >= 2 && candles[len - 2].close < vwap && currentPrice > vwap;
+    const firstPullback =
+      ema20 != null &&
+      isUpTrend &&
+      currentPrice <= ema20 * 1.01 &&
+      currentPrice >= ema20 * 0.99;
+    const retestReference = recent20.slice(0, -2).map((c) => c.high);
+    const retest =
+      breakout &&
+      retestReference.length > 0 &&
+      candles[len - 1].low <= Math.max(...retestReference);
+    const bullFlag =
+      rvol != null &&
+      ema20 != null &&
+      ema20 > 0 &&
+      isUpTrend &&
+      rvol < 1.2 &&
+      Math.abs(currentPrice - ema20) / ema20 < 0.015;
 
-    // 6. SMC Components
     const hasFvg = brainResult.fairValueGaps.some((g) => !g.isFilled);
-    const fvgFillRate = brainResult.keyLevels.activeBullishFVG ? brainResult.keyLevels.activeBullishFVG.fillPercentage : null;
+    const fvgFillRate = brainResult.keyLevels.activeBullishFVG
+      ? brainResult.keyLevels.activeBullishFVG.fillPercentage
+      : null;
     const hasOb = Boolean(brainResult.keyLevels.nearestBullishOB);
     const hasSweep = Boolean(brainResult.keyLevels.lastSweep);
 
-    // 7. Risk Metrics
-    const chaseRisk = vwap != null && vwap > 0 ? +(Math.max(0, ((currentPrice - vwap) / vwap) * 100 * 5)).toFixed(1) : null;
-    const falseBreakoutRisk = rvol !== null && chaseRisk !== null ? +((1 - Math.min(rvol / 2.0, 1.0)) * 50 + (chaseRisk > 30 ? 30 : 0)).toFixed(1) : null;
-    const spreadRisk = null; // null if orderbook spread unavailable
+    const chaseRisk =
+      vwap != null && vwap > 0
+        ? +Math.max(0, ((currentPrice - vwap) / vwap) * 100 * 5).toFixed(1)
+        : null;
+    const falseBreakoutRisk =
+      rvol !== null && chaseRisk !== null
+        ? +((1 - Math.min(rvol / 2.0, 1.0)) * 50 + (chaseRisk > 30 ? 30 : 0)).toFixed(1)
+        : null;
+    const spreadRisk = null;
 
     const analysis: ScannerAnalysis = {
       indicator: {
@@ -240,14 +331,14 @@ export class RealScannerCoreEngine {
         rsi: indicators.rsi14,
         macdHistogram: indicators.macd.histogram,
         adx: indicators.dmi.adx,
-        ema20: indicators.ema20
+        ema20: indicators.ema20,
       },
       structure: {
         trend: trendState,
         hh: hasHh,
         hl: hasHl,
         bos: hasBos,
-        choch: hasChoch
+        choch: hasChoch,
       },
       pattern: {
         orb,
@@ -256,25 +347,19 @@ export class RealScannerCoreEngine {
         breakout,
         retest,
         vwapReclaim,
-        bullFlag
+        bullFlag,
       },
       smc: {
         fvg: hasFvg,
         fvgFillRate,
         orderBlock: hasOb,
         liquiditySweep: hasSweep,
-        smcStructureScore: brainResult.smcStructureScore
+        smcStructureScore: brainResult.smcStructureScore,
       },
-      risk: {
-        chaseRisk,
-        falseBreakoutRisk,
-        spreadRisk
-      }
+      risk: { chaseRisk, falseBreakoutRisk, spreadRisk },
     };
 
-    // 8. Calculate Setup Score
     const score = calculateSetupScore(analysis);
-
     let grade: RealScannerResult["grade"] = "NO_SETUP";
     let signal: RealScannerResult["signal"] = "REJECT";
 
@@ -285,35 +370,31 @@ export class RealScannerCoreEngine {
       else if (score >= 65) grade = "A";
       else if (score >= 50) grade = "B";
       else grade = "WATCH";
-
       signal = score >= 75 ? "BUY_CANDIDATE" : score >= 50 ? "WATCH" : "REJECT";
     }
 
-    const executionQuoteReady = requireLiveData(liveQuote);
-
-    const marketDataVerified =
-      candleVerification.isVerified &&
-      executionQuoteReady;
-
+    const executionQuoteReady =
+      quoteVerification.isVerified && requireLiveData(liveQuote);
+    const marketDataVerified = candleVerification.isVerified && executionQuoteReady;
     const tradingAllowed = marketDataVerified && signal === "BUY_CANDIDATE";
-
-    // Pre-Buy Projections (Not LIVE DEFENSE SELL)
-    const effectiveAtr = indicators.atr14 != null && indicators.atr14 > 0 ? indicators.atr14 : 0;
 
     let proposedRiskFloor: number | null = null;
     let projectedSellLow: number | null = null;
     let projectedSellMid: number | null = null;
     let projectedSellHigh: number | null = null;
 
-    if (currentPrice > 0) {
-      proposedRiskFloor = +Math.max(currentPrice * 0.95, currentPrice - effectiveAtr * 2.0).toFixed(2);
-      projectedSellLow = +(currentPrice + effectiveAtr * 1.5).toFixed(2);
-      projectedSellMid = +(currentPrice + effectiveAtr * 2.5).toFixed(2);
-      projectedSellHigh = +(currentPrice + effectiveAtr * 3.8).toFixed(2);
+    const atr = indicators.atr14;
+    if (currentPrice > 0 && atr != null && atr > 0) {
+      proposedRiskFloor = +Math.max(currentPrice * 0.95, currentPrice - atr * 2.0).toFixed(2);
+      projectedSellLow = +(currentPrice + atr * 1.5).toFixed(2);
+      projectedSellMid = +(currentPrice + atr * 2.5).toFixed(2);
+      projectedSellHigh = +(currentPrice + atr * 3.8).toFixed(2);
     }
 
+    const quoteReason = quoteVerification.metadata?.verificationReason || "NO_LIVE_QUOTE";
+
     return {
-      symbol,
+      symbol: normalizedSymbol,
       dataStatus: marketDataVerified ? "LIVE" : "STALE",
       analysisAllowed: candleVerification.isVerified,
       tradingAllowed,
@@ -330,7 +411,7 @@ export class RealScannerCoreEngine {
       brainResult,
       summary: tradingAllowed
         ? `VERIFIED BUY CANDIDATE ${score}점 (${grade})`
-        : `ANALYSIS ONLY / EXECUTION BLOCKED (점수: ${score ?? "NO_DATA"}점 | ${grade})`
+        : `ANALYSIS ONLY / EXECUTION BLOCKED (quote=${quoteReason}, score=${score ?? "NO_DATA"}, grade=${grade})`,
     };
   }
 }
