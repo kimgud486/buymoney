@@ -1,0 +1,47 @@
+name: Fix v23 execution test policy once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-v23-test-policy-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix-v23-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Make execution tests opt into LIVE explicitly
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tests/v23_autonomous_trading_architecture.test.ts')
+          text = p.read_text(encoding='utf-8')
+          marker = 'describe("AISTOCK v23 Autonomous AI Scanner & Trading Architecture Tests", () => {\n'
+          insert = '''describe("AISTOCK v23 Autonomous AI Scanner & Trading Architecture Tests", () => {\n  // Production defaults to SIGNAL_ONLY. Only broker lifecycle simulations below opt into LIVE explicitly.\n  const EXECUTION_TEST_POLICY: AutonomousRiskPolicy = {\n    ...DEFAULT_AUTONOMOUS_RISK_POLICY,\n    mode: "LIVE",\n  };\n'''
+          if text.count(marker) != 1:
+              raise SystemExit('Expected exactly one describe marker; refusing broad edit')
+          ctor = 'const orchestrator = new AutonomousTradingOrchestrator(router, orderManager, killSwitch, reconciler);'
+          if text.count(ctor) != 3:
+              raise SystemExit(f'Expected exactly 3 lifecycle orchestrators, found {text.count(ctor)}')
+          replacement = 'const orchestrator = new AutonomousTradingOrchestrator(router, orderManager, killSwitch, reconciler, EXECUTION_TEST_POLICY);'
+          text = text.replace(marker, insert, 1).replace(ctor, replacement)
+          p.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit exact test-only policy fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/v23_autonomous_trading_architecture.test.ts
+          git commit -m "test: make v23 execution simulations opt into live mode"
+          git push origin HEAD:main
