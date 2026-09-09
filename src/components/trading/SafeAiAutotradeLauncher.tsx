@@ -1,320 +1,302 @@
-import React, { useState } from "react";
-import { Play, ShieldCheck, Cpu, ArrowRight, CheckCircle2, AlertTriangle, ExternalLink, RefreshCw, Eye } from "lucide-react";
-import { ExplainableTradeIdea } from "../../scanner/ExplainableOpportunityScannerEngine";
-import { OpenSourceSignalEnsemble, EnsembleEvaluationResult } from "../../autonomous/OpenSourceSignalEnsemble";
+import React, { useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  Brain,
+  CheckCircle2,
+  Crosshair,
+  Eye,
+  RefreshCw,
+  ShieldCheck,
+  Target,
+} from "lucide-react";
+import { useApp } from "../../context/AppContext";
+import type { ExplainableTradeIdea } from "../../scanner/ExplainableOpportunityScannerEngine";
+import {
+  OpenSourceSignalEnsemble,
+  type EnsembleEvaluationResult,
+} from "../../autonomous/OpenSourceSignalEnsemble";
 
-interface SafeAiAutotradeLauncherProps {
-  onSelectSymbolForChart?: (symbol: string) => void;
-  onConfirmOrderApproval?: (result: EnsembleEvaluationResult) => void;
+type ScanMarket = "ALL" | "KOREA" | "US" | "BTC";
+
+interface ScannerResponse {
+  success?: boolean;
+  scannedAt?: string;
+  topIdeas?: Partial<ExplainableTradeIdea>[];
+  ideas?: Partial<ExplainableTradeIdea>[];
+  message?: string;
 }
 
-export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = ({
-  onSelectSymbolForChart,
-  onConfirmOrderApproval,
-}) => {
+const MARKET_LABEL: Record<ScanMarket, string> = {
+  ALL: "전체",
+  KOREA: "국내",
+  US: "미국",
+  BTC: "가상자산",
+};
+
+const formatPrice = (value: number, market: EnsembleEvaluationResult["market"]): string => {
+  if (!Number.isFinite(value) || value <= 0) return "-";
+  if (market === "US") {
+    return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  }
+  return `${Math.round(value).toLocaleString()}원`;
+};
+
+export const SafeAiAutotradeLauncher: React.FC = () => {
+  const { setSelectedSymbol, addToast } = useApp();
+  const [market, setMarket] = useState<ScanMarket>("ALL");
   const [isScanning, setIsScanning] = useState(false);
-  const [scanStep, setScanStep] = useState<string>("");
   const [results, setResults] = useState<EnsembleEvaluationResult[]>([]);
   const [selectedCandidate, setSelectedCandidate] = useState<EnsembleEvaluationResult | null>(null);
-  const [userConfirmed, setUserConfirmed] = useState(false);
+  const [scanError, setScanError] = useState("");
+  const [scannedAt, setScannedAt] = useState("");
 
-  const handleRunAiScan = async () => {
+  const reviewReadyCount = useMemo(
+    () => results.filter((result) => result.decision === "REVIEW_READY").length,
+    [results],
+  );
+
+  const runScan = async (targetMarket: ScanMarket = market) => {
     setIsScanning(true);
-    setScanStep("전체 시장 데이터 및 거래량/수급 수집 중...");
-    setResults([]);
-    setSelectedCandidate(null);
-    setUserConfirmed(false);
+    setScanError("");
 
     try {
-      await new Promise((r) => setTimeout(r, 600));
-      setScanStep("Explainable AI 시세/패턴 파이프라인 구동 중...");
+      const response = await fetch(
+        `/api/explainable-scanner?market=${encodeURIComponent(targetMarket)}&aiExplain=true`,
+        { headers: { Accept: "application/json" }, cache: "no-store" },
+      );
+      const payload = (await response.json().catch(() => ({}))) as ScannerResponse;
 
-      // Fetch live candidates from Explainable Scanner API
-      let scannedCandidates: Partial<ExplainableTradeIdea>[] = [];
-      try {
-        const res = await fetch("/api/explainable-scanner?aiExplain=true");
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data.topIdeas) && data.topIdeas.length > 0) {
-            scannedCandidates = data.topIdeas;
-          } else if (Array.isArray(data.ideas) && data.ideas.length > 0) {
-            scannedCandidates = data.ideas;
-          }
-        }
-      } catch (e) {
-        console.warn("[SafeAiAutotradeLauncher] Explainable scanner fetch warning:", e);
+      if (!response.ok || payload.success === false) {
+        throw new Error(payload.message || `스캐너 HTTP ${response.status}`);
       }
 
-      if (scannedCandidates.length === 0) {
-        // Fallback: Query live real-time candles for real active symbols
-        const activeSymbols = [
-          { symbol: "005930", name: "삼성전자", market: "KOREA" as const },
-          { symbol: "000660", name: "SK하이닉스", market: "KOREA" as const },
-          { symbol: "035420", name: "NAVER", market: "KOREA" as const },
-          { symbol: "005380", name: "현대차", market: "KOREA" as const },
-          { symbol: "068270", name: "셀트리온", market: "KOREA" as const },
-        ];
+      const candidates = Array.isArray(payload.topIdeas)
+        ? payload.topIdeas
+        : Array.isArray(payload.ideas)
+          ? payload.ideas
+          : [];
 
-        for (const s of activeSymbols) {
-          try {
-            const candleRes = await fetch(`/api/market/realtime-candles?symbol=${s.symbol}&count=30`);
-            if (candleRes.ok) {
-              const candleData = await candleRes.json();
-              const price = candleData.currentPrice || (candleData.candles?.length > 0 ? candleData.candles[candleData.candles.length - 1].close : 10000);
-              scannedCandidates.push({
-                symbol: s.symbol,
-                name: candleData.name || s.name,
-                market: s.market,
-                price,
-                rsi: 52,
-                rvol: 1.8,
-                adx: 28,
-                atrPct: 2.2,
-                grade: "A+",
-                stop: Math.round(price * 0.96),
-                target1: Math.round(price * 1.08),
-              });
-            }
-          } catch (e) {
-            // ignore fallback error
-          }
-        }
-      }
+      // Truth-first: no hard-coded symbols, prices, RSI, RVOL, ATR or synthetic candles.
+      // If the production scanner returns no verified candidates, show an empty result.
+      const ranked = OpenSourceSignalEnsemble.rankCandidates(candidates, 5);
+      setResults(ranked);
+      setSelectedCandidate(ranked[0] || null);
+      setScannedAt(payload.scannedAt || new Date().toLocaleTimeString("ko-KR"));
 
-      await new Promise((r) => setTimeout(r, 600));
-      setScanStep("FinRL-X/Qlib 앙상블 재점수 & R:R/RVOL/RSI/ATR 리스크 게이트 검증 중...");
-
-      const evaluated = scannedCandidates
-        .map((c) => OpenSourceSignalEnsemble.evaluateCandidate(c))
-        .sort((a, b) => b.ensembleScore - a.ensembleScore)
-        .slice(0, 5);
-
-      await new Promise((r) => setTimeout(r, 400));
-      setResults(evaluated);
-      if (evaluated.length > 0) {
-        setSelectedCandidate(evaluated[0]);
-      }
+      addToast(
+        `AI 스캔 완료: TOP ${ranked.length}, 최종 검토 가능 ${ranked.filter((item) => item.decision === "REVIEW_READY").length}개`,
+        "INFO",
+      );
+    } catch (error: any) {
+      const message = error?.message || "AI 스캔 중 오류가 발생했습니다.";
+      setResults([]);
+      setSelectedCandidate(null);
+      setScanError(message);
+      addToast(message, "ERROR");
     } finally {
       setIsScanning(false);
-      setScanStep("");
     }
   };
 
+  const selectForFinalReview = (candidate: EnsembleEvaluationResult) => {
+    setSelectedSymbol(candidate.symbol);
+    window.dispatchEvent(
+      new CustomEvent("verified-ai-candidate-selected", {
+        detail: { symbol: candidate.symbol },
+      }),
+    );
+    addToast(
+      `${candidate.name}(${candidate.symbol})을 메인 차트 검토 종목으로 선택했습니다. 실제 주문은 기존 주문 확인 게이트에서 사용자가 별도로 승인해야 합니다.`,
+      "INFO",
+    );
+  };
+
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-5 text-slate-100">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
-        <div className="flex items-center space-x-3">
-          <div className="p-2.5 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-            <Cpu className="w-6 h-6" />
-          </div>
-          <div>
-            <div className="flex items-center space-x-2">
-              <h2 className="text-lg font-bold text-white">스캔 AI 자율매매 (Safety Signal Hub)</h2>
-              <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
-                HUMAN_APPROVAL_REQUIRED
-              </span>
+    <section className="w-full border-b border-slate-200 bg-slate-950 px-4 py-4 text-slate-100 md:px-6">
+      <div className="mx-auto max-w-[1600px] rounded-2xl border border-slate-800 bg-slate-900/90 p-4 shadow-xl">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-2.5 text-cyan-300">
+              <Brain className="h-6 w-6" />
             </div>
-            <p className="text-xs text-slate-400 mt-0.5">
-              FinRL-X/Qlib 앙상블 기반 Top 5 종목 포착 &bull; 100% 자동 주문 금지 (사람 최종 승인 필수)
-            </p>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-lg font-black text-white">스캔 AI 자율매매</h2>
+                <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-black tracking-wide text-emerald-300">
+                  SIGNAL_ONLY · HUMAN APPROVAL
+                </span>
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                Explainable Scanner → 앙상블 재점수 → R:R/RVOL/RSI/ATR 위험 게이트 → TOP 5 → 메인 차트 최종 검토
+              </p>
+            </div>
           </div>
-        </div>
 
-        <button
-          onClick={handleRunAiScan}
-          disabled={isScanning}
-          className="flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-semibold text-sm transition-all disabled:opacity-50 shadow-lg shadow-cyan-950"
-        >
-          {isScanning ? (
-            <>
-              <RefreshCw className="w-4 h-4 animate-spin" />
-              <span>스캐닝 중...</span>
-            </>
-          ) : (
-            <>
-              <Play className="w-4 h-4 fill-current" />
-              <span>전체시장 AI 자율스캔 실행</span>
-            </>
-          )}
-        </button>
-      </div>
-
-      {/* Scanning status banner */}
-      {isScanning && (
-        <div className="bg-cyan-950/40 border border-cyan-800/50 rounded-xl p-4 flex items-center space-x-3 animate-pulse">
-          <RefreshCw className="w-5 h-5 text-cyan-400 animate-spin" />
-          <span className="text-sm text-cyan-200 font-medium">{scanStep}</span>
-        </div>
-      )}
-
-      {/* Results grid */}
-      {results.length > 0 && !isScanning && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-          {/* Top 5 list */}
-          <div className="lg:col-span-5 space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-              TOP 5 앙상블 검증 종목
-            </h3>
-            {results.map((item, idx) => {
-              const isSelected = selectedCandidate?.symbol === item.symbol;
-              const isPass = item.decision === "REVIEW_READY" || item.decision === "YES";
-
-              return (
-                <div
-                  key={item.symbol}
-                  onClick={() => setSelectedCandidate(item)}
-                  className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
-                    isSelected
-                      ? "bg-slate-800 border-cyan-500/50 shadow-md shadow-cyan-950/50"
-                      : "bg-slate-950/60 border-slate-800/80 hover:border-slate-700"
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex rounded-xl border border-slate-700 bg-slate-950 p-1">
+              {(["ALL", "KOREA", "US", "BTC"] as const).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setMarket(item)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-bold transition ${
+                    market === item
+                      ? "bg-cyan-600 text-white"
+                      : "text-slate-400 hover:bg-slate-900 hover:text-white"
                   }`}
                 >
-                  <div className="flex items-center space-x-3">
-                    <span className="text-xs font-bold text-slate-500 w-4">#{idx + 1}</span>
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <span className="font-bold text-sm text-white">{item.name}</span>
-                        <span className="text-xs font-mono text-slate-400">{item.symbol}</span>
-                      </div>
-                      <div className="text-xs text-slate-400 mt-0.5">
-                        진입가: {item.entryPrice.toLocaleString()}원 &bull; R:R {item.rrRatio}:1
-                      </div>
-                    </div>
-                  </div>
+                  {MARKET_LABEL[item]}
+                </button>
+              ))}
+            </div>
 
-                  <div className="flex items-center space-x-2">
-                    <span
-                      className={`text-xs px-2 py-1 rounded-lg font-bold ${
-                        isPass
-                          ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                          : item.decision === "WATCH"
-                          ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
-                          : "bg-rose-500/10 text-rose-400 border border-rose-500/20"
-                      }`}
-                    >
-                      {item.decision} ({item.ensembleScore}점)
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
+            <button
+              type="button"
+              data-testid="safe-ai-autotrade-launcher"
+              onClick={() => void runScan(market)}
+              disabled={isScanning}
+              className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 px-4 py-2.5 text-sm font-black text-white shadow-lg shadow-cyan-950/40 transition hover:from-cyan-500 hover:to-blue-500 disabled:cursor-wait disabled:opacity-60"
+            >
+              {isScanning ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Crosshair className="h-4 w-4" />}
+              {isScanning ? "실시간 스캔 중" : "스캔 AI 자율매매 실행"}
+              <ShieldCheck className="h-4 w-4 text-emerald-200" />
+            </button>
           </div>
+        </div>
 
-          {/* Detailed Selected Inspection */}
-          {selectedCandidate && (
-            <div className="lg:col-span-7 bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                <div>
-                  <h4 className="text-base font-bold text-white flex items-center space-x-2">
-                    <span>{selectedCandidate.name} ({selectedCandidate.symbol})</span>
-                    <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-cyan-400 font-mono">
-                      Ensemble {selectedCandidate.ensembleScore}/100
-                    </span>
-                  </h4>
-                  <p className="text-xs text-slate-400 mt-1">{selectedCandidate.summaryMessage}</p>
-                </div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 pt-3 text-xs">
+          <div className="flex flex-wrap gap-4 text-slate-400">
+            <span>최근 스캔: <strong className="text-slate-200">{scannedAt || "-"}</strong></span>
+            <span>검토 가능: <strong className="text-emerald-300">{reviewReadyCount}</strong></span>
+          </div>
+          <div className="flex items-center gap-1.5 font-bold text-amber-300">
+            <ShieldCheck className="h-3.5 w-3.5" />
+            AI가 브로커 주문을 직접 전송하지 않습니다.
+          </div>
+        </div>
 
-                {onSelectSymbolForChart && (
+        {scanError && (
+          <div className="mt-4 flex items-start gap-2 rounded-xl border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{scanError}</span>
+          </div>
+        )}
+
+        {!isScanning && !scanError && scannedAt && results.length === 0 && (
+          <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-center text-xs text-slate-400">
+            현재 실데이터 스캐너에서 검증 가능한 후보가 없습니다. 임의 후보나 임의 지표값은 생성하지 않았습니다.
+          </div>
+        )}
+
+        {results.length > 0 && (
+          <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
+            <div className="space-y-2 xl:col-span-5">
+              {results.map((item, index) => {
+                const selected = selectedCandidate?.symbol === item.symbol;
+                return (
                   <button
-                    onClick={() => onSelectSymbolForChart(selectedCandidate.symbol)}
-                    className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition-colors"
+                    key={`${item.symbol}-${index}`}
+                    type="button"
+                    onClick={() => setSelectedCandidate(item)}
+                    className={`w-full rounded-xl border p-3 text-left transition ${
+                      selected
+                        ? "border-cyan-500/50 bg-slate-800"
+                        : "border-slate-800 bg-slate-950/60 hover:border-slate-700"
+                    }`}
                   >
-                    <Eye className="w-3.5 h-3.5" />
-                    <span>차트 보기</span>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs font-black text-cyan-300">#{index + 1}</span>
+                          <span className="font-black text-white">{item.name}</span>
+                          <span className="font-mono text-[11px] text-slate-500">{item.symbol}</span>
+                        </div>
+                        <div className="mt-1 text-xs text-slate-400">
+                          R:R {item.rrRatio.toFixed(2)} · RVOL {item.rvol.toFixed(2)}x · Scanner {item.sourceScore}/100
+                        </div>
+                      </div>
+                      <span className={`rounded-lg border px-2 py-1 text-[11px] font-black ${
+                        item.decision === "REVIEW_READY"
+                          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                          : item.decision === "WATCH"
+                            ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
+                            : "border-rose-500/30 bg-rose-500/10 text-rose-300"
+                      }`}>
+                        {item.decision} · {item.ensembleScore}
+                      </span>
+                    </div>
                   </button>
-                )}
-              </div>
+                );
+              })}
+            </div>
 
-              {/* Price Targets & Levels */}
-              <div className="grid grid-cols-3 gap-3">
-                <div className="bg-slate-900 p-3 rounded-lg border border-slate-800">
-                  <span className="text-xs text-slate-400 block">진입 예상가</span>
-                  <span className="text-sm font-bold font-mono text-cyan-400">
-                    {selectedCandidate.entryPrice.toLocaleString()}원
-                  </span>
-                </div>
-                <div className="bg-slate-900 p-3 rounded-lg border border-slate-800">
-                  <span className="text-xs text-slate-400 block">손절가 (Stop Loss)</span>
-                  <span className="text-sm font-bold font-mono text-rose-400">
-                    {selectedCandidate.stopLossPrice.toLocaleString()}원
-                  </span>
-                </div>
-                <div className="bg-slate-900 p-3 rounded-lg border border-slate-800">
-                  <span className="text-xs text-slate-400 block">목표가 (Target)</span>
-                  <span className="text-sm font-bold font-mono text-emerald-400">
-                    {selectedCandidate.targetPrice.toLocaleString()}원
-                  </span>
-                </div>
-              </div>
-
-              {/* Reasons & Risks */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                <div className="bg-emerald-950/20 border border-emerald-900/40 p-3 rounded-lg space-y-1.5">
-                  <span className="font-bold text-emerald-400 flex items-center space-x-1">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>상승 요인 (Bullish Rationale)</span>
-                  </span>
-                  <ul className="space-y-1 text-slate-300">
-                    {selectedCandidate.bullishReasons.map((r, i) => (
-                      <li key={i}>&bull; {r}</li>
-                    ))}
-                  </ul>
+            {selectedCandidate && (
+              <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 xl:col-span-7">
+                <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-800 pb-3">
+                  <div>
+                    <h3 className="font-black text-white">
+                      {selectedCandidate.name} <span className="font-mono text-xs text-slate-500">{selectedCandidate.symbol}</span>
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-400">{selectedCandidate.summaryMessage}</p>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[10px] uppercase tracking-wider text-slate-500">Ensemble</div>
+                    <div className="text-2xl font-black text-cyan-300">{selectedCandidate.ensembleScore}</div>
+                  </div>
                 </div>
 
-                <div className="bg-rose-950/20 border border-rose-900/40 p-3 rounded-lg space-y-1.5">
-                  <span className="font-bold text-rose-400 flex items-center space-x-1">
-                    <AlertTriangle className="w-3.5 h-3.5" />
-                    <span>위험 요소 (Risk Assessment)</span>
-                  </span>
-                  <ul className="space-y-1 text-slate-300">
-                    {selectedCandidate.riskReasons.length > 0 ? (
-                      selectedCandidate.riskReasons.map((r, i) => <li key={i}>&bull; {r}</li>)
-                    ) : (
-                      <li className="text-emerald-400">&bull; 감지된 하드 리스크 없음</li>
-                    )}
-                  </ul>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+                  <div className="rounded-lg bg-slate-900 p-2">
+                    <span className="block text-slate-500">진입구간</span>
+                    <strong>{formatPrice(selectedCandidate.entryLow, selectedCandidate.market)}<br />~ {formatPrice(selectedCandidate.entryHigh, selectedCandidate.market)}</strong>
+                  </div>
+                  <div className="rounded-lg bg-slate-900 p-2">
+                    <span className="block text-slate-500">손절</span>
+                    <strong className="text-rose-300">{formatPrice(selectedCandidate.stopLossPrice, selectedCandidate.market)}</strong>
+                  </div>
+                  <div className="rounded-lg bg-slate-900 p-2">
+                    <span className="block text-slate-500">목표1</span>
+                    <strong className="text-emerald-300">{formatPrice(selectedCandidate.targetPrice, selectedCandidate.market)}</strong>
+                  </div>
+                  <div className="rounded-lg bg-slate-900 p-2">
+                    <span className="block text-slate-500">RSI / ATR</span>
+                    <strong>{selectedCandidate.rsi.toFixed(1)} / {selectedCandidate.atrPct.toFixed(1)}%</strong>
+                  </div>
                 </div>
-              </div>
 
-              {/* Order Confirmation Guard */}
-              <div className="pt-2 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
-                <div className="flex items-center space-x-2 text-xs text-slate-400">
-                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                  <span>실계좌 자동주문 차단됨 (APPROVAL_REQUIRED=true)</span>
+                <div className="mt-3 grid grid-cols-1 gap-2 text-xs md:grid-cols-2">
+                  <div className="rounded-lg border border-emerald-500/20 bg-emerald-950/10 p-3">
+                    <div className="mb-1 flex items-center gap-1.5 font-bold text-emerald-300">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> 상승 근거
+                    </div>
+                    <p className="leading-relaxed text-slate-300">
+                      {selectedCandidate.bullishReasons.slice(0, 4).join(" · ") || "확인된 상승 근거 없음"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-amber-500/20 bg-amber-950/10 p-3">
+                    <div className="mb-1 flex items-center gap-1.5 font-bold text-amber-300">
+                      <AlertTriangle className="h-3.5 w-3.5" /> 위험 / 미충족 조건
+                    </div>
+                    <p className="leading-relaxed text-slate-300">
+                      {selectedCandidate.riskReasons.slice(0, 4).join(" · ") || "추가 하드 리스크 없음"}
+                    </p>
+                  </div>
                 </div>
 
                 <button
-                  onClick={() => {
-                    setUserConfirmed(true);
-                    if (onConfirmOrderApproval) {
-                      onConfirmOrderApproval(selectedCandidate);
-                    }
-                  }}
-                  disabled={userConfirmed}
-                  className={`w-full sm:w-auto px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-2 ${
-                    userConfirmed
-                      ? "bg-emerald-600 text-white cursor-default"
-                      : "bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-md shadow-emerald-950"
-                  }`}
+                  type="button"
+                  onClick={() => selectForFinalReview(selectedCandidate)}
+                  className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-cyan-500/40 bg-cyan-500/10 px-4 py-2.5 text-xs font-black text-cyan-200 transition hover:bg-cyan-500/20"
                 >
-                  {userConfirmed ? (
-                    <>
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>주문 승인 완료 (Broker Dispatched)</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>최종 주문 승인 (Order Approval)</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </>
-                  )}
+                  <Eye className="h-4 w-4" />
+                  이 종목 메인 차트로 이동 · 주문 전 최종 검토
+                  <Target className="h-4 w-4" />
                 </button>
               </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+            )}
+          </div>
+        )}
+      </div>
+    </section>
   );
 };
