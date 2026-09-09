@@ -1,8 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
 import { OpenSourceSignalEnsemble } from "../src/autonomous/OpenSourceSignalEnsemble";
 
 describe("OpenSourceSignalEnsemble Unit Tests", () => {
-  it("computes REVIEW_READY score and maintains human approval requirement", () => {
+  it("computes assisted-mode candidate score while retaining explicit approval requirement", () => {
     const result = OpenSourceSignalEnsemble.evaluateCandidate({
       symbol: "005930",
       name: "삼성전자",
@@ -15,28 +16,51 @@ describe("OpenSourceSignalEnsemble Unit Tests", () => {
       grade: "S",
       stop: 71000,
       target1: 82000,
+      marketDataVerified: true,
+      indicatorDataVerified: true,
+      dataSource: "KIS_VERIFIED_TEST_FEED",
+      marketTimestamp: new Date().toISOString(),
+    }, {
+      mode: "ASSISTED",
+      serverExecutionAuthorized: false,
     });
 
-    expect(result.approvalRequired).toBe(true);
-    expect(result.liveAutoOrderEnabled).toBe(false);
-    expect(result.rrRatio).toBeGreaterThanOrEqual(1.8);
-    expect(result.ensembleScore).toBeGreaterThanOrEqual(80);
-    expect(["YES", "REVIEW_READY"]).toContain(result.decision);
-    expect(result.riskReasons.length).toBe(0);
+    assert.equal(result.dataComplete, true);
+    assert.equal(result.approvalRequired, true);
+    assert.equal(result.liveAutoOrderEnabled, false);
+    assert.ok(result.rrRatio >= 1.8);
+    assert.ok(result.ensembleScore >= 80);
+    assert.ok(["YES", "REVIEW_READY"].includes(result.decision));
+    assert.equal(result.riskReasons.length, 0);
   });
 
-  it("catches high RSI risk and flags REVIEW_READY/YES as false", () => {
+  it("catches high RSI/high ATR risk and cannot promote the candidate to YES", () => {
     const result = OpenSourceSignalEnsemble.evaluateCandidate({
       symbol: "000660",
       name: "SK하이닉스",
+      market: "KOREA",
       price: 180000,
-      rsi: 78, // Overbought
+      rsi: 78,
       rvol: 1.1,
+      adx: 22,
       atrPct: 9.5,
+      grade: "A",
+      stop: 170000,
+      target1: 200000,
+      marketDataVerified: true,
+      indicatorDataVerified: true,
+      dataSource: "KIS_VERIFIED_TEST_FEED",
+      marketTimestamp: new Date().toISOString(),
+    }, {
+      mode: "ASSISTED",
+      serverExecutionAuthorized: false,
     });
 
-    expect(result.approvalRequired).toBe(true);
-    expect(result.riskReasons.some((r) => r.includes("RSI"))).toBe(true);
-    expect(result.decision).not.toBe("REVIEW_READY");
+    assert.equal(result.dataComplete, true);
+    assert.ok(result.riskReasons.some((r) => r.includes("RSI")));
+    assert.ok(result.riskReasons.some((r) => r.includes("고변동성")));
+    assert.notEqual(result.decision, "YES");
+    assert.notEqual(result.decision, "REVIEW_READY");
+    assert.equal(result.liveAutoOrderEnabled, false);
   });
 });
