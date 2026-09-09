@@ -1,0 +1,8 @@
+CI lockfile compatibility
+Verified-data-only signal ensemble
+YES-only scanner UI wiring
+Production AUTO_LIVE activation gate
+Autonomous coordinator with risk and duplicate-order guards
+Persistent autonomous order journal
+Restart recovery reconciler
+Unit coverage for gate, ensemble, coordinator, and journal
