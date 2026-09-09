@@ -13,6 +13,7 @@ import { MasterAiAutoTradingDashboard } from "./components/trading/MasterAiAutoT
 import { AiBotCommandCenterUi } from "./components/AiBotCommandCenterUi";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { VerifiedAiOpportunityScanner } from "./components/VerifiedAiOpportunityScanner";
+import { VerifiedDecisionDetailPanel } from "./components/VerifiedDecisionDetailPanel";
 
 function MainLayout() {
   const [isConsensusModalOpen, setIsConsensusModalOpen] = useState<boolean>(false);
@@ -55,6 +56,11 @@ function MainLayout() {
       {/* Verified scanner: real candle/indicator checks, no fabricated score and no automatic order */}
       <ErrorBoundary>
         <VerifiedAiOpportunityScanner />
+      </ErrorBoundary>
+
+      {/* Candidate detail: same completed-bar verification engine, with transparent score breakdown */}
+      <ErrorBoundary>
+        <VerifiedDecisionDetailPanel />
       </ErrorBoundary>
 
       {/* MASTER AI AUTO TRADING DASHBOARD */}
