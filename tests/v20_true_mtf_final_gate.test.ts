@@ -100,7 +100,8 @@ test("V20 True MTF: verified 1m/3m/5m/D plus executable pattern can promote a st
 
   assert.equal(result.trueMtfGate.passed, true);
   assert.equal(result.trueMtfGate.hardReject, false);
-  assert.equal(result.executablePatternGate.passed, true);
+  assert.equal(result.patternGate.passed, true);
+  assert.ok(result.patternGate.executableMatches.includes("DOUBLE_BOTTOM"));
   assert.equal(result.recommendation, "BUY_CANDIDATE");
   assert.ok(result.setupScore >= 76);
 });
