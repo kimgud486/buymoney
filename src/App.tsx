@@ -16,8 +16,8 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { VerifiedAiOpportunityScanner } from "./components/VerifiedAiOpportunityScanner";
 import { VerifiedDecisionDetailPanel } from "./components/VerifiedDecisionDetailPanel";
 import { VerifiedPatternStatusPanel } from "./components/VerifiedPatternStatusPanel";
-import { PatternRecognitionVisualGuide } from "./components/PatternRecognitionVisualGuide";
-import { evaluateVerifiedSignal } from "./scanner/verifiedSignalEngine";
+import { VerifiedPatternGuideBridge } from "./components/VerifiedPatternGuideBridge";
+import { evaluateVerifiedSignal, type VerifiedSignalResult } from "./scanner/verifiedSignalEngine";
 
 type VerifiedPatternSelection = {
   symbol: string;
@@ -26,6 +26,7 @@ type VerifiedPatternSelection = {
   currentPrice: number;
   changePct: number;
   detectedPatternCodes: string[];
+  patternRegistry?: VerifiedSignalResult["patternRegistry"];
   verified: boolean;
   error?: string;
 };
@@ -104,6 +105,7 @@ function MainLayout() {
           currentPrice: Number(payload?.currentPrice || result.metrics?.close || 0),
           changePct: Number(payload?.changePct || 0),
           detectedPatternCodes,
+          patternRegistry: result.patternRegistry,
           verified: true,
         });
       } catch (error) {
@@ -153,46 +155,17 @@ function MainLayout() {
 
       {patternSelection && (
         <ErrorBoundary>
-          <div className="w-full border-b border-slate-200 bg-slate-50 px-4 md:px-6 py-5">
-            <div className="max-w-[1600px] mx-auto">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <div className="text-xs font-black tracking-[0.18em] text-slate-500 uppercase">
-                    Verified Pattern Bridge
-                  </div>
-                  <div className="mt-1 text-sm font-bold text-slate-800">
-                    {patternSelection.symbol} · 실제 완료봉 재검증 → 패턴 가이드
-                  </div>
-                </div>
-                <span
-                  className={`rounded-full px-3 py-1 text-xs font-black ${
-                    patternSelection.verified
-                      ? "bg-emerald-100 text-emerald-800"
-                      : "bg-amber-100 text-amber-800"
-                  }`}
-                >
-                  {patternSelection.verified
-                    ? `검증 완료 · 탐지 ${patternSelection.detectedPatternCodes.length}개`
-                    : "검증 중/실패"}
-                </span>
-              </div>
-
-              {patternSelection.error && (
-                <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-800">
-                  {patternSelection.error}
-                </div>
-              )}
-
-              <PatternRecognitionVisualGuide
-                selectedStockSymbol={patternSelection.symbol}
-                selectedStockName={patternSelection.name}
-                changePct={patternSelection.changePct}
-                currentPrice={patternSelection.currentPrice}
-                market={patternSelection.market}
-                detectedPatternCodes={patternSelection.detectedPatternCodes}
-              />
-            </div>
-          </div>
+          <VerifiedPatternGuideBridge
+            symbol={patternSelection.symbol}
+            name={patternSelection.name}
+            market={patternSelection.market}
+            currentPrice={patternSelection.currentPrice}
+            changePct={patternSelection.changePct}
+            detectedPatternCodes={patternSelection.detectedPatternCodes}
+            patternRegistry={patternSelection.patternRegistry}
+            verified={patternSelection.verified}
+            error={patternSelection.error}
+          />
         </ErrorBoundary>
       )}
 
