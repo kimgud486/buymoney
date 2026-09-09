@@ -202,3 +202,21 @@ test("V20 YES-only TOP5 never fills missing ranks with WATCH candidates", () => 
   assert.equal(results[0].symbol, "YES1");
   assert.equal(results[0].recommendation, "BUY_CANDIDATE");
 });
+
+test("V20 data truth: legacy RVOL ratio cannot masquerade as absolute volume and trade value", () => {
+  const rvol = 3.2;
+  const price = 105;
+  const result = ServerGlobalRealtimeScannerV20.evaluateCandidate(
+    makeStrongCandidate({
+      price,
+      volume: rvol,
+      rvol,
+      tradeValue: price * rvol
+    })
+  );
+
+  assert.equal(result.recommendation, "REJECT");
+  assert.equal(result.rejectionReason, "SUSPECT_DERIVED_LIQUIDITY_FIELDS");
+  assert.ok(result.missingFields.includes("authoritativeVolume"));
+  assert.ok(result.missingFields.includes("authoritativeTradeValue"));
+});
