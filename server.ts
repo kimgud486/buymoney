@@ -2488,7 +2488,7 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
     const c2 = candles[n - 2] || c1;
     const c3 = candles[n - 3] || c2;
 
-    let detectedCandlePattern = "Bullish Engulfing (상승 장악형)";
+    let detectedCandlePattern = "NO_PATTERN";
     const body1 = c1.close - c1.open;
     const body2 = c2.close - c2.open;
     const lowerShadow1 = Math.min(c1.open, c1.close) - c1.low;
@@ -2511,11 +2511,11 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
     } else if (Math.abs(c1.low - c2.low) <= (totalRange1 * 0.05)) {
       detectedCandlePattern = "Tweezer Bottom (집게형 바닥)";
     } else {
-      detectedCandlePattern = liveChangePct >= 0 ? "Bullish Engulfing (상승 장악형)" : "Tweezer Bottom (집게형 바닥)";
+      detectedCandlePattern = "NO_PATTERN";
     }
 
     // 6. Real Chart Pattern Recognition
-    let detectedChartPattern = "Double Bottom (더블 바텀)";
+    let detectedChartPattern = "NO_PATTERN";
     if (stock20dReturn > 15 && Math.abs(liveChangePct) < 3) {
       detectedChartPattern = "Bullish Pennant (강세 페넌트)";
     } else if (stock20dReturn > 8 && rvol >= 2.0) {
@@ -2525,7 +2525,7 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
     } else if (sslSwept) {
       detectedChartPattern = "Double Bottom (더블 바텀 반등)";
     } else {
-      detectedChartPattern = "Inverse Head & Shoulders (역H&S 반전)";
+      detectedChartPattern = "NO_PATTERN";
     }
 
     // 7. Real 30-Minute Market Open Rule Determination
@@ -2552,7 +2552,7 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
       );
       sumTr += tr;
     }
-    const atr = candles.length > 1 ? +(sumTr / (candles.length - 1)).toFixed(2) : +(livePrice * 0.03).toFixed(2);
+    const atr = +(sumTr / (candles.length - 1)).toFixed(2);
 
     const isUs = marketType === "US";
     const necklinePrice = isUs
@@ -2575,7 +2575,7 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
     else score += 12;
 
     // Factor 2: Candlestick Confirmation (Max 20 pts)
-    score += 20;
+    if (detectedCandlePattern !== "NO_PATTERN") score += 20;
 
     // Factor 3: RVOL & Trading Value (Max 20 pts)
     if (rvol >= 3.0) score += 20;
@@ -2634,7 +2634,7 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
       low: c.low,
       close: c.close,
       volume: c.volume,
-      candleTag: idx === candles.length - 1 ? detectedCandlePattern.split(" ")[0] : undefined,
+      candleTag: idx === candles.length - 1 && detectedCandlePattern !== "NO_PATTERN" ? detectedCandlePattern.split(" ")[0] : undefined,
       entryLine: necklinePrice,
       stopLossLine: stopLossPrice,
       target1Line: targetPrice1,
@@ -2694,7 +2694,7 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
       score,
       grade,
       status,
-      isTradeable: score >= 75 && rule30MinId !== "rule_rise_drop" && rule30MinId !== "rule_drop_fail",
+      isTradeable: detectedCandlePattern !== "NO_PATTERN" && detectedChartPattern !== "NO_PATTERN" && score >= 75 && rule30MinId !== "rule_rise_drop" && rule30MinId !== "rule_drop_fail",
       chartSeries,
       analyzedAt: new Date().toLocaleTimeString()
     });
