@@ -17,6 +17,8 @@ export interface KISRealtimeClientConfig {
   approvalKey: string;
   htsId?: string;
   isPaper?: boolean;
+  /** Explicit server-side entitlement flag for real-time KRX H0STCNT0. */
+  domesticRealtimeEntitled?: boolean;
   /** Explicit server-side entitlement flag for real-time US HDFSCNT0. */
   overseasRealtimeEntitled?: boolean;
 }
@@ -173,7 +175,7 @@ export class ServerKISRealtimeClientV20 {
       const ticks = KISDomesticParserV204.parseH0STCNT0(
         dataBody,
         dataCount,
-        this.config.isPaper !== true,
+        this.config.domesticRealtimeEntitled === true && this.config.isPaper !== true,
       );
 
       for (const tick of ticks) {
