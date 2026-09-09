@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, Layers3, Loader2, ShieldAlert } from "lucide-react";
 import { evaluateVerifiedSignal, type VerifiedSignalResult } from "../scanner/verifiedSignalEngine";
+import { PATTERN_EXECUTION_AUDIT } from "../scanner/patternExecutionAudit";
 
 interface CandidateEvent {
   symbol: string;
@@ -17,6 +18,7 @@ export const VerifiedPatternStatusPanel: React.FC = () => {
   const [result, setResult] = useState<VerifiedSignalResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showMissing, setShowMissing] = useState(false);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -82,6 +84,47 @@ export const VerifiedPatternStatusPanel: React.FC = () => {
           )}
         </div>
 
+        <div className="mt-3 rounded-2xl border border-slate-800 bg-slate-900/80 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-black text-slate-300">CATALOG ↔ EXECUTABLE 1:1 AUDIT</div>
+              <div className="mt-1 text-[11px] text-slate-500">등록 이름과 실제 TypeScript 판정 규칙을 코드 기준으로 대조합니다.</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowMissing((value) => !value)}
+              className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-bold text-slate-300 hover:border-slate-500"
+            >
+              {showMissing ? "미구현 목록 닫기" : `미구현 ${PATTERN_EXECUTION_AUDIT.notImplemented}개 보기`}
+            </button>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-5">
+            <AuditCount label="CATALOG" value={PATTERN_EXECUTION_AUDIT.catalog} />
+            <AuditCount label="EXECUTABLE" value={PATTERN_EXECUTION_AUDIT.executable} />
+            <AuditCount label="NOT IMPLEMENTED" value={PATTERN_EXECUTION_AUDIT.notImplemented} />
+            <AuditCount label="COVERAGE" value={`${PATTERN_EXECUTION_AUDIT.coveragePct}%`} />
+            <AuditCount label="ORPHAN RULES" value={PATTERN_EXECUTION_AUDIT.orphanExecutableCodes.length} />
+          </div>
+
+          {showMissing && (
+            <div className="mt-3 max-h-72 overflow-auto rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+              {PATTERN_EXECUTION_AUDIT.notImplementedRows.length === 0 ? (
+                <div className="text-xs font-bold text-emerald-300">모든 카탈로그 패턴에 실행 규칙이 연결되어 있습니다.</div>
+              ) : (
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  {PATTERN_EXECUTION_AUDIT.notImplementedRows.map((row) => (
+                    <div key={`${row.direction}:${row.code}`} className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+                      <div className="text-xs font-black text-amber-200">{row.code}</div>
+                      <div className="mt-0.5 text-[10px] text-slate-400">{row.nameKr} · {row.category} · {row.direction}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {loading && (
           <div className="mt-3 flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/70 px-4 py-4 text-sm text-slate-400">
             <Loader2 size={17} className="animate-spin" /> 완료봉에서 캔들 + 차트 구조 + 마스터 규칙을 동시에 실행 중...
@@ -139,6 +182,13 @@ export const VerifiedPatternStatusPanel: React.FC = () => {
     </section>
   );
 };
+
+const AuditCount: React.FC<{ label: string; value: number | string }> = ({ label, value }) => (
+  <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+    <div className="text-[10px] font-bold text-slate-500">{label}</div>
+    <div className="mt-1 text-2xl font-black text-white">{value}</div>
+  </div>
+);
 
 const Count: React.FC<{
   label: string;
