@@ -15,6 +15,10 @@ import {
   StrategyPerformanceKeyV20,
   buyHoldPerformanceStoreV20
 } from "./BuyHoldPerformanceStoreV20";
+import {
+  ExecutablePatternGateResultV20,
+  ExecutablePatternGateV20
+} from "./ExecutablePatternGateV20";
 
 export interface FinalTradePlanV20 {
   entry: number | null;
@@ -46,6 +50,7 @@ export interface FinalBuyHoldResponseV20 {
   expectancyPct: number | null;
   holdScore: number;
   trueMtfPassed: boolean;
+  patternGate: ExecutablePatternGateResultV20;
   blockers: string[];
   confirmations: string[];
   reasons: string[];
@@ -63,22 +68,27 @@ function roundPrice(value: number): number {
   return Number(value.toFixed(2));
 }
 
-function buildTradePlan(scan: ScanCandidateResult): FinalTradePlanV20 {
+function noPlan(): FinalTradePlanV20 {
+  return {
+    entry: null,
+    stop: null,
+    tp1: null,
+    tp2: null,
+    tp3: null,
+    riskRewardTp1: null,
+    source: "NO_VERIFIED_PLAN"
+  };
+}
+
+function buildTradePlan(scan: ScanCandidateResult, patternPassed: boolean): FinalTradePlanV20 {
   if (
     scan.recommendation !== "BUY_CANDIDATE" ||
     !scan.trueMtfGate.passed ||
+    !patternPassed ||
     !finitePositive(scan.price) ||
     !finitePositive(scan.atr14)
   ) {
-    return {
-      entry: null,
-      stop: null,
-      tp1: null,
-      tp2: null,
-      tp3: null,
-      riskRewardTp1: null,
-      source: "NO_VERIFIED_PLAN"
-    };
+    return noPlan();
   }
 
   const entry = scan.price;
@@ -89,17 +99,7 @@ function buildTradePlan(scan: ScanCandidateResult): FinalTradePlanV20 {
   const stop = Math.max(0.01, structuralStop);
   const risk = entry - stop;
 
-  if (!(risk > 0)) {
-    return {
-      entry: null,
-      stop: null,
-      tp1: null,
-      tp2: null,
-      tp3: null,
-      riskRewardTp1: null,
-      source: "NO_VERIFIED_PLAN"
-    };
-  }
+  if (!(risk > 0)) return noPlan();
 
   const tp1 = entry + risk * 1.5;
   const tp2 = entry + risk * 2.5;
@@ -116,12 +116,29 @@ function buildTradePlan(scan: ScanCandidateResult): FinalTradePlanV20 {
   };
 }
 
+function applyPatternAuthority(
+  decision: BuyHoldDecisionResultV20,
+  patternGate: ExecutablePatternGateResultV20,
+  hasOpenPosition: boolean
+): BuyHoldDecisionResultV20 {
+  if (hasOpenPosition) return decision;
+  if (patternGate.passed) return decision;
+  if (decision.action !== "BUY" && decision.action !== "STRONG_BUY") return decision;
+
+  return {
+    ...decision,
+    action: "WATCH",
+    reasons: ["FINAL_PATTERN_GATE_BLOCK", ...patternGate.blockers, ...decision.reasons]
+  };
+}
+
 /**
  * Final server-side BUY & HOLD authority.
  *
  * One call performs:
- * REAL DATA candidate -> V20 scanner -> True MTF -> performance DB ->
- * STRONG_BUY/BUY/WATCH/NO or KEEP_HOLD/REDUCE/EXIT -> verified trade plan.
+ * REAL DATA candidate -> V20 scanner -> executable-pattern gate -> True MTF ->
+ * performance DB -> STRONG_BUY/BUY/WATCH/NO or KEEP_HOLD/REDUCE/EXIT ->
+ * verified trade plan.
  *
  * It intentionally does not place orders. Execution remains behind the
  * existing live-account, broker-ack, idempotency and kill-switch gates.
@@ -132,16 +149,19 @@ export class FinalBuyHoldDecisionServiceV20 {
     const currentPrice = finitePositive(request.currentPrice)
       ? request.currentPrice
       : scan.price;
+    const patternGate = ExecutablePatternGateV20.evaluate(scan.patterns);
 
-    const decision: BuyHoldDecisionResultV20 = BuyHoldSystemFacadeV20.evaluate({
+    const rawDecision: BuyHoldDecisionResultV20 = BuyHoldSystemFacadeV20.evaluate({
       scan,
       performanceKey: request.performanceKey,
       position: request.position,
       currentPrice
     });
 
+    const hasOpenPosition = Boolean(request.position && request.position.quantity > 0);
+    const decision = applyPatternAuthority(rawDecision, patternGate, hasOpenPosition);
     const performance = buyHoldPerformanceStoreV20.evaluate(request.performanceKey);
-    const plan = buildTradePlan(scan);
+    const plan = buildTradePlan(scan, patternGate.passed);
 
     return {
       symbol: scan.symbol,
@@ -156,7 +176,12 @@ export class FinalBuyHoldDecisionServiceV20 {
       expectancyPct: performance.expectancyPct,
       holdScore: decision.holdScore,
       trueMtfPassed: scan.trueMtfGate.passed,
-      blockers: [...scan.trueMtfGate.blockers, ...performance.blockers],
+      patternGate,
+      blockers: [
+        ...scan.trueMtfGate.blockers,
+        ...patternGate.blockers,
+        ...performance.blockers
+      ],
       confirmations: scan.trueMtfGate.confirmations,
       reasons: decision.reasons,
       plan,
