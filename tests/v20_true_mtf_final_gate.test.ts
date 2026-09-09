@@ -23,11 +23,13 @@ function makeFrame(
   overrides: Partial<TrueMTFSnapshotV20> = {}
 ): TrueMTFSnapshotV20 {
   const isDaily = timeframe === "D";
+  const now = Date.now();
   return {
     timeframe,
     dataStatus: timeframe === "D" ? "REALTIME_DERIVED" : "REALTIME_VERIFIED",
     source: "TEST_VERIFIED_FEED",
-    lastBarTimestamp: 1_800_000_000_000,
+    lastBarTimestamp: isDaily ? now - INTERVALS.D : now - INTERVALS[timeframe],
+    lastTradeTimestamp: isDaily ? undefined : now - 1_000,
     barIntervalMs: INTERVALS[timeframe],
     close: isDaily ? 112 : 105,
     high: isDaily ? 113 : 106,
