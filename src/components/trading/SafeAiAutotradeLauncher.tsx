@@ -26,11 +26,70 @@ interface ScannerResponse {
   message?: string;
 }
 
+interface ScanFreshnessResult {
+  isFresh: boolean;
+  reason: string;
+}
+
 const MARKET_LABEL: Record<ScanMarket, string> = {
   ALL: "전체",
   KOREA: "국내",
   US: "미국",
   BTC: "가상자산",
+};
+
+const MAX_SCAN_AGE_MS = 5 * 60 * 1000;
+const MAX_FUTURE_CLOCK_SKEW_MS = 60 * 1000;
+
+const evaluateScanFreshness = (scannedAt?: string): ScanFreshnessResult => {
+  if (!scannedAt) {
+    return {
+      isFresh: false,
+      reason: "스캐너 응답의 scannedAt 시각이 없어 실시간성을 확인할 수 없습니다.",
+    };
+  }
+
+  const timestamp = Date.parse(scannedAt);
+  if (!Number.isFinite(timestamp)) {
+    return {
+      isFresh: false,
+      reason: "스캐너 응답의 scannedAt 시각 형식이 유효하지 않습니다.",
+    };
+  }
+
+  const ageMs = Date.now() - timestamp;
+  if (ageMs < -MAX_FUTURE_CLOCK_SKEW_MS) {
+    return {
+      isFresh: false,
+      reason: "스캐너 응답 시각이 현재 시각보다 지나치게 미래여서 실시간성을 확인할 수 없습니다.",
+    };
+  }
+
+  if (ageMs > MAX_SCAN_AGE_MS) {
+    const ageMinutes = Math.max(1, Math.floor(ageMs / 60000));
+    return {
+      isFresh: false,
+      reason: `스캔 데이터가 ${ageMinutes}분 전 데이터라 실시간 검토 대상에서 차단했습니다.`,
+    };
+  }
+
+  return { isFresh: true, reason: "" };
+};
+
+const applyFreshnessGate = (
+  results: EnsembleEvaluationResult[],
+  freshness: ScanFreshnessResult,
+): EnsembleEvaluationResult[] => {
+  if (freshness.isFresh) return results;
+
+  return results.map((result) => ({
+    ...result,
+    decision: "NO" as const,
+    approvalRequired: true as const,
+    liveAutoOrderEnabled: false as const,
+    riskReasons: Array.from(new Set([...result.riskReasons, freshness.reason])).slice(0, 10),
+    summaryMessage: `실시간성 차단: ${freshness.reason}`,
+  }));
 };
 
 const formatPrice = (value: number, market: EnsembleEvaluationResult["market"]): string => {
@@ -48,6 +107,7 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
   const [results, setResults] = useState<EnsembleEvaluationResult[]>([]);
   const [selectedCandidate, setSelectedCandidate] = useState<EnsembleEvaluationResult | null>(null);
   const [scanError, setScanError] = useState("");
+  const [scanFreshnessWarning, setScanFreshnessWarning] = useState("");
   const [scannedAt, setScannedAt] = useState("");
 
   const reviewReadyCount = useMemo(
@@ -55,9 +115,24 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
     [results],
   );
 
+  const resetScanView = () => {
+    setResults([]);
+    setSelectedCandidate(null);
+    setScanError("");
+    setScanFreshnessWarning("");
+    setScannedAt("");
+  };
+
+  const changeMarket = (nextMarket: ScanMarket) => {
+    if (nextMarket === market) return;
+    setMarket(nextMarket);
+    resetScanView();
+  };
+
   const runScan = async (targetMarket: ScanMarket = market) => {
     setIsScanning(true);
     setScanError("");
+    setScanFreshnessWarning("");
 
     try {
       const response = await fetch(
@@ -78,10 +153,16 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
 
       // Truth-first: no hard-coded symbols, prices, RSI, RVOL, ATR or synthetic candles.
       // If the production scanner returns no verified candidates, show an empty result.
-      const ranked = OpenSourceSignalEnsemble.rankCandidates(candidates, 5);
+      const rankedBase = OpenSourceSignalEnsemble.rankCandidates(candidates, 5);
+      const freshness = evaluateScanFreshness(payload.scannedAt);
+      const ranked = candidates.length > 0
+        ? applyFreshnessGate(rankedBase, freshness)
+        : rankedBase;
+
       setResults(ranked);
       setSelectedCandidate(ranked[0] || null);
-      setScannedAt(payload.scannedAt || new Date().toLocaleTimeString("ko-KR"));
+      setScannedAt(payload.scannedAt || "서버시각 미확인");
+      setScanFreshnessWarning(candidates.length > 0 && !freshness.isFresh ? freshness.reason : "");
 
       addToast(
         `AI 스캔 완료: TOP ${ranked.length}, 최종 검토 가능 ${ranked.filter((item) => item.decision === "REVIEW_READY").length}개`,
@@ -91,6 +172,8 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
       const message = error?.message || "AI 스캔 중 오류가 발생했습니다.";
       setResults([]);
       setSelectedCandidate(null);
+      setScannedAt("");
+      setScanFreshnessWarning("");
       setScanError(message);
       addToast(message, "ERROR");
     } finally {
@@ -138,7 +221,9 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
                 <button
                   key={item}
                   type="button"
-                  onClick={() => setMarket(item)}
+                  data-testid={`safe-ai-market-${item.toLowerCase()}`}
+                  onClick={() => changeMarket(item)}
+                  aria-pressed={market === item}
                   className={`rounded-lg px-3 py-1.5 text-xs font-bold transition ${
                     market === item
                       ? "bg-cyan-600 text-white"
@@ -176,14 +261,30 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
         </div>
 
         {scanError && (
-          <div className="mt-4 flex items-start gap-2 rounded-xl border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
+          <div
+            data-testid="safe-ai-scan-error"
+            className="mt-4 flex items-start gap-2 rounded-xl border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200"
+          >
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>{scanError}</span>
           </div>
         )}
 
+        {scanFreshnessWarning && (
+          <div
+            data-testid="safe-ai-freshness-warning"
+            className="mt-4 flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-950/20 p-3 text-xs text-amber-200"
+          >
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{scanFreshnessWarning}</span>
+          </div>
+        )}
+
         {!isScanning && !scanError && scannedAt && results.length === 0 && (
-          <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-center text-xs text-slate-400">
+          <div
+            data-testid="safe-ai-empty-state"
+            className="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-center text-xs text-slate-400"
+          >
             현재 실데이터 스캐너에서 검증 가능한 후보가 없습니다. 임의 후보나 임의 지표값은 생성하지 않았습니다.
           </div>
         )}
@@ -197,6 +298,7 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
                   <button
                     key={`${item.symbol}-${index}`}
                     type="button"
+                    data-testid={`safe-ai-candidate-${index + 1}`}
                     onClick={() => setSelectedCandidate(item)}
                     className={`w-full rounded-xl border p-3 text-left transition ${
                       selected

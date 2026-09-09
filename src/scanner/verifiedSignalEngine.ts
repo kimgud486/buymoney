@@ -12,6 +12,10 @@ import {
   MASTER_EXECUTABLE_PATTERN_RULES,
   detectMasterExecutablePatterns,
 } from "./masterPatternDetectionEngine";
+import {
+  MASTER_PATTERN_EXPANSION_RULES,
+  detectMasterPatternExpansions,
+} from "./masterPatternExpansionEngine";
 
 export type ScannerDecision = "BUY_APPROVED" | "BUY_WATCH" | "NO_BUY";
 
@@ -40,9 +44,11 @@ export interface VerifiedSignalResult {
     candleRegistered: number;
     structureRegistered: number;
     masterExecutableRegistered: number;
+    expansionRegistered: number;
     candleMatched: number;
     structureMatched: number;
     masterExecutableMatched: number;
+    expansionMatched: number;
   };
   reasons: string[];
   failedChecks: string[];
@@ -153,14 +159,15 @@ function mergePatternHits(...groups: VerifiedPatternHit[][]): VerifiedPatternHit
   const merged = new Map<string, VerifiedPatternHit>();
   for (const group of groups) {
     for (const hit of group) {
-      const existing = merged.get(hit.id);
+      const key = `${hit.direction}:${hit.id}`;
+      const existing = merged.get(key);
       if (!existing) {
-        merged.set(hit.id, hit);
+        merged.set(key, hit);
         continue;
       }
       const existingRank = (existing.confidence === "STRONG" ? 100 : 0) + existing.weight;
       const nextRank = (hit.confidence === "STRONG" ? 100 : 0) + hit.weight;
-      if (nextRank > existingRank) merged.set(hit.id, hit);
+      if (nextRank > existingRank) merged.set(key, hit);
     }
   }
   return Array.from(merged.values()).sort((a, b) => {
@@ -172,15 +179,17 @@ function mergePatternHits(...groups: VerifiedPatternHit[][]): VerifiedPatternHit
 
 function executableRegistryStats(candlesLength: number): { registered: number; evaluated: number } {
   const defs = new Map<string, number>();
-  for (const item of VERIFIED_PATTERN_REGISTRY) defs.set(item.id, item.minBars);
-  for (const item of VERIFIED_STRUCTURE_PATTERN_REGISTRY) {
-    const existing = defs.get(item.id);
-    defs.set(item.id, existing == null ? item.minBars : Math.min(existing, item.minBars));
-  }
-  for (const item of MASTER_EXECUTABLE_PATTERN_RULES) {
-    const existing = defs.get(item.id);
-    defs.set(item.id, existing == null ? item.minBars : Math.min(existing, item.minBars));
-  }
+  const add = (id: string, direction: string, minBars: number) => {
+    const key = `${direction}:${id}`;
+    const existing = defs.get(key);
+    defs.set(key, existing == null ? minBars : Math.min(existing, minBars));
+  };
+
+  for (const item of VERIFIED_PATTERN_REGISTRY) add(item.id, item.direction, item.minBars);
+  for (const item of VERIFIED_STRUCTURE_PATTERN_REGISTRY) add(item.id, item.direction, item.minBars);
+  for (const item of MASTER_EXECUTABLE_PATTERN_RULES) add(item.id, item.direction, item.minBars);
+  for (const item of MASTER_PATTERN_EXPANSION_RULES) add(item.id, item.direction, item.minBars);
+
   const values = Array.from(defs.values());
   return {
     registered: values.length,
@@ -232,7 +241,13 @@ export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalR
   const candlePatternHits = detectVerifiedPatterns(candles);
   const structurePatternHits = detectVerifiedStructurePatterns(candles);
   const masterExecutableHits = detectMasterExecutablePatterns(candles);
-  const patternHits = mergePatternHits(candlePatternHits, structurePatternHits, masterExecutableHits);
+  const expansionHits = detectMasterPatternExpansions(candles);
+  const patternHits = mergePatternHits(
+    candlePatternHits,
+    structurePatternHits,
+    masterExecutableHits,
+    expansionHits,
+  );
 
   const patternSummary = summarizePatternHits(patternHits);
   const strongestPattern = patternSummary.strongest;
@@ -310,6 +325,7 @@ export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalR
 
   if (structurePatternHits.length > 0) reasons.push(`차트 구조 ${structurePatternHits.length}개 실제 탐지`);
   if (masterExecutableHits.length > 0) reasons.push(`마스터 규칙 ${masterExecutableHits.length}개 실제 탐지`);
+  if (expansionHits.length > 0) reasons.push(`확장 마스터 규칙 ${expansionHits.length}개 실제 탐지`);
 
   if (strongBearishPattern) failedChecks.push("BEARISH_PATTERN");
 
@@ -362,9 +378,11 @@ export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalR
       candleRegistered: VERIFIED_PATTERN_REGISTRY.length,
       structureRegistered: VERIFIED_STRUCTURE_PATTERN_REGISTRY.length,
       masterExecutableRegistered: MASTER_EXECUTABLE_PATTERN_RULES.length,
+      expansionRegistered: MASTER_PATTERN_EXPANSION_RULES.length,
       candleMatched: candlePatternHits.length,
       structureMatched: structurePatternHits.length,
       masterExecutableMatched: masterExecutableHits.length,
+      expansionMatched: expansionHits.length,
     },
     reasons,
     failedChecks,

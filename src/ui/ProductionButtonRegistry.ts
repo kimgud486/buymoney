@@ -146,6 +146,16 @@ export const PRODUCTION_BUTTONS: ProductionButtonContract[] = [
     requiresE2E: true
   },
 
+  // Safe AI Scan-to-Review
+  {
+    id: "safe-ai-autotrade-launcher",
+    category: "TRADING",
+    description: "Runs verified explainable scanner and opens human-review candidates without broker auto-order",
+    requiresHandler: true,
+    requiresApi: true,
+    requiresE2E: true
+  },
+
   // Auto-Trading Switches
   {
     id: "auto-trading-start",

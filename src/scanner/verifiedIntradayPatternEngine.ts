@@ -13,6 +13,13 @@ export interface VerifiedIntradayPatternHit {
   reason: string;
 }
 
+export const VERIFIED_INTRADAY_PATTERN_REGISTRY = Object.freeze([
+  { id: "ORB_BREAKOUT", direction: "BULLISH" as const, minBars: 4, timeframeMinutes: 5 },
+  { id: "OPENING_DRIVE", direction: "BULLISH" as const, minBars: 3, timeframeMinutes: 5 },
+  { id: "VWAP_RETEST_HOLD", direction: "BULLISH" as const, minBars: 4, timeframeMinutes: 5 },
+  { id: "FIRST_PULLBACK_HOLD_INTRADAY", direction: "BULLISH" as const, minBars: 5, timeframeMinutes: 5 },
+]);
+
 export interface VerifiedIntradayPatternResult {
   timeframeMinutes: 1 | 5;
   sessionDate: string;

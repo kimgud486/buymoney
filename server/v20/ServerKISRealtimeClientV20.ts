@@ -7,6 +7,7 @@ import WebSocket from "ws";
 import { KISExecutionNoticeParserV20 } from "./KISExecutionNoticeParserV20";
 import { brokerExecutionTruthBusV20 } from "./BrokerExecutionTruthBusV20";
 import { KISOverseasParserV20 } from "./KISOverseasParserV20";
+import { KISDomesticTradeParserV20 } from "./KISDomesticTradeParserV20";
 import { serverRealtimeMarketHubV20 } from "./ServerRealtimeMarketHubV20";
 
 export interface KISRealtimeClientConfig {
@@ -115,7 +116,6 @@ export class ServerKISRealtimeClientV20 {
   private handleMessage(msg: string): void {
     if (!msg) return;
 
-    // JSON responses (handshake or AES key info)
     if (msg.startsWith("{")) {
       try {
         const parsed = JSON.parse(msg);
@@ -132,7 +132,6 @@ export class ServerKISRealtimeClientV20 {
       return;
     }
 
-    // Pipe/Caret separated real-time feed data
     const parts = msg.split("|");
     if (parts.length < 4) return;
 
@@ -148,6 +147,25 @@ export class ServerKISRealtimeClientV20 {
       if (notice && notice.isExecuted) {
         brokerExecutionTruthBusV20.publish(notice);
       }
+    } else if (trId === "H0STCNT0") {
+      const parsedDomestic = KISDomesticTradeParserV20.parseH0STCNT0(dataBody);
+      if (parsedDomestic) {
+        serverRealtimeMarketHubV20.updateQuote(
+          parsedDomestic.symbol,
+          parsedDomestic.symbol,
+          "KOREA",
+          parsedDomestic.lastPrice,
+          parsedDomestic.changeAmount,
+          parsedDomestic.ratePct,
+          parsedDomestic.totalVolume,
+          parsedDomestic.totalAmount,
+          "KIS_H0STCNT0",
+          parsedDomestic.grade,
+          parsedDomestic.askPrice,
+          parsedDomestic.bidPrice,
+          parsedDomestic.executedVolume,
+        );
+      }
     } else if (trId === "HDFSCNT0") {
       const parsedOverseas = KISOverseasParserV20.parseHDFSCNT0(
         dataBody,
@@ -155,9 +173,6 @@ export class ServerKISRealtimeClientV20 {
       );
 
       if (parsedOverseas) {
-        // Quote volume remains cumulative totalVolume, while candle volume uses the
-        // per-tick executedVolume. This prevents RVOL inflation from repeatedly
-        // summing the cumulative session total into each 1-minute candle.
         serverRealtimeMarketHubV20.updateQuote(
           parsedOverseas.symbol,
           parsedOverseas.symbol,

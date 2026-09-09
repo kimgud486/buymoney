@@ -53,6 +53,16 @@ export interface KISBalance {
   unrealizedPnLToday: number;
 }
 
+function getNodeEnv(): Record<string, string | undefined> {
+  // This adapter is imported by browser UI code as well as Node-side tests.
+  // Never expose KIS credentials through VITE_* variables. Only read Node env
+  // when a real Node `process` object is available on globalThis.
+  const maybeProcess = (globalThis as typeof globalThis & {
+    process?: { env?: Record<string, string | undefined> };
+  }).process;
+  return maybeProcess?.env ?? {};
+}
+
 export class KISBrokerAdapter {
   private credentials: KISCredentials;
   private accessToken: string | null = null;
@@ -63,12 +73,13 @@ export class KISBrokerAdapter {
   private localCashBalance: number = 10000000; // Default 10,000,000 KRW for paper mode
 
   constructor(customCredentials?: Partial<KISCredentials>) {
+    const env = getNodeEnv();
     this.credentials = {
-      appKey: process.env.KIS_APPKEY || "MOCK_KIS_APPKEY",
-      appSecret: process.env.KIS_APPSECRET || "MOCK_KIS_APPSECRET",
-      accountNo: process.env.KIS_CANO || "50123456",
-      productCode: process.env.KIS_ACNT_PRDT_CD || "01",
-      isPaperTrading: process.env.KIS_IS_PAPER !== "false",
+      appKey: env.KIS_APPKEY || "MOCK_KIS_APPKEY",
+      appSecret: env.KIS_APPSECRET || "MOCK_KIS_APPSECRET",
+      accountNo: env.KIS_CANO || "50123456",
+      productCode: env.KIS_ACNT_PRDT_CD || "01",
+      isPaperTrading: env.KIS_IS_PAPER !== "false",
       ...customCredentials
     };
   }

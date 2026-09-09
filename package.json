@@ -8,6 +8,8 @@
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && node -e \"const fs = require('fs'); fs.cpSync('dist', 'build', { recursive: true });\"",
     "start": "node dist/server.cjs",
     "test": "VITE_FIREBASE_API_KEY=test-only-not-a-secret node --import tsx --test tests/*.test.ts tests/**/*.test.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:safe-ai": "playwright test tests/e2e/safe-ai-scan.spec.ts --project=chromium",
     "test:python": "python3 -m unittest discover -s tests/python -p 'test_*.py'",
     "clean": "rm -rf dist server.js",
     "audit:fake-data": "node scripts/check-no-fake-production-data-v4.mjs",
@@ -39,6 +41,7 @@
     "ws": "^8.21.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/d3": "^7.4.3",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
