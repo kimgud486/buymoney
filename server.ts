@@ -528,7 +528,7 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
   const now = Date.now();
   const cached = liveStockDataCache.get(symbol);
   if (cached && cached.expiresAt > now) {
-    return cached.data;
+    return sanitizeVerifiedQuote(cached.data);
   }
 
   // 0) Upbit crypto (e.g. KRW-BTC, KRW-ETH, or symbol BTC) -> Real-time Upbit Ticker API
@@ -549,7 +549,7 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
             marketCap: `${Math.round((t.acc_trade_price_24h || 0) / 1e8).toLocaleString()}억원`,
             market: "BTC"
           };
-          liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
+          liveStockDataCache.set(symbol, { data: sanitizeVerifiedQuote(stockRes), expiresAt: Date.now() + 4000 });
           return sanitizeVerifiedQuote(stockRes);
         }
       }
@@ -610,7 +610,7 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
               changePct: isDown ? -Math.abs(ratioNum) : Math.abs(ratioNum),
               marketCap: marketCapStr
             };
-            liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
+            liveStockDataCache.set(symbol, { data: sanitizeVerifiedQuote(stockRes), expiresAt: Date.now() + 4000 });
             return sanitizeVerifiedQuote(stockRes);
           }
         }
@@ -654,7 +654,7 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
               change: changeNum,
               changePct: ratioNum
             };
-            liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
+            liveStockDataCache.set(symbol, { data: sanitizeVerifiedQuote(stockRes), expiresAt: Date.now() + 4000 });
             return sanitizeVerifiedQuote(stockRes);
           }
         }
@@ -686,7 +686,7 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
               change: changeVal,
               changePct: changePctVal
             };
-            liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
+            liveStockDataCache.set(symbol, { data: sanitizeVerifiedQuote(stockRes), expiresAt: Date.now() + 4000 });
             return sanitizeVerifiedQuote(stockRes);
           }
         }
@@ -725,7 +725,7 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
                 change: Math.round(signedChange * 100) / 100,
                 changePct: Math.round(signedRatio * 100) / 100
               };
-              liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
+              liveStockDataCache.set(symbol, { data: sanitizeVerifiedQuote(stockRes), expiresAt: Date.now() + 4000 });
               return sanitizeVerifiedQuote(stockRes);
             }
           }
@@ -753,8 +753,9 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
       const result = data?.chart?.result?.[0];
       if (result && result.meta && result.meta.regularMarketPrice) {
         const meta = result.meta;
-        const currentPrice = meta.regularMarketPrice || preset.price;
-        const prevClose = meta.chartPreviousClose || meta.previousClose || currentPrice;
+        const currentPrice = Number(meta.regularMarketPrice);
+        const prevClose = Number(meta.chartPreviousClose || meta.previousClose);
+        if (!(currentPrice > 0) || !(prevClose > 0)) throw new Error("MISSING_VERIFIED_US_QUOTE_REFERENCE");
         const change = currentPrice - prevClose;
         const changePct = prevClose !== 0 ? (change / prevClose) * 100 : 0;
         
@@ -765,7 +766,7 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
           changePct: Math.round(changePct * 100) / 100,
           technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
         };
-        liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
+        liveStockDataCache.set(symbol, { data: sanitizeVerifiedQuote(stockRes), expiresAt: Date.now() + 4000 });
         return sanitizeVerifiedQuote(stockRes);
       }
     }
