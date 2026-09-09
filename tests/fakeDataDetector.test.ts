@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, beforeEach } from "node:test";
+import assert from "node:assert/strict";
 import {
   FakeDataDetector,
   processRealtimeTick,
@@ -31,10 +32,10 @@ describe("FakeDataDetector Unit Tests", () => {
     };
 
     const res = detector.inspect(tick, now);
-    expect(res.status).toBe("VERIFIED");
-    expect(res.trusted).toBe(true);
-    expect(res.liveTradingAllowed).toBe(true);
-    expect(res.trustScore).toBe(100);
+    assert.equal(res.status, "VERIFIED");
+    assert.equal(res.trusted, true);
+    assert.equal(res.liveTradingAllowed, true);
+    assert.equal(res.trustScore, 100);
   });
 
   it("detects stale market data and blocks live trading", () => {
@@ -42,26 +43,26 @@ describe("FakeDataDetector Unit Tests", () => {
     const tick: MarketTick = {
       symbol: "005930",
       price: 74200,
-      timestamp: now - 10000, // 10s old (maxAge 5s)
+      timestamp: now - 10000,
     };
 
     const res = detector.inspect(tick, now);
-    expect(res.status).toBe("STALE");
-    expect(res.liveTradingAllowed).toBe(false);
-    expect(res.reasons.some((r) => r.code === "STALE_DATA")).toBe(true);
+    assert.equal(res.status, "STALE");
+    assert.equal(res.liveTradingAllowed, false);
+    assert.ok(res.reasons.some((r) => r.code === "STALE_DATA"));
   });
 
   it("detects invalid price out of range and returns INVALID status", () => {
     const now = Date.now();
     const tick: MarketTick = {
       symbol: "005930",
-      price: -500, // Negative invalid price
+      price: -500,
       timestamp: now,
     };
 
     const res = detector.inspect(tick, now);
-    expect(res.status).toBe("INVALID");
-    expect(res.liveTradingAllowed).toBe(false);
+    assert.equal(res.status, "INVALID");
+    assert.equal(res.liveTradingAllowed, false);
   });
 
   it("detects crossed orderbook and abnormal spread", () => {
@@ -69,15 +70,15 @@ describe("FakeDataDetector Unit Tests", () => {
     const tick: MarketTick = {
       symbol: "005930",
       price: 74200,
-      bid: 75000, // Bid > Ask
+      bid: 75000,
       ask: 74000,
       timestamp: now,
     };
 
     const res = detector.inspect(tick, now);
-    expect(res.reasons.some((r) => r.code === "CROSSED_ORDERBOOK")).toBe(true);
-    expect(res.trustScore).toBeLessThan(80);
-    expect(res.liveTradingAllowed).toBe(false);
+    assert.ok(res.reasons.some((r) => r.code === "CROSSED_ORDERBOOK"));
+    assert.ok(res.trustScore < 80);
+    assert.equal(res.liveTradingAllowed, false);
   });
 
   it("detects frozen feed when same price and volume repeat beyond limit", () => {
@@ -94,22 +95,22 @@ describe("FakeDataDetector Unit Tests", () => {
     }
 
     const frozenRes = detector.inspect(tick, now + 2100);
-    expect(frozenRes.status).toBe("FROZEN");
-    expect(frozenRes.reasons.some((r) => r.code === "FROZEN_FEED")).toBe(true);
-    expect(frozenRes.liveTradingAllowed).toBe(false);
+    assert.equal(frozenRes.status, "FROZEN");
+    assert.ok(frozenRes.reasons.some((r) => r.code === "FROZEN_FEED"));
+    assert.equal(frozenRes.liveTradingAllowed, false);
   });
 
   it("processRealtimeTick blocks untrusted ticks", () => {
     const now = Date.now();
     const tick: MarketTick = {
       symbol: "005930",
-      price: 0, // Invalid
+      price: 0,
       timestamp: now,
     };
 
     const processRes = processRealtimeTick(tick, detector);
-    expect(processRes.accepted).toBe(false);
-    expect(processRes.orderAllowed).toBe(false);
+    assert.equal(processRes.accepted, false);
+    assert.equal(processRes.orderAllowed, false);
   });
 
   it("validateBeforeOrder throws error when tick is invalid", () => {
@@ -117,16 +118,17 @@ describe("FakeDataDetector Unit Tests", () => {
     const tick: MarketTick = {
       symbol: "005930",
       price: 74200,
-      timestamp: now - 20000, // Stale
+      timestamp: now - 20000,
     };
 
-    expect(() =>
-      validateBeforeOrder(
+    assert.throws(
+      () => validateBeforeOrder(
         { symbol: "005930", side: "BUY", price: 74200, quantity: 10 },
         tick,
-        detector
-      )
-    ).toThrowError(/ORDER BLOCKED/);
+        detector,
+      ),
+      /ORDER BLOCKED/,
+    );
   });
 
   it("getDataVerificationBadge returns SAFE badge for VERIFIED status", () => {
@@ -140,7 +142,7 @@ describe("FakeDataDetector Unit Tests", () => {
       checkedAt: Date.now(),
     });
 
-    expect(badge.level).toBe("SAFE");
-    expect(badge.label).toContain("95");
+    assert.equal(badge.level, "SAFE");
+    assert.ok(badge.label.includes("95"));
   });
 });
