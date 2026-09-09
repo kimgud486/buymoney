@@ -907,8 +907,8 @@ async function fetchIndexData(symbol: string, defaultVal: { value: number; chang
       pct: Math.round(pct * 100) / 100
     };
   } catch (err: any) {
-    console.warn(`[Yahoo Finance API] Falling back to index presets for ${symbol}:`, err.message || err);
-    return defaultVal;
+    console.warn(`[Yahoo Finance API] verified index data unavailable for ${symbol}:`, err.message || err);
+    throw err;
   }
 }
 
@@ -1110,141 +1110,94 @@ app.get("/api/broker/v12/account-balance", async (req, res) => {
 
 // AI Explainable Profit Opportunity Scanner Endpoint & YES ONLY Endpoint
 app.get(["/api/explainable-scanner", "/api/yes-only-scanner"], async (req, res) => {
+  // REAL_VERIFIED_PRECHECK_V192: compatibility endpoint for scan-to-review UI only.
+  // It never fabricates candles and never has final BUY authority.
   try {
-    const market = (req.query.market as string || "ALL").toUpperCase();
-    const isYesOnlyRequested = req.path.includes("yes-only") || req.query.yesOnly === "true";
-    const candidatePool: { symbol: string; name: string; market: "KOREA" | "US" | "BTC" }[] = [];
+    const rawMarket = String(req.query.market || "ALL").toUpperCase();
+    const marketFilter = rawMarket === "BTC" || rawMarket === "CRYPTO" || rawMarket === "UPBIT"
+      ? "UPBIT"
+      : rawMarket === "US"
+        ? "US"
+        : rawMarket === "KOREA"
+          ? "KOREA"
+          : "ALL";
+    const yesOnly = req.path.includes("yes-only") || req.query.yesOnly === "true";
+    const scan = await scanGlobalRealtimeHotListV192({
+      marketFilter,
+      exchangeFilter: "ALL",
+      patternFilter: "ALL",
+      minObjectivePct: 0,
+      minSetupScore: 0
+    });
 
-    if (market === "KOREA" || market === "ALL") {
-      KOREA_POPULAR_STOCKS.slice(0, 15).forEach(s => candidatePool.push({ symbol: s.symbol, name: s.name, market: "KOREA" }));
-    }
-    if (market === "US" || market === "ALL") {
-      US_POPULAR_STOCKS.slice(0, 10).forEach(s => candidatePool.push({ symbol: s.symbol, name: s.name, market: "US" }));
-    }
-    if (market === "BTC" || market === "ALL") {
-      candidatePool.push(
-        { symbol: "BTC", name: "비트코인 (Bitcoin)", market: "BTC" },
-        { symbol: "ETH", name: "이더리움 (Ethereum)", market: "BTC" },
-        { symbol: "SOL", name: "솔라나 (Solana)", market: "BTC" },
-        { symbol: "XRP", name: "리플 (XRP)", market: "BTC" }
-      );
-    }
+    const ideas = scan.hotItems.map((item) => {
+      const price = Number(item.currentPrice);
+      const atr = Number(item.metrics?.atr14);
+      const rvol = Number(item.volumeIncreaseRatio);
+      const rsi = Number(item.rsiIndicator);
+      const stop = item.stopLoss == null ? null : Number(item.stopLoss);
+      const target1 = item.targetPrice == null ? null : Number(item.targetPrice);
+      const atrPct = Number.isFinite(atr) && atr > 0 && price > 0 ? (atr / price) * 100 : null;
+      const target2 = Number.isFinite(atr) && atr > 0 && price > 0 ? price + atr * 4.5 : null;
+      const evidenceComplete =
+        item.dataStatus === "REALTIME_VERIFIED" &&
+        price > 0 &&
+        item.volume > 0 &&
+        item.tradeValue > 0 &&
+        Number.isFinite(rvol) && rvol > 0 &&
+        Number.isFinite(rsi) &&
+        atrPct != null &&
+        stop != null && stop > 0 && stop < price &&
+        target1 != null && target1 > price &&
+        item.patternType !== "NO_PATTERN";
+      const strongPrecheck = evidenceComplete && (item.grade === "S" || item.grade === "A");
+      return {
+        symbol: item.symbol,
+        name: item.name,
+        market: item.market === "BTC" ? "BTC" : item.market,
+        score: item.setupScore,
+        grade: item.grade,
+        decision: strongPrecheck ? "REVIEW" : "WATCH",
+        price,
+        changePct: item.priceChange24hPct,
+        entryLow: evidenceComplete ? price : null,
+        entryHigh: evidenceComplete ? price : null,
+        stop,
+        target1,
+        target2,
+        rsi: Number.isFinite(rsi) ? rsi : null,
+        rvol: Number.isFinite(rvol) ? rvol : null,
+        atrPct,
+        pattern: item.patternType,
+        bullishReasons: Array.isArray(item.evidenceList) ? item.evidenceList : [],
+        riskReasons: evidenceComplete ? [] : ["VERIFIED_PRECHECK_EVIDENCE_INCOMPLETE"],
+        thesis: item.reasoning,
+        invalidation: stop != null ? String(stop) : "NO_VERIFIED_STOP",
+        wouldBuy: strongPrecheck,
+        authority: "REAL_PRECHECK_ONLY",
+        finalAuthority: "SERVER_V20_FINAL_REQUIRED"
+      };
+    });
 
-    const ideas: ExplainableTradeIdea[] = [];
-    const rejectedLog: { symbol: string; name: string; reasons: string[] }[] = [];
-
-    for (const item of candidatePool) {
-      try {
-        const dummyPreset: PresetStock = {
-          symbol: item.symbol,
-          name: item.name,
-          market: item.market,
-          price: 10000,
-          change: 0,
-          changePct: 0,
-          marketCap: "1000억",
-          per: 15,
-          pbr: 1.2,
-          roe: 12,
-          debtRatio: 40,
-          revenueGrowth: 10,
-          operatingMargin: 12,
-          news: [],
-          technical: { rsi: 55, macd: "Golden Cross", bollinger: "middle", trend: "up" }
-        };
-
-        const liveData = await fetchLiveStockData(dummyPreset);
-        const currPrice = liveData.price || 10000;
-
-        const records: CandleRecord[] = [];
-        let curr = currPrice * 0.95;
-        const now = Date.now();
-        for (let i = 30; i >= 0; i--) {
-          const rand = (Math.sin(i * 0.7) * 0.015 + (Math.random() - 0.48) * 0.01) * curr;
-          const open = curr;
-          const close = i === 0 ? currPrice : curr + rand;
-          const high = Math.max(open, close) + Math.random() * 0.005 * curr;
-          const low = Math.min(open, close) - Math.random() * 0.005 * curr;
-          const volume = Math.floor(Math.random() * 8000) + 1500;
-          records.push({ open, high, low, close, volume, timestamp: now - i * 60000 });
-          curr = close;
-        }
-
-        const idea = analyzeStockIdea(item.symbol, item.name, item.market, records, currPrice, liveData.changePct);
-        if (idea.wouldBuy && idea.score >= 82) {
-          ideas.push(idea);
-        } else {
-          rejectedLog.push({
-            symbol: item.symbol,
-            name: item.name,
-            reasons: idea.riskReasons.length > 0 ? idea.riskReasons : ["Profit Opportunity Score 기준 (82점) 미달"]
-          });
-          if (!isYesOnlyRequested) {
-            ideas.push(idea);
-          }
-        }
-      } catch (err) {
-        // quiet skip
-      }
-    }
-
-    let topIdeas: ExplainableTradeIdea[] = [];
-    if (isYesOnlyRequested) {
-      topIdeas = filterYesOnlyCandidates(ideas, 5, 82);
-    } else {
-      ideas.sort((a, b) => b.score - a.score);
-      topIdeas = ideas.slice(0, 5);
-    }
-
-    const ai = getAI();
-    if (ai && topIdeas.length > 0 && req.query.aiExplain === "true") {
-      try {
-        const top1 = topIdeas[0];
-        const prompt = `
-[AI Explainable Trading Decision Engine Analysis Request]
-Stock: ${top1.name} (${top1.symbol})
-Opportunity Score: ${top1.score} / 100 [${top1.grade}]
-Decision: ${top1.decision}
-Current Price: ${top1.price.toLocaleString()} KRW
-Would AI Buy: ${top1.wouldBuy ? "YES" : "NO"}
-Bullish Reasons: ${top1.bullishReasons.join(", ")}
-Risk Warnings: ${top1.riskReasons.join(", ")}
-Pattern: ${top1.pattern}
-
-Please provide a concise 3-bullet point executive summary in Korean explaining:
-1. Why this stock was captured by the mathematical scanner.
-2. The core risk factors to watch.
-3. Logical invalidation condition.
-`;
-        const response = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: prompt
-        });
-        if (response.text) {
-          top1.aiSummary = response.text.trim();
-        }
-      } catch (err) {
-        // silent fallback
-      }
-    }
-
+    const ranked = ideas.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+    const topIdeas = (yesOnly ? ranked.filter((idea) => idea.wouldBuy) : ranked).slice(0, 5);
     return res.json({
       success: true,
-      scannedAt: new Date().toLocaleTimeString("ko-KR"),
-      market,
-      isYesOnly: isYesOnlyRequested,
-      totalScanned: candidatePool.length,
+      authority: "REAL_PRECHECK_ONLY",
+      finalAuthority: "SERVER_V20_FINAL_REQUIRED",
+      scannedAt: new Date().toISOString(),
+      totalScanned: scan.scannedTotal,
       passedCount: topIdeas.length,
-      rejectedCount: rejectedLog.length,
-      message: topIdeas.length === 0
-        ? "현재 모든 검증을 통과한 YES 종목 없음 (위험 및 약세 종목 자동 필터링 완료)"
-        : `🔥 YES ONLY 스캐너: ${candidatePool.length}개 종목 검증 완료 → ${topIdeas.length}개 최종 YES 통과`,
+      dataStatus: scan.dataStatus,
       topIdeas
     });
-  } catch (err: any) {
-    return res.status(500).json({
+  } catch (error) {
+    console.error("[REAL PRECHECK] verified scanner unavailable", error);
+    return res.status(503).json({
       success: false,
-      message: err.message || String(err),
+      authority: "REAL_PRECHECK_ONLY",
+      finalAuthority: "SERVER_V20_FINAL_REQUIRED",
+      message: "검증된 실시간 데이터가 없어 PRECHECK를 생성하지 않았습니다.",
       topIdeas: []
     });
   }
@@ -1400,7 +1353,7 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
             marketCap: 'N/A',
             per: 15, pbr: 1.2, roe: 10, debtRatio: 20, revenueGrowth: 5, operatingMargin: 10,
             news: [],
-            technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+            technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
           };
           return await fetchLiveStockData(baseItem);
         })
@@ -1427,7 +1380,8 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
         const liveUpbit = await Promise.all(upbitPresets.map(stock => fetchLiveStockData(stock)));
         return res.json(liveUpbit);
       } catch (e) {
-        return res.json(upbitPresets);
+        console.warn("[Stock Search] verified Upbit quotes unavailable", e);
+        return res.status(503).json([]);
       }
     }
 
@@ -1441,7 +1395,8 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
       );
       return res.json(liveStocks);
     } catch (e) {
-      return res.json(DEMO_STOCKS);
+      console.warn("[Stock Search] verified market quotes unavailable", e);
+      return res.status(503).json([]);
     }
   }
 
@@ -1463,13 +1418,13 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
           symbol: u.market,
           name: `${u.korean_name} (${u.market.replace("KRW-", "")})`,
           market: "BTC",
-          price: 1000,
+          price: 0,
           change: 0,
           changePct: 0,
           marketCap: "N/A",
           per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0,
           news: [],
-          technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+          technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
         });
       });
     } catch (e) {}
@@ -1490,13 +1445,13 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
           symbol: k.symbol,
           name: k.name,
           market: 'KOREA',
-          price: 50000,
+          price: 0,
           change: 0,
           changePct: 0,
           marketCap: 'N/A',
           per: 12, pbr: 1.1, roe: 10, debtRatio: 30, revenueGrowth: 5, operatingMargin: 10,
           news: [],
-          technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+          technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
         });
       }
     }
@@ -1530,7 +1485,7 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
                 marketCap: item[2] || '국내주식',
                 per: 15, pbr: 1.2, roe: 10, debtRatio: 20, revenueGrowth: 5, operatingMargin: 10,
                 news: [],
-                technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+                technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
               });
             }
           }
@@ -1573,7 +1528,7 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
               marketCap: 'KOSPI/KOSDAQ',
               per: 15, pbr: 1.2, roe: 10, debtRatio: 20, revenueGrowth: 5, operatingMargin: 10,
               news: [],
-              technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+              technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
             });
           }
         }
@@ -1591,13 +1546,13 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
           symbol: u.symbol,
           name: u.name,
           market: 'US',
-          price: 150,
+          price: 0,
           change: 0,
           changePct: 0,
           marketCap: 'N/A',
           per: 25, pbr: 3, roe: 15, debtRatio: 20, revenueGrowth: 10, operatingMargin: 15,
           news: [],
-          technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+          technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
         });
       }
     }
@@ -1610,13 +1565,13 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
         symbol: queryVal,
         name: `${queryVal} (한국 주식)`,
         market: 'KOREA',
-        price: 10000,
+        price: 0,
         change: 0,
         changePct: 0,
         marketCap: 'N/A',
         per: 15, pbr: 1.2, roe: 10, debtRatio: 20, revenueGrowth: 5, operatingMargin: 10,
         news: [],
-        technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+        technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
       });
     } else if (/^[A-Za-z]{1,5}$/.test(queryVal)) {
       const symUpper = queryVal.toUpperCase();
@@ -1624,13 +1579,13 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
         symbol: symUpper,
         name: resolveStockName(symUpper, `${symUpper} Corp.`, 'US'),
         market: 'US',
-        price: 100,
+        price: 0,
         change: 0,
         changePct: 0,
         marketCap: 'N/A',
         per: 20, pbr: 2, roe: 12, debtRatio: 25, revenueGrowth: 8, operatingMargin: 12,
         news: [],
-        technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+        technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
       });
     }
   }
@@ -1644,8 +1599,8 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
     );
     res.json(liveResults);
   } catch (e) {
-    console.error("Live stock search failed, falling back to candidates:", e);
-    res.json(topCandidates);
+    console.error("Live stock search failed; returning NO_DATA instead of seed candidates:", e);
+    res.status(503).json([]);
   }
 });
 
@@ -1663,7 +1618,7 @@ app.get("/api/stocks/:symbol", async (req, res) => {
       symbol: resolvedSymbol,
       name: resolvedName,
       market: marketType,
-      price: marketType === "KOREA" ? 50000 : marketType === "BTC" ? 100000000 : 100,
+      price: 0,
       change: 0,
       changePct: 0,
       marketCap: "실시간 연동",
@@ -1674,7 +1629,7 @@ app.get("/api/stocks/:symbol", async (req, res) => {
       revenueGrowth: 5,
       operatingMargin: 10,
       news: [],
-      technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+      technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
     };
   }
   
@@ -1740,12 +1695,12 @@ app.get("/api/stocks/:symbol", async (req, res) => {
         }
       }
     } catch (err: any) {
-      // Quiet fallback to synthetic history
+      console.warn(`[Stock Detail] verified history unavailable for ${tickedPreset.symbol}:`, err?.message || err);
     }
   }
   
   if (!history || history.length === 0) {
-    history = generateHistory(tickedPreset.price, 30);
+    history = [];
   }
   
   // Update the last element of history with current live ticked price
@@ -1753,8 +1708,11 @@ app.get("/api/stocks/:symbol", async (req, res) => {
     history[history.length - 1].price = tickedPreset.price;
   }
   
+  const detailDataValid = Number(tickedPreset.price) > 0 && history.length > 0;
   res.json({
     ...tickedPreset,
+    dataValid: detailDataValid,
+    dataStatus: detailDataValid ? "REALTIME_VERIFIED" : "NO_DATA",
     history
   });
 });
@@ -5495,7 +5453,7 @@ app.post("/api/ai/predict-engine", async (req, res) => {
         symbol: resolved.symbol,
         name: resolvedName,
         market: resolvedMarket,
-        price: 100,
+        price: 0,
         change: 0,
         changePct: 0,
         marketCap: "-",
