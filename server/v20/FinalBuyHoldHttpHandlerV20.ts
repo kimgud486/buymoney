@@ -3,6 +3,8 @@ import {
   FinalBuyHoldDecisionServiceV20,
   FinalBuyHoldRequestV20
 } from "./FinalBuyHoldDecisionServiceV20";
+import { ServerTrueMTFEvidenceProviderV20 } from "./ServerTrueMTFEvidenceProviderV20";
+import type { TrueMTFEvidenceV20 } from "./TrueMTFSignalGateV20";
 
 const VALID_MARKETS = new Set(["KR", "US", "CRYPTO"]);
 const VALID_EXCHANGES = new Set([
@@ -70,32 +72,73 @@ function validateRequest(body: unknown): body is FinalBuyHoldRequestV20 {
   return true;
 }
 
+function requestBaseUrl(req: Request): string | null {
+  const host = typeof req.get === "function" ? req.get("host") : req.headers?.host;
+  if (!host) return null;
+  const protocol = req.protocol === "https" ? "https" : "http";
+  return `${protocol}://${host}`;
+}
+
+export interface FinalBuyHoldHttpDependenciesV20 {
+  buildTrueMtf: (input: { symbol: string; baseUrl: string }) => Promise<TrueMTFEvidenceV20>;
+}
+
+const DEFAULT_DEPENDENCIES: FinalBuyHoldHttpDependenciesV20 = {
+  buildTrueMtf: (input) => ServerTrueMTFEvidenceProviderV20.build(input)
+};
+
 /**
  * Production HTTP boundary for the single V20 BUY & HOLD authority.
- * This handler only returns a decision. It cannot submit or simulate orders.
+ *
+ * Security/truth property:
+ * - client-supplied trueMtf is NEVER trusted;
+ * - the server rebuilds 1m/3m/5m/D evidence from its verified candle route;
+ * - missing server evidence remains missing and therefore WATCH/NO, never BUY;
+ * - this endpoint only returns a decision and cannot submit/simulate orders.
  */
-export function finalBuyHoldHttpHandlerV20(req: Request, res: Response) {
-  if (!validateRequest(req.body)) {
-    return res.status(400).json({
-      success: false,
-      error: "INVALID_FINAL_BUY_HOLD_REQUEST",
-      message: "검증된 시장/패턴/MTF 입력이 부족하여 V20 최종판정을 실행하지 않았습니다."
-    });
-  }
+export function createFinalBuyHoldHttpHandlerV20(
+  dependencies: FinalBuyHoldHttpDependenciesV20 = DEFAULT_DEPENDENCIES
+) {
+  return async function finalBuyHoldHttpHandler(req: Request, res: Response) {
+    if (!validateRequest(req.body)) {
+      return res.status(400).json({
+        success: false,
+        error: "INVALID_FINAL_BUY_HOLD_REQUEST",
+        message: "검증된 시장 입력이 부족하여 V20 최종판정을 실행하지 않았습니다."
+      });
+    }
 
-  try {
-    const decision = FinalBuyHoldDecisionServiceV20.evaluate(req.body);
-    return res.json({
-      success: true,
-      authority: "SERVER_V20_FINAL",
-      execution: "DECISION_ONLY",
-      decision
-    });
-  } catch (error) {
-    console.error("[V20 Final BuyHold] decision error:", error);
-    return res.status(500).json({
-      success: false,
-      error: "FINAL_BUY_HOLD_DECISION_FAILED"
-    });
-  }
+    try {
+      const baseUrl = requestBaseUrl(req);
+      const serverTrueMtf = baseUrl
+        ? await dependencies.buildTrueMtf({ symbol: req.body.candidate.symbol, baseUrl })
+        : {};
+
+      const serverOwnedRequest: FinalBuyHoldRequestV20 = {
+        ...req.body,
+        candidate: {
+          ...req.body.candidate,
+          // Explicit overwrite prevents a browser/API caller from spoofing MTF PASS.
+          trueMtf: serverTrueMtf
+        }
+      };
+
+      const decision = FinalBuyHoldDecisionServiceV20.evaluate(serverOwnedRequest);
+      return res.json({
+        success: true,
+        authority: "SERVER_V20_FINAL",
+        execution: "DECISION_ONLY",
+        mtfAuthority: "SERVER_OWNED",
+        decision
+      });
+    } catch (error) {
+      console.error("[V20 Final BuyHold] decision error:", error);
+      return res.status(500).json({
+        success: false,
+        error: "FINAL_BUY_HOLD_DECISION_FAILED"
+      });
+    }
+  };
 }
+
+export const finalBuyHoldHttpHandlerV20 = createFinalBuyHoldHttpHandlerV20();
