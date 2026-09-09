@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------
-// MARKET DATA INTEGRITY GATE (V14.0 REAL SCANNER CORE)
+// MARKET DATA INTEGRITY GATE (V15.1 TRUTH-FIRST)
 // Strict Fail-Closed Verification for Quotes and Candle Data
 // ----------------------------------------------------------------------
 
@@ -32,84 +32,129 @@ export interface VerifiedCandle {
 }
 
 export class MarketDataIntegrityGate {
-  private static MAX_QUOTE_AGE_MS = 60000; // 60s max staleness for live quotes
-  private static MAX_FUTURE_ALLOWANCE_MS = 5000; // 5s clock skew allowance
+  private static MAX_QUOTE_AGE_MS = 60000;
+  private static MAX_FUTURE_ALLOWANCE_MS = 5000;
 
-  public static verifyQuote(quote: {
-    symbol: string;
-    price: number;
-    volume?: number | string;
-    market?: string;
-    providerTimestamp?: string | number | null;
-    timestamp?: string | number;
-    provider?: string;
-    source?: string;
-  }): { isVerified: boolean; metadata: VerifiedQuoteMetadata } {
+  private static normalizeSymbol(symbol: unknown): string {
+    return String(symbol ?? "").trim().toUpperCase();
+  }
+
+  public static verifyQuote(
+    quote: {
+      symbol: string;
+      price: number | null | undefined;
+      volume?: number | string | null;
+      market?: string | null;
+      providerTimestamp?: string | number | null;
+      timestamp?: string | number | null;
+      provider?: string | null;
+      source?: string | null;
+    },
+    expectedSymbol?: string
+  ): { isVerified: boolean; metadata: VerifiedQuoteMetadata } {
     const now = Date.now();
     const receivedAt = new Date(now).toISOString();
 
-    const provTime = quote.providerTimestamp || quote.timestamp || now;
-    const providerTimestamp = typeof provTime === "number" ? new Date(provTime).toISOString() : String(provTime);
-    const tsMs = typeof provTime === "number" ? provTime : new Date(provTime).getTime();
+    const actualSymbol = this.normalizeSymbol(quote.symbol);
+    const normalizedExpected = this.normalizeSymbol(expectedSymbol);
+    const rawTimestamp = quote.providerTimestamp ?? quote.timestamp ?? null;
+    const hasExplicitTimestamp = rawTimestamp !== null && rawTimestamp !== undefined && rawTimestamp !== "";
+    const tsMs = !hasExplicitTimestamp
+      ? Number.NaN
+      : typeof rawTimestamp === "number"
+      ? rawTimestamp
+      : new Date(rawTimestamp).getTime();
 
-    const ageMs = isNaN(tsMs) ? 0 : Math.max(0, now - tsMs);
-    const isFuture = !isNaN(tsMs) && tsMs > now + this.MAX_FUTURE_ALLOWANCE_MS;
-    const isStale = ageMs > this.MAX_QUOTE_AGE_MS;
+    const timestampValid = Number.isFinite(tsMs) && tsMs > 0;
+    const providerTimestamp = timestampValid ? new Date(tsMs).toISOString() : "";
+    const ageMs = timestampValid ? Math.max(0, now - tsMs) : Number.POSITIVE_INFINITY;
+    const isFuture = timestampValid && tsMs > now + this.MAX_FUTURE_ALLOWANCE_MS;
+    const isStale = !timestampValid || ageMs > this.MAX_QUOTE_AGE_MS;
 
-    const providerName: "UPBIT" | "NAVER_POLLING" | "YAHOO_FINANCE" | "KIS" | "SYSTEM_HUB" =
-      (quote.provider as any) ||
-      (quote.source === "NAVER_POLLING"
-        ? "NAVER_POLLING"
-        : quote.market === "UPBIT"
-        ? "UPBIT"
-        : quote.market === "US"
-        ? "YAHOO_FINANCE"
-        : "SYSTEM_HUB");
+    const provider = String(quote.provider ?? "").trim();
+    const source = String(quote.source ?? "").trim();
+    const market = String(quote.market ?? "").trim();
 
-    const exchangeName = quote.market || "KOSPI";
+    const allowedProviders = new Set([
+      "UPBIT",
+      "NAVER_POLLING",
+      "YAHOO_FINANCE",
+      "KIS",
+      "SYSTEM_HUB",
+    ]);
 
-    // Run FakeDataDetector inspection
-    const tick: MarketTick = {
-      symbol: quote.symbol,
-      price: quote.price,
-      volume: typeof quote.volume === "number" ? quote.volume : parseFloat(String(quote.volume || 0)) || 0,
-      timestamp: isNaN(tsMs) ? now : tsMs,
-      source: quote.source || quote.provider || "REALTIME_STREAM",
+    const providerName = (allowedProviders.has(provider) ? provider : "SYSTEM_HUB") as VerifiedQuoteMetadata["provider"];
+    const exchangeName = market || "UNKNOWN";
+
+    const detectorTick: MarketTick = {
+      symbol: actualSymbol,
+      price: typeof quote.price === "number" ? quote.price : Number.NaN,
+      volume:
+        typeof quote.volume === "number"
+          ? quote.volume
+          : Number.parseFloat(String(quote.volume ?? 0)) || 0,
+      timestamp: timestampValid ? tsMs : now,
+      source: source || provider || "UNVERIFIED",
     };
-    const detectorResult = defaultFakeDataDetector.inspect(tick, now);
+    const detectorResult = defaultFakeDataDetector.inspect(detectorTick, now);
 
     let isVerified = detectorResult.liveTradingAllowed;
-    let failureReason = detectorResult.reasons.length > 0 
-      ? detectorResult.reasons.map(r => r.code).join(", ")
+    let failureReason = detectorResult.reasons.length > 0
+      ? detectorResult.reasons.map((reason) => reason.code).join(", ")
       : "VERIFIED_OK";
 
-    if (!quote.symbol || typeof quote.symbol !== "string") {
+    if (!actualSymbol) {
       isVerified = false;
       failureReason = "INVALID_SYMBOL";
-    } else if (typeof quote.price !== "number" || isNaN(quote.price) || quote.price <= 0) {
+    } else if (normalizedExpected && actualSymbol !== normalizedExpected) {
+      isVerified = false;
+      failureReason = `SYMBOL_MISMATCH_EXPECTED_${normalizedExpected}_GOT_${actualSymbol}`;
+    } else if (typeof quote.price !== "number" || !Number.isFinite(quote.price) || quote.price <= 0) {
       isVerified = false;
       failureReason = "INVALID_PRICE_NON_POSITIVE";
+    } else if (!provider || !allowedProviders.has(provider)) {
+      isVerified = false;
+      failureReason = "MISSING_OR_UNSUPPORTED_PROVIDER";
+    } else if (!source) {
+      isVerified = false;
+      failureReason = "MISSING_SOURCE";
+    } else if (!hasExplicitTimestamp) {
+      isVerified = false;
+      failureReason = "MISSING_PROVIDER_TIMESTAMP";
+    } else if (!timestampValid) {
+      isVerified = false;
+      failureReason = "INVALID_PROVIDER_TIMESTAMP";
+    } else if (isFuture) {
+      isVerified = false;
+      failureReason = "FUTURE_TIMESTAMP_DETECTED";
+    } else if (isStale) {
+      isVerified = false;
+      failureReason = "STALE_QUOTE_EXCEEDED_MAX_AGE";
     }
 
     return {
       isVerified,
       metadata: {
         provider: providerName,
-        source: quote.source || "REALTIME_STREAM",
+        source: source || "UNVERIFIED",
         exchange: exchangeName,
         providerTimestamp,
         receivedAt,
         ageMs,
-        isRealtime: detectorResult.status === "VERIFIED",
+        isRealtime: isVerified && !isStale && !isFuture,
         isVerified,
-        isStale: detectorResult.status === "STALE",
+        isStale,
         verificationReason: failureReason,
-        trustScore: detectorResult.trustScore,
-      }
+        trustScore: isVerified ? detectorResult.trustScore : 0,
+      },
     };
   }
 
-  public static verifyCandles(candles: any[]): { isVerified: boolean; verifiedCandles: VerifiedCandle[]; errorReason?: string } {
+  public static verifyCandles(candles: any[]): {
+    isVerified: boolean;
+    verifiedCandles: VerifiedCandle[];
+    errorReason?: string;
+  } {
     if (!Array.isArray(candles) || candles.length === 0) {
       return { isVerified: false, verifiedCandles: [], errorReason: "NO_CANDLES_PROVIDED" };
     }
@@ -121,7 +166,11 @@ export class MarketDataIntegrityGate {
     for (let i = 0; i < candles.length; i++) {
       const c = candles[i];
       if (!c || typeof c !== "object") {
-        return { isVerified: false, verifiedCandles: [], errorReason: `INVALID_CANDLE_OBJECT_AT_INDEX_${i}` };
+        return {
+          isVerified: false,
+          verifiedCandles: [],
+          errorReason: `INVALID_CANDLE_OBJECT_AT_INDEX_${i}`,
+        };
       }
 
       const open = Number(c.open);
@@ -129,27 +178,59 @@ export class MarketDataIntegrityGate {
       const low = Number(c.low);
       const close = Number(c.close);
       const volume = Number(c.volume ?? 0);
-      const timestamp = Number(c.timestamp || c.time || 0);
+      const timestamp = Number(c.timestamp ?? c.time ?? 0);
 
-      // Logical OHLC checks
-      if (isNaN(open) || open <= 0 || isNaN(high) || high <= 0 || isNaN(low) || low <= 0 || isNaN(close) || close <= 0) {
-        return { isVerified: false, verifiedCandles: [], errorReason: `NON_POSITIVE_OHLC_AT_INDEX_${i}` };
+      if (
+        !Number.isFinite(open) || open <= 0 ||
+        !Number.isFinite(high) || high <= 0 ||
+        !Number.isFinite(low) || low <= 0 ||
+        !Number.isFinite(close) || close <= 0
+      ) {
+        return {
+          isVerified: false,
+          verifiedCandles: [],
+          errorReason: `NON_POSITIVE_OHLC_AT_INDEX_${i}`,
+        };
       }
 
-      if (low > Math.min(open, close) || high < Math.max(open, close)) {
-        return { isVerified: false, verifiedCandles: [], errorReason: `OHLC_LOGICAL_INCONSISTENCY_AT_INDEX_${i}` };
+      if (low > Math.min(open, close) || high < Math.max(open, close) || low > high) {
+        return {
+          isVerified: false,
+          verifiedCandles: [],
+          errorReason: `OHLC_LOGICAL_INCONSISTENCY_AT_INDEX_${i}`,
+        };
       }
 
-      if (isNaN(volume) || volume < 0) {
-        return { isVerified: false, verifiedCandles: [], errorReason: `NEGATIVE_VOLUME_AT_INDEX_${i}` };
+      if (!Number.isFinite(volume) || volume < 0) {
+        return {
+          isVerified: false,
+          verifiedCandles: [],
+          errorReason: `NEGATIVE_VOLUME_AT_INDEX_${i}`,
+        };
+      }
+
+      if (!Number.isFinite(timestamp) || timestamp <= 0) {
+        return {
+          isVerified: false,
+          verifiedCandles: [],
+          errorReason: `INVALID_CANDLE_TIMESTAMP_AT_INDEX_${i}`,
+        };
       }
 
       if (timestamp > now + this.MAX_FUTURE_ALLOWANCE_MS) {
-        return { isVerified: false, verifiedCandles: [], errorReason: `FUTURE_CANDLE_TIMESTAMP_AT_INDEX_${i}` };
+        return {
+          isVerified: false,
+          verifiedCandles: [],
+          errorReason: `FUTURE_CANDLE_TIMESTAMP_AT_INDEX_${i}`,
+        };
       }
 
       if (i > 0 && timestamp <= lastTimestamp) {
-        return { isVerified: false, verifiedCandles: [], errorReason: `OUT_OF_ORDER_OR_DUPLICATE_TIMESTAMP_AT_INDEX_${i}` };
+        return {
+          isVerified: false,
+          verifiedCandles: [],
+          errorReason: `OUT_OF_ORDER_OR_DUPLICATE_TIMESTAMP_AT_INDEX_${i}`,
+        };
       }
 
       lastTimestamp = timestamp;
@@ -161,13 +242,10 @@ export class MarketDataIntegrityGate {
         close,
         volume,
         tradeValue: Number(c.tradeValue || 0),
-        isVerified: true
+        isVerified: true,
       });
     }
 
-    return {
-      isVerified: true,
-      verifiedCandles
-    };
+    return { isVerified: true, verifiedCandles };
   }
 }
