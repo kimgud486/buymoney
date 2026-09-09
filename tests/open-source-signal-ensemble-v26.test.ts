@@ -28,6 +28,10 @@ const verifiedCandidate = () => ({
   invalidation: "stop",
   wouldBuy: true,
   scannedAt: new Date().toISOString(),
+  marketDataVerified: true,
+  indicatorDataVerified: true,
+  dataSource: "TEST_VERIFIED_FEED",
+  marketTimestamp: new Date().toISOString(),
 });
 
 test("missing indicators are rejected instead of receiving synthetic defaults", () => {
@@ -36,6 +40,8 @@ test("missing indicators are rejected instead of receiving synthetic defaults", 
     name: "삼성전자",
     market: "KOREA",
     price: 100_000,
+    marketDataVerified: true,
+    indicatorDataVerified: true,
   });
 
   assert.equal(result.dataComplete, false);
@@ -46,11 +52,27 @@ test("missing indicators are rejected instead of receiving synthetic defaults", 
   assert.ok(result.riskReasons.includes("RVOL_MISSING"));
 });
 
-test("high quality complete candidate can become YES", () => {
+test("complete numbers without provenance are rejected", () => {
+  const candidate = verifiedCandidate();
+  const result = OpenSourceSignalEnsemble.evaluateCandidate({
+    ...candidate,
+    marketDataVerified: false,
+    indicatorDataVerified: false,
+  });
+
+  assert.equal(result.dataComplete, false);
+  assert.equal(result.decision, "NO");
+  assert.ok(result.riskReasons.includes("MARKET_DATA_NOT_VERIFIED"));
+  assert.ok(result.riskReasons.includes("INDICATOR_DATA_NOT_VERIFIED"));
+});
+
+test("high quality complete verified candidate can become YES", () => {
   const result = OpenSourceSignalEnsemble.evaluateCandidate(verifiedCandidate(), {
     mode: "ANALYSIS",
   });
   assert.equal(result.dataComplete, true);
+  assert.equal(result.marketDataVerified, true);
+  assert.equal(result.indicatorDataVerified, true);
   assert.equal(result.decision, "YES");
   assert.equal(result.liveAutoOrderEnabled, false);
 });
