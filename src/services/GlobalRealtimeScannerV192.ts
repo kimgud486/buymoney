@@ -273,8 +273,8 @@ export class GlobalRealtimeScannerV192 {
       }
 
       const topBull = bullishPatterns[0];
-      const patternType = topBull ? topBull.patternId : "TECHNICAL_SETUP";
-      const patternName = topBull ? topBull.patternName : "실시간 수급 변곡 패턴";
+      const patternType = topBull ? topBull.patternId : "NO_PATTERN";
+      const patternName = topBull ? topBull.patternName : "미검출";
 
       const reasoning = `[${marketType} 실시간 스캐너] ${evidenceList.slice(0, 3).join(", ")}.`;
 

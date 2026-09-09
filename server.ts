@@ -1766,7 +1766,7 @@ app.get("/api/market/realtime-candles", async (req, res) => {
   try {
     const rawSymbol = String(req.query.symbol || "005930").trim();
     const timeframe = String(req.query.timeframe || "D").trim();
-    const requestedCount = Math.min(Math.max(parseInt(String(req.query.count || "60"), 10) || 60, 15), 120);
+    const requestedCount = Math.min(Math.max(parseInt(String(req.query.count || "60"), 10) || 60, 15), 240);
 
     // Auto-detect market
     const isUpbit = rawSymbol.startsWith("KRW-") || 
