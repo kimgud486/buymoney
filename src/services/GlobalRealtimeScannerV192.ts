@@ -4,10 +4,10 @@
 // ----------------------------------------------------------------------
 
 import { getAllStocks, LiveStockItem } from "../data/stockUniverse";
-import { realtimeMarketFeedService, LiveMarketQuote, requireLiveData } from "./realtimeMarketFeedService";
+import { realtimeMarketFeedService, requireLiveData } from "./realtimeMarketFeedService";
 import { realCandleStore } from "./RealCandleStore";
 import { IndicatorTruthEngine } from "./IndicatorTruthEngine";
-import { PatternTruthEngineV192, PatternTruthResultV192 } from "./PatternTruthEngineV192";
+import { PatternTruthEngineV192 } from "./PatternTruthEngineV192";
 import { Candle } from "./StructureBrain";
 
 export type UsExchange = "NASDAQ" | "NYSE" | "AMEX" | "UNKNOWN";
@@ -20,6 +20,7 @@ export interface ScannerMetricsV192 {
   ema50: number | null;
   rsi14: number | null;
   atr14: number | null;
+  /** Benchmark-relative strength only. Null until a real benchmark comparison is available. */
   rs15m: number | null;
   breakoutConfirmed: boolean | null;
   chaseRisk: boolean | null;
@@ -33,9 +34,14 @@ export interface HotListItemV192 {
   market: "KOREA" | "US" | "BTC";
   exchange: UsExchange | string;
   currentPrice: number;
-  volume: number;
-  tradeValue: number;
   priceChange24hPct: number;
+  /** Actual cumulative/official quote volume when provided by the verified source. */
+  volume: number | null;
+  /** Actual cumulative/official quote trade value when provided by the verified source. */
+  tradeValue: number | null;
+  quoteProvider: string | null;
+  quoteSource: string | null;
+  quoteTimestamp: number | null;
   volatilityScore: number;
   aiMatchScore: number; // Equal to setupScore
   expectedReturnPct: number | null; // ATR 2R Planning Objective (null if no ATR)
@@ -119,10 +125,12 @@ export class GlobalRealtimeScannerV192 {
     for (const stock of stocks) {
       scannedCount++;
 
-      // Unknown US exchange stays UNKNOWN (not forced to NASDAQ!)
-      const exchange: UsExchange | string = marketType === "US" 
-        ? (US_EXCHANGE_MAP[stock.symbol] || "UNKNOWN") 
-        : marketType;
+      // Preserve the actual domestic exchange instead of collapsing KOSPI/KOSDAQ into "KOREA".
+      const exchange: UsExchange | string = marketType === "US"
+        ? (US_EXCHANGE_MAP[stock.symbol] || "UNKNOWN")
+        : marketType === "KOREA"
+          ? stock.market
+          : "UPBIT";
 
       if (marketType === "US" && exchangeFilter !== "ALL" && exchange !== exchangeFilter) {
         continue;
@@ -135,12 +143,7 @@ export class GlobalRealtimeScannerV192 {
         continue; // Skip non-live or unverified execution quotes
       }
 
-      const price = quote!.price;
-      const absoluteVolume = quote!.volume;
-      const absoluteTradeValue = quote!.tradeValue;
-      if (absoluteVolume == null || absoluteVolume <= 0 || absoluteTradeValue == null || absoluteTradeValue <= 0) {
-        continue;
-      }
+      const price = quote!.price!;
       const candles15m = realCandleStore.getCachedCandles(stock.symbol, "15m");
 
       // Minimum 35 candles required for warm-up of indicators
@@ -273,8 +276,8 @@ export class GlobalRealtimeScannerV192 {
       }
 
       const topBull = bullishPatterns[0];
-      const patternType = topBull ? topBull.patternId : "NO_PATTERN";
-      const patternName = topBull ? topBull.patternName : "미검출";
+      const patternType = topBull ? topBull.patternId : "TECHNICAL_SETUP";
+      const patternName = topBull ? topBull.patternName : "실시간 수급 변곡 패턴";
 
       const reasoning = `[${marketType} 실시간 스캐너] ${evidenceList.slice(0, 3).join(", ")}.`;
 
@@ -284,9 +287,12 @@ export class GlobalRealtimeScannerV192 {
         market: marketType === "UPBIT" ? "BTC" : marketType,
         exchange,
         currentPrice: price,
-        volume: absoluteVolume,
-        tradeValue: absoluteTradeValue,
         priceChange24hPct: +changePct.toFixed(2),
+        volume: quote!.volume,
+        tradeValue: quote!.tradeValue,
+        quoteProvider: quote!.provider,
+        quoteSource: quote!.source,
+        quoteTimestamp: quote!.providerTimestamp,
         volatilityScore: Math.min(99, Math.round(Math.abs(changePct) * 3 + 50)),
         aiMatchScore: setupScore,
         expectedReturnPct: planningYieldPct,
@@ -313,7 +319,8 @@ export class GlobalRealtimeScannerV192 {
           ema50: snapshot.ema50,
           rsi14: rsi,
           atr14: atr,
-          rs15m: +changePct.toFixed(1),
+          // Price change is momentum, not benchmark-relative strength.
+          rs15m: null,
           breakoutConfirmed: vwap != null ? price >= vwap : null,
           chaseRisk,
           exhaustionRisk,

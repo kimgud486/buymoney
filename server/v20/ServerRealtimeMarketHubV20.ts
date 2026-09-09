@@ -106,10 +106,13 @@ export class ServerRealtimeMarketHubV20 {
    * Returns server-built intraday candles from the 1-minute truth store.
    * completedOnly=true deliberately drops the currently forming bucket so
    * ORB/VWAP/First Pullback rules never confirm from an unfinished candle.
+   *
+   * 3m is aggregated deterministically from the same verified 1m store. It is
+   * not relabeled 5m data and therefore preserves True-MTF interval integrity.
    */
   public getIntradayCandles(
     symbol: string,
-    timeframeMinutes: 1 | 5 = 1,
+    timeframeMinutes: 1 | 3 | 5 = 1,
     completedOnly = true,
   ): Candle[] {
     const oneMinute = this.getCandles(symbol).slice();

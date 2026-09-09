@@ -5,6 +5,15 @@
  */
 
 import { defaultGraphShapeScanner, ShapeResult, CandleData } from "./GraphShapeScanner";
+import {
+  computePreviousHighSeries,
+  computeRecursiveRsi,
+  computeRollingRvol,
+  computeSeededEma,
+  computeSeededMacd,
+  computeSessionVwap,
+  computeTrueRangeSeries,
+} from "./ScannerFeatureMath";
 
 export interface CandleRecord {
   open: number;
@@ -49,42 +58,14 @@ export interface ExplainableTradeIdea {
   graphShapeResult?: ShapeResult;
 }
 
+// Keep public compatibility exports while delegating the implementation to the
+// shared scanner math module.
 export function computeEma(values: number[], period: number): number[] {
-  if (values.length === 0) return [];
-  const alpha = 2 / (period + 1);
-  const result: number[] = [values[0]];
-  for (let i = 1; i < values.length; i++) {
-    result.push(alpha * values[i] + (1 - alpha) * result[i - 1]);
-  }
-  return result;
+  return computeSeededEma(values, period);
 }
 
 export function computeRsi(close: number[], period: number = 14): number[] {
-  if (close.length < period + 1) return new Array(close.length).fill(50);
-  const diffs: number[] = [];
-  for (let i = 1; i < close.length; i++) {
-    diffs.push(close[i] - close[i - 1]);
-  }
-
-  const gains = diffs.map((d) => Math.max(d, 0));
-  const losses = diffs.map((d) => Math.max(-d, 0));
-
-  const alpha = 1 / period;
-  let avgGain = gains[0];
-  let avgLoss = losses[0];
-
-  const rsi: number[] = [50];
-  for (let i = 1; i < diffs.length; i++) {
-    avgGain = alpha * gains[i] + (1 - alpha) * avgGain;
-    avgLoss = alpha * losses[i] + (1 - alpha) * avgLoss;
-    if (avgLoss === 0) {
-      rsi.push(100);
-    } else {
-      const rs = avgGain / avgLoss;
-      rsi.push(100 - 100 / (1 + rs));
-    }
-  }
-  return rsi;
+  return computeRecursiveRsi(close, period);
 }
 
 export function detectCandlePattern(records: CandleRecord[]): { pattern: string; isBullish: boolean; isBearish: boolean } {
@@ -154,8 +135,8 @@ export function analyzeStockIdea(
 
   const price = currentPriceOverride || closes[closes.length - 1];
   const firstClose = closes[0];
-  const changePct = changePctOverride !== undefined 
-    ? changePctOverride 
+  const changePct = changePctOverride !== undefined
+    ? changePctOverride
     : parseFloat((((price - firstClose) / Math.max(firstClose, 0.0001)) * 100).toFixed(2));
 
   const ema9Vals = computeEma(closes, 9);
@@ -163,62 +144,17 @@ export function analyzeStockIdea(
   const ema50Vals = computeEma(closes, Math.min(50, Math.floor(closes.length * 0.8)));
   const rsiVals = computeRsi(closes, 14);
 
-  // MACD
-  const fastEma = computeEma(closes, 12);
-  const slowEma = computeEma(closes, 26);
-  const macdLine = fastEma.map((f, i) => f - slowEma[i]);
-  const macdSignal = computeEma(macdLine, 9);
-  const macdHist = macdLine.map((m, i) => m - macdSignal[i]);
+  const macdHist = computeSeededMacd(closes, 12, 26, 9).hist;
 
-  // ATR
-  const trList: number[] = [];
-  for (let i = 0; i < records.length; i++) {
-    if (i === 0) {
-      trList.push(highs[0] - lows[0]);
-    } else {
-      trList.push(
-        Math.max(
-          highs[i] - lows[i],
-          Math.abs(highs[i] - closes[i - 1]),
-          Math.abs(lows[i] - closes[i - 1])
-        )
-      );
-    }
-  }
+  // Preserve the historical ATR calculation: true range series smoothed by
+  // the first-value-seeded EMA used by this engine.
+  const trList = computeTrueRangeSeries(records);
   const atrVals = computeEma(trList, 14);
 
-  // VWAP
-  let cumVal = 0;
-  let cumVol = 0;
-  const vwapVals: number[] = [];
-  for (let i = 0; i < records.length; i++) {
-    const typical = (highs[i] + lows[i] + closes[i]) / 3;
-    cumVal += typical * volumes[i];
-    cumVol += volumes[i];
-    vwapVals.push(cumVal / Math.max(cumVol, 0.000001));
-  }
-
-  // RVOL
-  const rvolVals: number[] = [];
-  for (let i = 0; i < records.length; i++) {
-    if (i < 19) {
-      rvolVals.push(1.0);
-    } else {
-      const volSlice = volumes.slice(i - 19, i + 1);
-      const volMa = volSlice.reduce((a, b) => a + b, 0) / 20;
-      rvolVals.push(volumes[i] / Math.max(volMa, 0.000001));
-    }
-  }
-
-  // Prev 20 High
-  const prevHigh20Vals: number[] = [];
-  for (let i = 0; i < records.length; i++) {
-    if (i < 20) {
-      prevHigh20Vals.push(highs[i]);
-    } else {
-      prevHigh20Vals.push(Math.max(...highs.slice(i - 20, i)));
-    }
-  }
+  // Preserve this engine's historical zero-volume denominator semantics.
+  const vwapVals = computeSessionVwap(records, "EPSILON_DENOMINATOR");
+  const rvolVals = computeRollingRvol(volumes, 20, "EPSILON_DENOMINATOR");
+  const prevHigh20Vals = computePreviousHighSeries(highs, 20);
 
   const xEma9 = ema9Vals[ema9Vals.length - 1];
   const xEma20 = ema20Vals[ema20Vals.length - 1];
@@ -408,7 +344,7 @@ export function analyzeStockIdea(
 
   const invalidation = `${Math.round(stop).toLocaleString()}원 하향 이탈 또는 VWAP 하역 이탈 후 복귀 실패 시 상승 시나리오 무효화`;
 
-  const detectedPatternStr = shapeResult.patterns.length > 0 
+  const detectedPatternStr = shapeResult.patterns.length > 0
     ? `${pattern} | ${shapeResult.patterns.join(", ")}`
     : pattern;
 
@@ -460,4 +396,3 @@ export function filterYesOnlyCandidates(
   approved.sort((a, b) => b.score - a.score || b.rvol - a.rvol);
   return approved.slice(0, topN);
 }
-
