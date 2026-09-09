@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
 import { OpenSourceSignalEnsemble } from "../src/autonomous/OpenSourceSignalEnsemble";
 
 describe("OpenSourceSignalEnsemble Unit Tests", () => {
@@ -17,12 +18,12 @@ describe("OpenSourceSignalEnsemble Unit Tests", () => {
       target1: 82000,
     });
 
-    expect(result.approvalRequired).toBe(true);
-    expect(result.liveAutoOrderEnabled).toBe(false);
-    expect(result.rrRatio).toBeGreaterThanOrEqual(1.8);
-    expect(result.ensembleScore).toBeGreaterThanOrEqual(80);
-    expect(["YES", "REVIEW_READY"]).toContain(result.decision);
-    expect(result.riskReasons.length).toBe(0);
+    assert.equal(result.approvalRequired, true);
+    assert.equal(result.liveAutoOrderEnabled, false);
+    assert.ok(result.rrRatio >= 1.8);
+    assert.ok(result.ensembleScore >= 80);
+    assert.ok(["YES", "REVIEW_READY"].includes(result.decision));
+    assert.equal(result.riskReasons.length, 0);
   });
 
   it("catches high RSI risk and flags REVIEW_READY/YES as false", () => {
@@ -30,13 +31,13 @@ describe("OpenSourceSignalEnsemble Unit Tests", () => {
       symbol: "000660",
       name: "SK하이닉스",
       price: 180000,
-      rsi: 78, // Overbought
+      rsi: 78,
       rvol: 1.1,
       atrPct: 9.5,
     });
 
-    expect(result.approvalRequired).toBe(true);
-    expect(result.riskReasons.some((r) => r.includes("RSI"))).toBe(true);
-    expect(result.decision).not.toBe("REVIEW_READY");
+    assert.equal(result.approvalRequired, true);
+    assert.ok(result.riskReasons.some((r) => r.includes("RSI")));
+    assert.notEqual(result.decision, "REVIEW_READY");
   });
 });
