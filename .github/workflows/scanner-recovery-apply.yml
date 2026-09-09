@@ -25,8 +25,8 @@ jobs:
           node-version: '22'
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install dependencies without mutating stale lockfile
+        run: npm install --package-lock=false --no-audit --no-fund
 
       - name: Apply guarded scanner migration
         run: node scripts/apply-real-scanner-server-patch.mjs
