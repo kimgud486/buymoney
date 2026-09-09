@@ -7,6 +7,7 @@ import WebSocket from "ws";
 import { KISExecutionNoticeParserV20 } from "./KISExecutionNoticeParserV20";
 import { brokerExecutionTruthBusV20 } from "./BrokerExecutionTruthBusV20";
 import { KISOverseasParserV20 } from "./KISOverseasParserV20";
+import { serverRealtimeMarketHubV20 } from "./ServerRealtimeMarketHubV20";
 
 export interface KISRealtimeClientConfig {
   appKey: string;
@@ -14,6 +15,7 @@ export interface KISRealtimeClientConfig {
   approvalKey: string;
   htsId?: string;
   isPaper?: boolean;
+  overseasRealtimeEntitled?: boolean;
 }
 
 export class ServerKISRealtimeClientV20 {
@@ -147,9 +149,30 @@ export class ServerKISRealtimeClientV20 {
         brokerExecutionTruthBusV20.publish(notice);
       }
     } else if (trId === "HDFSCNT0") {
-      const parsedOverseas = KISOverseasParserV20.parseHDFSCNT0(dataBody, false);
+      const parsedOverseas = KISOverseasParserV20.parseHDFSCNT0(
+        dataBody,
+        this.config.overseasRealtimeEntitled === true,
+      );
+
       if (parsedOverseas) {
-        // Validated overseas tick
+        // Quote volume remains cumulative totalVolume, while candle volume uses the
+        // per-tick executedVolume. This prevents RVOL inflation from repeatedly
+        // summing the cumulative session total into each 1-minute candle.
+        serverRealtimeMarketHubV20.updateQuote(
+          parsedOverseas.symbol,
+          parsedOverseas.symbol,
+          "US",
+          parsedOverseas.lastPrice,
+          0,
+          parsedOverseas.ratePct,
+          parsedOverseas.totalVolume,
+          parsedOverseas.totalAmount,
+          "KIS_HDFSCNT0",
+          parsedOverseas.grade,
+          parsedOverseas.askPrice,
+          parsedOverseas.bidPrice,
+          parsedOverseas.executedVolume,
+        );
       }
     }
   }
