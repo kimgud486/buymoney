@@ -2403,40 +2403,20 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
       }
     }
 
-    // Fallback if APIs were unreachable: fetch live quote via fetchLiveStockData
-    if (!livePrice) {
-      const dummyPreset: PresetStock = {
+    // Truth-first hard gate. Quant factors require provider-backed price,
+    // absolute volume and enough real OHLCV history. Missing evidence is NO_DATA.
+    const realVolumeCandles = candles.filter(c => Number.isFinite(c.volume) && c.volume > 0);
+    if (!(livePrice > 0) || !(liveVolume > 0) || candles.length < 20 || realVolumeCandles.length < 5) {
+      return res.status(200).json({
         symbol: rawSymbol,
         name: resolvedName,
         market: marketType,
-        price: 0,
-        change: 0,
-        changePct: 0,
-        marketCap: "N/A",
-        per: 15, pbr: 1.2, roe: 10, debtRatio: 20, revenueGrowth: 5, operatingMargin: 10,
-        news: [],
-        technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
-      };
-      const fetchedLive = await fetchLiveStockData(dummyPreset);
-      livePrice = fetchedLive.price || 0;
-      liveChangePct = fetchedLive.changePct || 0;
-      liveChangePrice = fetchedLive.change || 0;
-      liveOpen = Math.round(livePrice * 0.98);
-      liveHigh = Math.round(livePrice * 1.02);
-      liveLow = Math.round(livePrice * 0.97);
-      liveVolume = 250000;
-      liveTradingValue = 1200;
-    }
-
-    // Do not fabricate synthetic bars if empty
-    if (candles.length === 0 && livePrice > 0) {
-      candles.push({
-        time: "1m",
-        open: liveOpen || livePrice,
-        high: liveHigh || livePrice,
-        low: liveLow || livePrice,
-        close: livePrice,
-        volume: liveVolume || 0
+        dataValid: false,
+        dataStatus: "NO_DATA",
+        reason: "INSUFFICIENT_VERIFIED_QUANT_MARKET_DATA",
+        currentPrice: livePrice > 0 ? livePrice : 0,
+        volume: liveVolume > 0 ? liveVolume : 0,
+        candles: []
       });
     }
 
@@ -2454,10 +2434,13 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
     // =========================================================================
 
     // 1. RVOL (Relative Volume Calculation: Current / 20-period Average Volume)
-    const recentVolumes = candles.map(c => c.volume);
-    const avgVol = recentVolumes.length > 1 ? recentVolumes.reduce((a, b) => a + b, 0) / recentVolumes.length : 10000;
-    const currentVol = candles[candles.length - 1]?.volume || avgVol;
-    const rvol = +(Math.max(0.5, currentVol / (avgVol || 1))).toFixed(2);
+    const recentVolumes = candles.map(c => c.volume).filter(v => Number.isFinite(v) && v > 0);
+    const avgVol = recentVolumes.reduce((a, b) => a + b, 0) / recentVolumes.length;
+    const currentVol = candles[candles.length - 1]?.volume;
+    if (!(avgVol > 0) || !(currentVol > 0)) {
+      return res.status(200).json({ symbol: rawSymbol, name: resolvedName, market: marketType, dataValid: false, dataStatus: "NO_DATA", reason: "INVALID_VERIFIED_VOLUME_HISTORY" });
+    }
+    const rvol = +(currentVol / avgVol).toFixed(2);
 
     // 2. Real VWAP Calculation
     let sumTypicalVol = 0;
