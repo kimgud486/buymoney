@@ -29,8 +29,15 @@ export interface RuntimeBarV204 {
   volume: number;
 }
 
+export interface RuntimeHistorySourceV204 {
+  source: string;
+  sourceVerified: boolean;
+}
+
 interface InternalBarV204 extends RuntimeBarV204 {
   bucketKey: string;
+  source: string;
+  sourceVerified: boolean;
 }
 
 interface FrameStateV204 {
@@ -40,8 +47,6 @@ interface FrameStateV204 {
 
 interface SymbolStateV204 {
   market: RuntimeMarketV204;
-  source: string;
-  sourceVerified: boolean;
   lastTickTimestamp: number;
   sessionKey: string | null;
   previousCumulativeVolume: number | null;
@@ -67,7 +72,6 @@ const FRESHNESS_MS: Record<TrueMTFTimeframeV20, number> = {
   "1m": 95_000,
   "3m": 245_000,
   "5m": 425_000,
-  // Previous trading-day evidence remains usable across weekends.
   D: 96 * 60 * 60 * 1000,
 };
 
@@ -89,8 +93,6 @@ function frameState(): FrameStateV204 {
 function createState(market: RuntimeMarketV204): SymbolStateV204 {
   return {
     market,
-    source: "",
-    sourceVerified: false,
     lastTickTimestamp: 0,
     sessionKey: null,
     previousCumulativeVolume: null,
@@ -114,7 +116,6 @@ function localSessionKey(timestamp: number, market: RuntimeMarketV204): string {
     month: "2-digit",
     day: "2-digit",
   });
-
   return formatter.format(new Date(timestamp));
 }
 
@@ -155,9 +156,6 @@ function rsi(values: number[], period = 14): number {
 function macdHistogram(values: number[]): number {
   if (values.length < 35) return Number.NaN;
   const macdSeries: number[] = [];
-  const fastSeries: number[] = [];
-  const slowSeries: number[] = [];
-
   const fastAlpha = 2 / 13;
   const slowAlpha = 2 / 27;
   let fast = values[0];
@@ -166,8 +164,6 @@ function macdHistogram(values: number[]): number {
   for (const value of values) {
     fast = fastAlpha * value + (1 - fastAlpha) * fast;
     slow = slowAlpha * value + (1 - slowAlpha) * slow;
-    fastSeries.push(fast);
-    slowSeries.push(slow);
     macdSeries.push(fast - slow);
   }
 
@@ -209,16 +205,18 @@ function previousHigh20(bars: RuntimeBarV204[]): number | undefined {
 }
 
 /**
- * Converts verified trade ticks into real 1m/3m/5m bars and combines them with
- * seeded broker history to create V20 True-MTF evidence.
+ * Converts broker history plus live trade ticks into verified 1m/3m/5m/D
+ * evidence for TrueMTFSignalGateV20.
  *
- * Important truth rules:
- * - no synthetic/fallback bars are fabricated;
- * - cumulative volume is converted to positive deltas only;
- * - intraday state resets by exchange-local trading date;
- * - only CLOSED bars are used for BUY evidence;
- * - fewer than 50 real bars means that timeframe stays missing;
- * - stale evidence is marked STALE before it reaches TrueMTFSignalGateV20.
+ * Truth rules:
+ * - no synthetic/fallback bars;
+ * - cumulative volume becomes positive deltas only;
+ * - intraday state resets by exchange-local date;
+ * - BUY evidence uses CLOSED bars only;
+ * - every historical seed declares its source and verification status;
+ * - a mixed-source live bar is downgraded to unverified;
+ * - fewer than 50 real bars leaves the timeframe missing;
+ * - stale bars are explicitly marked STALE.
  */
 export class TrueMTFRuntimeBuilderV204 {
   private states = new Map<string, SymbolStateV204>();
@@ -241,8 +239,16 @@ export class TrueMTFRuntimeBuilderV204 {
     market: RuntimeMarketV204,
     timeframe: TrueMTFTimeframeV20,
     bars: RuntimeBarV204[],
+    historySource: RuntimeHistorySourceV204,
   ): void {
     const state = this.getOrCreate(symbol, market);
+    const source = historySource.source.trim();
+    if (!source) {
+      state.frames[timeframe].closed = [];
+      state.frames[timeframe].current = undefined;
+      return;
+    }
+
     const valid = bars
       .filter(
         (bar) =>
@@ -262,6 +268,8 @@ export class TrueMTFRuntimeBuilderV204 {
           timeframe === "D"
             ? localSessionKey(bar.timestamp, market)
             : String(Math.floor(bar.timestamp / FRAME_INTERVAL_MS[timeframe])),
+        source,
+        sourceVerified: historySource.sourceVerified,
       }));
 
     state.frames[timeframe].closed = valid;
@@ -273,10 +281,7 @@ export class TrueMTFRuntimeBuilderV204 {
     if (!tick.source || tick.source.trim().length === 0) return;
 
     const state = this.getOrCreate(tick.symbol, tick.market);
-    if (state.lastTickTimestamp > 0 && tick.timestamp < state.lastTickTimestamp) {
-      // Out-of-order ticks must not rewrite already-confirmed bars.
-      return;
-    }
+    if (state.lastTickTimestamp > 0 && tick.timestamp < state.lastTickTimestamp) return;
 
     const nextSessionKey = localSessionKey(tick.timestamp, tick.market);
     if (state.sessionKey !== null && state.sessionKey !== nextSessionKey) {
@@ -284,8 +289,6 @@ export class TrueMTFRuntimeBuilderV204 {
     }
     state.sessionKey = nextSessionKey;
     state.market = tick.market;
-    state.source = tick.source;
-    state.sourceVerified = tick.sourceVerified;
     state.lastTickTimestamp = tick.timestamp;
 
     let volumeDelta = 0;
@@ -336,6 +339,8 @@ export class TrueMTFRuntimeBuilderV204 {
         low: tick.price,
         close: tick.price,
         volume: volumeDelta,
+        source: tick.source,
+        sourceVerified: tick.sourceVerified,
       };
       return;
     }
@@ -344,6 +349,13 @@ export class TrueMTFRuntimeBuilderV204 {
     frame.current.low = Math.min(frame.current.low, tick.price);
     frame.current.close = tick.price;
     frame.current.volume += volumeDelta;
+
+    if (frame.current.source !== tick.source) {
+      frame.current.source = "MIXED_SOURCE";
+      frame.current.sourceVerified = false;
+    } else if (!tick.sourceVerified) {
+      frame.current.sourceVerified = false;
+    }
   }
 
   public getClosedBars(
@@ -353,7 +365,9 @@ export class TrueMTFRuntimeBuilderV204 {
   ): RuntimeBarV204[] {
     const state = this.states.get(this.key(symbol, market));
     if (!state) return [];
-    return state.frames[timeframe].closed.map(({ bucketKey: _bucketKey, ...bar }) => bar);
+    return state.frames[timeframe].closed.map(
+      ({ bucketKey: _bucketKey, source: _source, sourceVerified: _verified, ...bar }) => bar,
+    );
   }
 
   public getEvidence(
@@ -366,12 +380,10 @@ export class TrueMTFRuntimeBuilderV204 {
 
     const evidence: TrueMTFEvidenceV20 = {};
     const frames: TrueMTFTimeframeV20[] = ["1m", "3m", "5m", "D"];
-
     for (const timeframe of frames) {
       const snapshot = this.buildSnapshot(state, timeframe, now);
       if (snapshot) evidence[timeframe] = snapshot;
     }
-
     return evidence;
   }
 
@@ -393,7 +405,6 @@ export class TrueMTFRuntimeBuilderV204 {
 
     const ready = missingTimeframes.length === 0;
     const fresh = ready && staleTimeframes.length === 0;
-
     return { ready, fresh, missingTimeframes, staleTimeframes, reasons };
   }
 
@@ -430,14 +441,14 @@ export class TrueMTFRuntimeBuilderV204 {
     const dataStatus =
       age > FRESHNESS_MS[timeframe]
         ? "STALE"
-        : state.sourceVerified
+        : latest.sourceVerified
           ? "REALTIME_VERIFIED"
           : "REALTIME_DERIVED";
 
     const snapshot: TrueMTFSnapshotV20 = {
       timeframe,
       dataStatus,
-      source: state.source || "SEEDED_BROKER_HISTORY",
+      source: latest.source,
       lastBarTimestamp: latest.timestamp,
       barIntervalMs: FRAME_INTERVAL_MS[timeframe],
       close: latest.close,
