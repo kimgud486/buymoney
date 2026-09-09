@@ -33,6 +33,8 @@ export interface HotListItemV192 {
   market: "KOREA" | "US" | "BTC";
   exchange: UsExchange | string;
   currentPrice: number;
+  volume: number;
+  tradeValue: number;
   priceChange24hPct: number;
   volatilityScore: number;
   aiMatchScore: number; // Equal to setupScore
@@ -134,6 +136,11 @@ export class GlobalRealtimeScannerV192 {
       }
 
       const price = quote!.price;
+      const absoluteVolume = quote!.volume;
+      const absoluteTradeValue = quote!.tradeValue;
+      if (absoluteVolume == null || absoluteVolume <= 0 || absoluteTradeValue == null || absoluteTradeValue <= 0) {
+        continue;
+      }
       const candles15m = realCandleStore.getCachedCandles(stock.symbol, "15m");
 
       // Minimum 35 candles required for warm-up of indicators
@@ -277,6 +284,8 @@ export class GlobalRealtimeScannerV192 {
         market: marketType === "UPBIT" ? "BTC" : marketType,
         exchange,
         currentPrice: price,
+        volume: absoluteVolume,
+        tradeValue: absoluteTradeValue,
         priceChange24hPct: +changePct.toFixed(2),
         volatilityScore: Math.min(99, Math.round(Math.abs(changePct) * 3 + 50)),
         aiMatchScore: setupScore,

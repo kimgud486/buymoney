@@ -14,6 +14,7 @@ import { serverRealtimeMarketHubV20 } from "./server/v20/ServerRealtimeMarketHub
 import { serverUpbitRealtimeClientV20 } from "./server/v20/ServerUpbitRealtimeClientV20";
 import { brokerExecutionRuntimeBridgeV20 } from "./server/v20/BrokerExecutionRuntimeBridgeV20";
 import { ServerGlobalRealtimeScannerV20 } from "./server/v20/ServerGlobalRealtimeScannerV20";
+import { finalBuyHoldHttpHandlerV20 } from "./server/v20/FinalBuyHoldHttpHandlerV20";
 import { ServerKISRealtimeClientV20 } from "./server/v20/ServerKISRealtimeClientV20";
 import { KISBrokerGatewayV121 } from "./server/broker/KISBrokerGatewayV121";
 import { DEMO_FIXTURE_STOCKS } from "./src/data/presetStocks.js";
@@ -35,6 +36,9 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json());
+
+// Single production decision boundary. This route never places or simulates orders.
+app.post("/api/v20/final-buy-hold", finalBuyHoldHttpHandlerV20);
 
 // Initialize Gemini SDK lazily
 let aiClient: GoogleGenAI | null = null;
@@ -1964,7 +1968,8 @@ app.get("/api/market/realtime-candles", async (req, res) => {
                     const o = Math.round(quote.open?.[i] || c);
                     const h = Math.round(quote.high?.[i] || Math.max(o, c));
                     const l = Math.round(quote.low?.[i] || Math.min(o, c));
-                    const v = Math.round(quote.volume?.[i] || 1000);
+                    const rawVolume = quote.volume?.[i];
+                    const v = typeof rawVolume === "number" && Number.isFinite(rawVolume) && rawVolume > 0 ? Math.round(rawVolume) : 0;
                     parsed.push({
                       time: timeLabel,
                       timestamp: timestamps[i] * 1000,
@@ -2044,7 +2049,8 @@ app.get("/api/market/realtime-candles", async (req, res) => {
                 const o = +(quote.open?.[i] || c).toFixed(2);
                 const h = +(quote.high?.[i] || Math.max(o, c)).toFixed(2);
                 const l = +(quote.low?.[i] || Math.min(o, c)).toFixed(2);
-                const v = Math.round(quote.volume?.[i] || 1000);
+                const rawVolume = quote.volume?.[i];
+                    const v = typeof rawVolume === "number" && Number.isFinite(rawVolume) && rawVolume > 0 ? Math.round(rawVolume) : 0;
                 parsed.push({
                   time: timeLabel,
                   timestamp: timestamps[i] * 1000,
@@ -2340,7 +2346,8 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
                   const o = Math.round(quote.open?.[idx] || c);
                   const h = Math.round(quote.high?.[idx] || Math.max(o, c));
                   const l = Math.round(quote.low?.[idx] || Math.min(o, c));
-                  const v = Math.round(quote.volume?.[idx] || 10000);
+                  const rawVolume = quote.volume?.[idx];
+                  const v = typeof rawVolume === "number" && Number.isFinite(rawVolume) && rawVolume > 0 ? Math.round(rawVolume) : 0;
                   return { time: dateStr, open: o, high: h, low: l, close: c, volume: v };
                 }).filter((c: any) => c.close > 0);
               }
@@ -2385,7 +2392,8 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
               const o = +(quote.open?.[idx] || c).toFixed(2);
               const h = +(quote.high?.[idx] || Math.max(o, c)).toFixed(2);
               const l = +(quote.low?.[idx] || Math.min(o, c)).toFixed(2);
-              const v = Math.round(quote.volume?.[idx] || 1000);
+              const rawVolume = quote.volume?.[idx];
+              const v = typeof rawVolume === "number" && Number.isFinite(rawVolume) && rawVolume > 0 ? Math.round(rawVolume) : 0;
               return { time: dateStr, open: o, high: h, low: l, close: c, volume: v };
             }).filter((c: any) => c.close > 0);
           }
@@ -3605,7 +3613,7 @@ const autoTradeLogsStore: Array<{
   reasons: string[];
 }> = [];
 
-app.post("/api/autotrade/order", (req, res) => {
+app.post("/api/legacy/simulated-autotrade/order", (req, res) => {
   const payload = req.body as AutoTradeOrderRequest;
   if (!payload || !payload.symbol || !payload.price) {
     return res.status(400).json({ success: false, error: "Symbol and price are required for auto-trade order execution." });
@@ -3655,7 +3663,7 @@ app.post("/api/autotrade/order", (req, res) => {
     masterScore: payload.masterScore,
     tier: payload.tier || 'S_TIER',
     status: 'EXECUTED' as const,
-    brokerResponse: `✅ [한국투자증권 REST API] 체결 완료 - 계좌 번호: 50123984-01 | 체결가: ${payload.price.toLocaleString()}원 | 수량: ${qty}주`,
+    brokerResponse: `[SIMULATION_ONLY] 가상 체결 기록 · 가격 ${payload.price.toLocaleString()} · 수량 ${qty}`,
     reasons: payload.reasons || ["단일 뇌엔진 컨센서스 통과"]
   };
 
@@ -3666,11 +3674,11 @@ app.post("/api/autotrade/order", (req, res) => {
     success: true,
     status: "EXECUTED",
     log: executedLog,
-    message: "단일 마스터 뇌엔진 컨센서스 통과: 자율 주문이 성공적으로 체결되었습니다."
+    message: "SIMULATION_ONLY: 실제 브로커 주문이 전송되지 않았습니다."
   });
 });
 
-app.get("/api/autotrade/status", (req, res) => {
+app.get("/api/legacy/simulated-autotrade/status", (req, res) => {
   return res.json({
     active: true,
     engineName: "Single Omni-Brain AI Master Intelligence Engine",
@@ -5398,9 +5406,9 @@ app.post("/api/ai/hot-list", async (req, res) => {
           exchange: item.exchange as any || "UNKNOWN",
           price: item.currentPrice,
           changePct: item.priceChange24hPct,
-          volume: item.volumeIncreaseRatio || 1,
-          tradeValue: item.currentPrice * (item.volumeIncreaseRatio || 1),
-          rvol: item.volumeIncreaseRatio || 1,
+          volume: item.volume,
+          tradeValue: item.tradeValue,
+          rvol: Number(item.volumeIncreaseRatio),
           rs15m: item.metrics?.rs15m || undefined,
           vwap: item.metrics?.vwap || undefined,
           ema9: item.metrics?.ema9 || undefined,
@@ -5408,7 +5416,7 @@ app.post("/api/ai/hot-list", async (req, res) => {
           ema50: item.metrics?.ema50 || undefined,
           atr14: item.metrics?.atr14 || undefined,
           rsi14: item.metrics?.rsi14 || undefined,
-          patterns: item.patternName ? [item.patternName] : [],
+          patterns: item.patternType ? [item.patternType] : [],
           chaseRisk: item.metrics?.chaseRisk || false,
           exhaustionRisk: item.metrics?.exhaustionRisk || false,
           dataStatus: item.dataStatus === "REALTIME_VERIFIED" ? "REALTIME_VERIFIED" : "STALE"
