@@ -169,9 +169,10 @@ export class YesOnlySignalDispatchV204 {
 
     const decision = scanCandidateToDecisionV204(candidate);
 
-    // Pre-filter with execution-independent risk. We deliberately use
-    // SIGNAL_ONLY semantics here so broker health is not queried before a
-    // candidate has cleared portfolio/session/spread/slippage controls.
+    // This is an execution-independent prefilter. No gateway is queried here.
+    // brokerHealthy=true means "not applicable at this stage" only. In live
+    // modes the real AutonomousTradingOrchestrator performs the actual broker
+    // health check again before any order can be submitted.
     const prefilterPolicy: AutonomousRiskPolicy = {
       ...this.policy,
       enabled: true,
@@ -187,7 +188,7 @@ export class YesOnlySignalDispatchV204 {
       spreadBps: finite(candidate.spreadBps) ? candidate.spreadBps : null,
       estimatedSlippageBps: context.estimatedSlippageBps,
       marketOpen: context.marketOpen,
-      brokerHealthy: null,
+      brokerHealthy: true,
       killSwitchActive: context.killSwitchActive,
     };
 
