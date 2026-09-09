@@ -17,6 +17,11 @@ import { AutonomousTradingOrchestrator } from "../src/autonomous/AutonomousTradi
 import { AutonomousAuditLog } from "../src/monitoring/AutonomousAuditLog.js";
 
 describe("AISTOCK v23 Autonomous AI Scanner & Trading Architecture Tests", () => {
+  // Production defaults to SIGNAL_ONLY. Only broker lifecycle simulations below opt into LIVE explicitly.
+  const EXECUTION_TEST_POLICY: AutonomousRiskPolicy = {
+    ...DEFAULT_AUTONOMOUS_RISK_POLICY,
+    mode: "LIVE",
+  };
   it("1. AI Scanner strictly sets action REJECT if dataStatus is not REALTIME_VERIFIED", () => {
     const statuses: DataTruthStatus[] = ["NO_DATA", "STALE", "REALTIME_DERIVED", "INVALID", "CLOSED"];
 
@@ -318,7 +323,7 @@ describe("AISTOCK v23 Autonomous AI Scanner & Trading Architecture Tests", () =>
     const killSwitch = new KillSwitch();
     const reconciler = new ExecutionReconciler(router);
 
-    const orchestrator = new AutonomousTradingOrchestrator(router, orderManager, killSwitch, reconciler);
+    const orchestrator = new AutonomousTradingOrchestrator(router, orderManager, killSwitch, reconciler, EXECUTION_TEST_POLICY);
 
     const candidate: AIScanDecision = {
       symbol: "005930",
@@ -370,7 +375,7 @@ describe("AISTOCK v23 Autonomous AI Scanner & Trading Architecture Tests", () =>
     const killSwitch = new KillSwitch();
     const reconciler = new ExecutionReconciler(router);
 
-    const orchestrator = new AutonomousTradingOrchestrator(router, orderManager, killSwitch, reconciler);
+    const orchestrator = new AutonomousTradingOrchestrator(router, orderManager, killSwitch, reconciler, EXECUTION_TEST_POLICY);
 
     const candidate: AIScanDecision = {
       symbol: "005930",
@@ -456,7 +461,7 @@ describe("AISTOCK v23 Autonomous AI Scanner & Trading Architecture Tests", () =>
     const killSwitch = new KillSwitch();
     const reconciler = new ExecutionReconciler(router);
 
-    const orchestrator = new AutonomousTradingOrchestrator(router, orderManager, killSwitch, reconciler);
+    const orchestrator = new AutonomousTradingOrchestrator(router, orderManager, killSwitch, reconciler, EXECUTION_TEST_POLICY);
 
     const candidate: AIScanDecision = {
       symbol: "005930",
