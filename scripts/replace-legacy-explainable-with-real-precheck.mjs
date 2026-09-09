@@ -3,54 +3,16 @@ import fs from "node:fs";
 const serverPath = new URL("../server.ts", import.meta.url);
 let server = fs.readFileSync(serverPath, "utf8");
 
-function findArrowRouteEnd(source, start) {
-  const bodyStart = source.indexOf("=> {", start);
-  if (bodyStart < 0) throw new Error("EXPLAINABLE_ROUTE_BODY_NOT_FOUND");
-  let i = bodyStart + 3;
-  let depth = 1;
-  let state = "code";
-  let escape = false;
-  for (; i < source.length; i++) {
-    const c = source[i];
-    const n = source[i + 1];
-    if (state === "line") {
-      if (c === "\n") state = "code";
-      continue;
-    }
-    if (state === "block") {
-      if (c === "*" && n === "/") { state = "code"; i++; }
-      continue;
-    }
-    if (state === "single" || state === "double" || state === "template") {
-      if (escape) { escape = false; continue; }
-      if (c === "\\") { escape = true; continue; }
-      if ((state === "single" && c === "'") || (state === "double" && c === '"') || (state === "template" && c === "`")) state = "code";
-      continue;
-    }
-    if (c === "/" && n === "/") { state = "line"; i++; continue; }
-    if (c === "/" && n === "*") { state = "block"; i++; continue; }
-    if (c === "'") { state = "single"; continue; }
-    if (c === '"') { state = "double"; continue; }
-    if (c === "`") { state = "template"; continue; }
-    if (c === "{") depth++;
-    if (c === "}") {
-      depth--;
-      if (depth === 0) {
-        const close = source.indexOf(");", i);
-        if (close < 0) throw new Error("EXPLAINABLE_ROUTE_CLOSE_NOT_FOUND");
-        return close + 2;
-      }
-    }
-  }
-  throw new Error("EXPLAINABLE_ROUTE_UNBALANCED");
-}
-
 const routeStartToken = 'app.get(["/api/explainable-scanner", "/api/yes-only-scanner"], async (req, res) => {';
+const nextRouteMarker = '// Naver Realtime Polling Proxy Endpoint (Fixes browser CORS & Failed to fetch errors)';
 const alreadyReal = server.includes("REAL_VERIFIED_PRECHECK_V192");
+
 if (!alreadyReal) {
   const start = server.indexOf(routeStartToken);
+  const next = server.indexOf(nextRouteMarker, start);
   if (start < 0) throw new Error("EXPLAINABLE_ROUTE_START_NOT_FOUND");
-  const end = findArrowRouteEnd(server, start);
+  if (next < 0 || next <= start) throw new Error("EXPLAINABLE_ROUTE_END_MARKER_NOT_FOUND");
+
   const replacement = `app.get(["/api/explainable-scanner", "/api/yes-only-scanner"], async (req, res) => {
   // REAL_VERIFIED_PRECHECK_V192: compatibility endpoint for scan-to-review UI only.
   // It never fabricates candles and never has final BUY authority.
@@ -143,8 +105,10 @@ if (!alreadyReal) {
       topIdeas: []
     });
   }
-});`;
-  server = server.slice(0, start) + replacement + server.slice(end);
+});
+
+`;
+  server = server.slice(0, start) + replacement + server.slice(next);
 }
 
 const indexFallback = `  } catch (err: any) {
