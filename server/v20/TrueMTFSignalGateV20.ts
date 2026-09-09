@@ -35,7 +35,8 @@ export interface TrueMTFSnapshotV20 {
   high: number;
   ema9: number;
   ema20: number;
-  ema50: number;
+  /** Daily higher-timeframe trend requires EMA50. Intraday frames do not. */
+  ema50?: number;
   rsi14: number;
   macdHist: number;
   rvol: number;
@@ -159,16 +160,22 @@ function validateSnapshot(
     confirmations.push(`${key}:LAST_TRADE_FRESH:${ageMs}ms`);
   }
 
-  const requiredNumbers: Array<[string, number]> = [
+  const requiredNumbers: Array<[string, number | undefined]> = [
     ["close", snapshot.close],
     ["high", snapshot.high],
     ["ema9", snapshot.ema9],
     ["ema20", snapshot.ema20],
-    ["ema50", snapshot.ema50],
     ["rsi14", snapshot.rsi14],
     ["macdHist", snapshot.macdHist],
     ["rvol", snapshot.rvol]
   ];
+
+  // EMA50 is a Daily trend-context requirement. Requiring it on 3m/5m would
+  // force unnecessary 250+ one-minute bars even though the entry gate does not
+  // use intraday EMA50.
+  if (key === "D") {
+    requiredNumbers.push(["ema50", snapshot.ema50]);
+  }
 
   const invalid = requiredNumbers.find(([, value]) => !finite(value));
   if (invalid) {
@@ -176,8 +183,13 @@ function validateSnapshot(
     return false;
   }
 
-  if (!positive(snapshot.close) || !positive(snapshot.ema20) || !positive(snapshot.ema50)) {
+  if (!positive(snapshot.close) || !positive(snapshot.ema20)) {
     blockers.push(`${key}:INVALID_PRICE_OR_EMA`);
+    return false;
+  }
+
+  if (key === "D" && !positive(snapshot.ema50)) {
+    blockers.push("D:INVALID_EMA50");
     return false;
   }
 
@@ -306,7 +318,7 @@ export class TrueMTFSignalGateV20 {
     }
 
     // Daily higher-timeframe trend.
-    if (!(daily.close > daily.ema20 && daily.ema20 > daily.ema50)) {
+    if (!(positive(daily.ema50) && daily.close > daily.ema20 && daily.ema20 > daily.ema50)) {
       blockers.push("D:TREND_NOT_BULLISH");
     } else {
       confirmations.push("D:PRICE>EMA20>EMA50");
