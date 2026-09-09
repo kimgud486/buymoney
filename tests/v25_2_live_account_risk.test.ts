@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
 import { LiveAccountRiskGateV252 } from "../server/live/LiveAccountRiskGateV252";
 
 describe("LiveAccountRiskGateV252 Unit Tests", () => {
@@ -14,8 +15,8 @@ describe("LiveAccountRiskGateV252 Unit Tests", () => {
       verifiedCurrentHoldingQty: 0,
     });
 
-    expect(res.passed).toBe(false);
-    expect(res.rejectReason).toContain("US_LIVE_RISK_ADAPTER_NOT_READY_V252");
+    assert.equal(res.passed, false);
+    assert.ok(res.rejectReason?.includes("US_LIVE_RISK_ADAPTER_NOT_READY_V252"));
   });
 
   it("passes valid KOREA BUY within cash and position weight limits", () => {
@@ -23,16 +24,16 @@ describe("LiveAccountRiskGateV252 Unit Tests", () => {
       symbol: "005930",
       side: "BUY",
       quantity: 10,
-      estimatedPrice: 70000, // 700,000 KRW
+      estimatedPrice: 70000,
       market: "KOREA",
-      verifiedCash: 10000000, // 10,000,000 KRW cash
+      verifiedCash: 10000000,
       verifiedPortfolioValue: 10000000,
       verifiedCurrentHoldingQty: 0,
       maxPositionWeightPct: 20,
     });
 
-    expect(res.passed).toBe(true);
-    expect(res.projectedPositionWeightPct).toBeCloseTo(7.0);
+    assert.equal(res.passed, true);
+    assert.ok(Math.abs((res.projectedPositionWeightPct ?? 0) - 7.0) < 1e-9);
   });
 
   it("rejects KOREA BUY when order exceeds verified cash", () => {
@@ -40,15 +41,15 @@ describe("LiveAccountRiskGateV252 Unit Tests", () => {
       symbol: "005930",
       side: "BUY",
       quantity: 100,
-      estimatedPrice: 70000, // 7,000,000 KRW
+      estimatedPrice: 70000,
       market: "KOREA",
-      verifiedCash: 1000000, // Only 1,000,000 KRW cash
+      verifiedCash: 1000000,
       verifiedPortfolioValue: 10000000,
       verifiedCurrentHoldingQty: 0,
     });
 
-    expect(res.passed).toBe(false);
-    expect(res.rejectReason).toContain("INSUFFICIENT_VERIFIED_CASH");
+    assert.equal(res.passed, false);
+    assert.ok(res.rejectReason?.includes("INSUFFICIENT_VERIFIED_CASH"));
   });
 
   it("rejects BUY when projected position weight exceeds max weight limit", () => {
@@ -56,7 +57,7 @@ describe("LiveAccountRiskGateV252 Unit Tests", () => {
       symbol: "005930",
       side: "BUY",
       quantity: 50,
-      estimatedPrice: 70000, // 3,500,000 KRW (35% of 10M portfolio)
+      estimatedPrice: 70000,
       market: "KOREA",
       verifiedCash: 5000000,
       verifiedPortfolioValue: 10000000,
@@ -64,8 +65,8 @@ describe("LiveAccountRiskGateV252 Unit Tests", () => {
       maxPositionWeightPct: 20,
     });
 
-    expect(res.passed).toBe(false);
-    expect(res.rejectReason).toContain("EXCEEDS_MAX_POSITION_WEIGHT");
+    assert.equal(res.passed, false);
+    assert.ok(res.rejectReason?.includes("EXCEEDS_MAX_POSITION_WEIGHT"));
   });
 
   it("allows valid SELL up to verified broker holding qty", () => {
@@ -80,7 +81,7 @@ describe("LiveAccountRiskGateV252 Unit Tests", () => {
       verifiedCurrentHoldingQty: 20,
     });
 
-    expect(res.passed).toBe(true);
+    assert.equal(res.passed, true);
   });
 
   it("rejects SELL when quantity exceeds verified holding qty", () => {
@@ -95,7 +96,7 @@ describe("LiveAccountRiskGateV252 Unit Tests", () => {
       verifiedCurrentHoldingQty: 20,
     });
 
-    expect(res.passed).toBe(false);
-    expect(res.rejectReason).toContain("INSUFFICIENT_HOLDING_QTY");
+    assert.equal(res.passed, false);
+    assert.ok(res.rejectReason?.includes("INSUFFICIENT_HOLDING_QTY"));
   });
 });
