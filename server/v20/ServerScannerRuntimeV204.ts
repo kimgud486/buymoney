@@ -6,6 +6,7 @@ import {
 import { TrueMTFTimeframeV20 } from "./TrueMTFSignalGateV20";
 import {
   RuntimeBarV204,
+  RuntimeHistorySourceV204,
   RuntimeMarketV204,
   RuntimeTradeTickV204,
   TrueMTFRuntimeBuilderV204,
@@ -37,8 +38,15 @@ export class ServerScannerRuntimeV204 {
     market: RuntimeMarketV204,
     timeframe: TrueMTFTimeframeV20,
     bars: RuntimeBarV204[],
+    historySource: RuntimeHistorySourceV204,
   ): void {
-    this.mtfBuilder.seedHistory(symbol, market, timeframe, bars);
+    this.mtfBuilder.seedHistory(
+      symbol,
+      market,
+      timeframe,
+      bars,
+      historySource,
+    );
   }
 
   public ingestTick(tick: RuntimeTradeTickV204): void {
