@@ -18,6 +18,7 @@ import {
   evaluateVerifiedSignal,
   type VerifiedSignalResult,
 } from "../scanner/verifiedSignalEngine";
+import { VerifiedSignalOverlayChart } from "./VerifiedSignalOverlayChart";
 
 interface SelectedCandidateEvent {
   symbol: string;
@@ -269,6 +270,10 @@ export const VerifiedDecisionDetailPanel: React.FC = () => {
                       <Metric label="MACD Hist" value={fmt(result.metrics.macdHist, 3)} />
                     </div>
                   </div>
+                </div>
+
+                <div className="mt-3">
+                  <VerifiedSignalOverlayChart symbol={selected.symbol} result={result} />
                 </div>
 
                 <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-5">
