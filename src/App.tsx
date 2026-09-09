@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { AppProvider, useApp } from "./context/AppContext";
+import { AppProvider } from "./context/AppContext";
 import { PricePulseProvider } from "./context/PricePulseContext";
 import { ToastContainer } from "./components/ToastContainer";
 import { RealtimeMarketStreamManager } from "./components/RealtimeMarketStreamManager";
@@ -12,11 +12,12 @@ import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecur
 import { MasterAiAutoTradingDashboard } from "./components/trading/MasterAiAutoTradingDashboard";
 import { AiBotCommandCenterUi } from "./components/AiBotCommandCenterUi";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { VerifiedAiOpportunityScanner } from "./components/VerifiedAiOpportunityScanner";
 
 function MainLayout() {
   const [isConsensusModalOpen, setIsConsensusModalOpen] = useState<boolean>(false);
   const [consensusSelectedSymbol, setConsensusSelectedSymbol] = useState<string>("005930");
-  const [viewMode, setViewMode] = useState<"MASTER_IMAGE_EXACT" | "ADVANCED_CLUSTER">("MASTER_IMAGE_EXACT");
+  const [viewMode] = useState<"MASTER_IMAGE_EXACT" | "ADVANCED_CLUSTER">("MASTER_IMAGE_EXACT");
 
   useEffect(() => {
     // Clear any leftover security credentials from storage
@@ -50,7 +51,12 @@ function MainLayout() {
   return (
     <div className="min-h-screen bg-white text-slate-800 flex flex-col font-sans relative">
       <RealtimeMarketStreamManager />
-      
+
+      {/* Verified scanner: real candle/indicator checks, no fabricated score and no automatic order */}
+      <ErrorBoundary>
+        <VerifiedAiOpportunityScanner />
+      </ErrorBoundary>
+
       {/* MASTER AI AUTO TRADING DASHBOARD */}
       <ErrorBoundary>
         {viewMode === "MASTER_IMAGE_EXACT" ? (
