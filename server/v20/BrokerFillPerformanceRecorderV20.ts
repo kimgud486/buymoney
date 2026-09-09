@@ -1,5 +1,5 @@
 import type { ParsedExecutionNotice } from "./KISExecutionNoticeParserV20";
-import { buyHoldPerformanceStoreV20 } from "./BuyHoldPerformanceStoreV20";
+import { BuyHoldPerformanceStoreV20, buyHoldPerformanceStoreV20 } from "./BuyHoldPerformanceStoreV20";
 
 interface FillAccumulatorV20 {
   positionId: string;
@@ -17,7 +17,6 @@ export interface BrokerFillPerformanceContextV20 {
   symbol: string;
   setup: string;
   runtimeEntryPrice?: number;
-  runtimePositionQtyBeforeFill?: number;
   nextState: string;
 }
 
@@ -32,6 +31,8 @@ function positive(v: unknown): v is number {
  */
 export class BrokerFillPerformanceRecorderV20 {
   private readonly fills = new Map<string, FillAccumulatorV20>();
+
+  constructor(private readonly store: BuyHoldPerformanceStoreV20 = buyHoldPerformanceStoreV20) {}
 
   public onVerifiedFill(
     notice: ParsedExecutionNotice,
@@ -77,7 +78,7 @@ export class BrokerFillPerformanceRecorderV20 {
     }
 
     const pnlPct = ((averageExit - averageEntry) / averageEntry) * 100;
-    buyHoldPerformanceStoreV20.appendClosedTrade({
+    this.store.appendClosedTrade({
       id: `broker-close:${context.positionId}:${notice.noticeId}`,
       setup: context.setup,
       symbol: context.symbol,
