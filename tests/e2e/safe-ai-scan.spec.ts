@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 const VERIFIED_SCANNER_RESPONSE = {
   success: true,
@@ -32,6 +32,35 @@ const VERIFIED_SCANNER_RESPONSE = {
   ],
 };
 
+async function openDashboardAndGetLauncher(page: Page) {
+  const runtimeErrors: string[] = [];
+  page.on("pageerror", (error) => runtimeErrors.push(`pageerror: ${error.message}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") runtimeErrors.push(`console.error: ${message.text()}`);
+  });
+
+  const response = await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(750);
+
+  const launcher = page.getByTestId("safe-ai-autotrade-launcher");
+  if ((await launcher.count()) === 0) {
+    const bodyText = (await page.locator("body").innerText().catch(() => "<body unavailable>"))
+      .replace(/\s+/g, " ")
+      .slice(0, 4000);
+    throw new Error(
+      [
+        `Safe AI launcher missing. HTTP=${response?.status() ?? "unknown"}`,
+        `URL=${page.url()}`,
+        `RUNTIME=${runtimeErrors.join(" | ") || "none captured"}`,
+        `BODY=${bodyText}`,
+      ].join("\n"),
+    );
+  }
+
+  await expect(launcher).toBeVisible();
+  return launcher;
+}
+
 test.describe("Safe AI scan-to-review E2E", () => {
   test("launcher calls explainable scanner, ranks verified candidate, and moves it to final chart review", async ({ page }) => {
     let scannerCalls = 0;
@@ -48,10 +77,7 @@ test.describe("Safe AI scan-to-review E2E", () => {
       });
     });
 
-    await page.goto("/");
-
-    const launcher = page.getByTestId("safe-ai-autotrade-launcher");
-    await expect(launcher).toBeVisible();
+    const launcher = await openDashboardAndGetLauncher(page);
     await launcher.click();
 
     await expect(page.getByText("E2E 검증종목")).toBeVisible();
@@ -89,8 +115,8 @@ test.describe("Safe AI scan-to-review E2E", () => {
       });
     });
 
-    await page.goto("/");
-    await page.getByTestId("safe-ai-autotrade-launcher").click();
+    const launcher = await openDashboardAndGetLauncher(page);
+    await launcher.click();
 
     await expect(page.getByText("불완전 데이터")).toBeVisible();
     await expect(page.getByText(/NO ·/)).toBeVisible();
