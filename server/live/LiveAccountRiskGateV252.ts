@@ -1,10 +1,13 @@
 /**
  * LiveAccountRiskGateV252.ts
  *
- * V25.2 LIVE Account Risk Gate
- * Enforces server-owned verification of real broker cash, equity, and position holdings.
- * Blocks browser request spoofing of balance or loss parameters.
+ * V25.2+ LIVE Account Risk Gate
+ * Enforces server-owned verification of real broker cash, equity, and holdings.
+ * US LIVE remains fail-closed unless a native USD account snapshot is explicitly
+ * marked verified by the server-side broker adapter.
  */
+
+export type LiveSettlementCurrency = "KRW" | "USD" | "USDT";
 
 export interface LiveAccountRiskParams {
   symbol: string;
@@ -12,12 +15,21 @@ export interface LiveAccountRiskParams {
   quantity: number;
   estimatedPrice: number;
   market: "KOREA" | "US" | "UPBIT";
-  
-  // Verified broker balances resolved from server environment/API
+
+  // Verified broker balances resolved from server environment/API.
   verifiedCash: number;
   verifiedPortfolioValue: number;
   verifiedCurrentHoldingQty: number;
-  
+
+  /** Currency of every monetary value above. Required for US LIVE. */
+  settlementCurrency?: LiveSettlementCurrency;
+
+  /**
+   * Must only be set by the server-native broker adapter after it verifies
+   * account/currency/position ownership. Browser/client input must never set it.
+   */
+  nativeAccountSnapshotVerified?: boolean;
+
   maxPositionWeightPct?: number; // e.g. 20
 }
 
@@ -25,6 +37,14 @@ export interface LiveAccountRiskValidationResult {
   passed: boolean;
   rejectReason?: string;
   projectedPositionWeightPct?: number;
+}
+
+function finite(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function nonNegative(value: unknown): value is number {
+  return finite(value) && value >= 0;
 }
 
 export class LiveAccountRiskGateV252 {
@@ -38,20 +58,70 @@ export class LiveAccountRiskGateV252 {
       verifiedCash,
       verifiedPortfolioValue,
       verifiedCurrentHoldingQty,
+      settlementCurrency,
+      nativeAccountSnapshotVerified = false,
       maxPositionWeightPct = 20,
     } = params;
 
-    // 1. Block US LIVE fail-closed until native USD adapter is ready
+    // 1. Input truth gate.
+    if (!symbol || !finite(quantity) || quantity <= 0) {
+      return { passed: false, rejectReason: "INVALID_ORDER_QUANTITY" };
+    }
+
+    if (!finite(estimatedPrice) || estimatedPrice <= 0) {
+      return { passed: false, rejectReason: "INVALID_ESTIMATED_PRICE" };
+    }
+
+    if (
+      !nonNegative(verifiedCash) ||
+      !nonNegative(verifiedPortfolioValue) ||
+      !nonNegative(verifiedCurrentHoldingQty)
+    ) {
+      return { passed: false, rejectReason: "INVALID_VERIFIED_ACCOUNT_SNAPSHOT" };
+    }
+
+    if (!finite(maxPositionWeightPct) || maxPositionWeightPct <= 0 || maxPositionWeightPct > 100) {
+      return { passed: false, rejectReason: "INVALID_MAX_POSITION_WEIGHT" };
+    }
+
+    // 2. US LIVE is allowed only after the server adapter verifies a native USD snapshot.
+    // Existing callers without these fields continue to fail closed.
     if (market === "US") {
+      if (nativeAccountSnapshotVerified !== true) {
+        return {
+          passed: false,
+          rejectReason:
+            "US_LIVE_RISK_ADAPTER_NOT_READY_V252: native server account snapshot is not verified.",
+        };
+      }
+
+      if (settlementCurrency !== "USD") {
+        return {
+          passed: false,
+          rejectReason:
+            "US_LIVE_CURRENCY_MISMATCH_V204: verified US cash/equity must be supplied in USD.",
+        };
+      }
+    }
+
+    // Optional explicit currency validation for other markets.
+    if (market === "KOREA" && settlementCurrency && settlementCurrency !== "KRW") {
       return {
         passed: false,
-        rejectReason: "US_LIVE_RISK_ADAPTER_NOT_READY_V252: US market requires native USD cash/equity risk adapter.",
+        rejectReason: "KOREA_LIVE_CURRENCY_MISMATCH: expected KRW account snapshot.",
+      };
+    }
+
+    if (market === "UPBIT" && settlementCurrency && settlementCurrency !== "KRW" && settlementCurrency !== "USDT") {
+      return {
+        passed: false,
+        rejectReason: "UPBIT_LIVE_CURRENCY_MISMATCH",
       };
     }
 
     const orderAmount = quantity * estimatedPrice;
 
-    // 2. SELL Validation
+    // 3. SELL Validation.
     if (side === "SELL") {
       if (quantity > verifiedCurrentHoldingQty) {
         return {
@@ -62,7 +132,7 @@ export class LiveAccountRiskGateV252 {
       return { passed: true };
     }
 
-    // 3. BUY Validation: Cash adequacy
+    // 4. BUY Validation: cash adequacy in the market's native settlement currency.
     if (orderAmount > verifiedCash) {
       return {
         passed: false,
@@ -70,11 +140,11 @@ export class LiveAccountRiskGateV252 {
       };
     }
 
-    // 4. BUY Validation: Maximum position weight constraint
+    // 5. BUY Validation: maximum position weight constraint.
     const currentHoldingValue = verifiedCurrentHoldingQty * estimatedPrice;
     const projectedHoldingValue = currentHoldingValue + orderAmount;
     const totalEquity = Math.max(verifiedPortfolioValue, verifiedCash);
-    
+
     if (totalEquity <= 0) {
       return {
         passed: false,
