@@ -6,6 +6,7 @@ on:
       - integration/buymoney-final-buy-hold
     paths:
       - scripts/apply-v20-final-server-integration.mjs
+      - scripts/normalize-legacy-pattern-truth.mjs
       - .github/workflows/apply-v20-final-server-integration.yml
 
 permissions:
@@ -21,6 +22,9 @@ jobs:
         with:
           ref: integration/buymoney-final-buy-hold
           fetch-depth: 0
+
+      - name: Normalize legacy forced patterns
+        run: node scripts/normalize-legacy-pattern-truth.mjs
 
       - name: Apply guarded migration
         run: node scripts/apply-v20-final-server-integration.mjs
@@ -43,5 +47,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add server.ts src/services/GlobalRealtimeScannerV192.ts
-          git commit -m "feat(v20): wire final decision route and remove fake liquidity fallbacks"
+          git commit -m "feat(v20): harden final server truth gates and pattern evidence"
           git push origin HEAD:integration/buymoney-final-buy-hold
