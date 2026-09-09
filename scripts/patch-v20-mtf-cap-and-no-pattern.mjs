@@ -21,6 +21,16 @@ const newPatternName = 'const patternName = topBull ? topBull.patternName : "미
 if (scanner.includes(oldPatternName)) scanner = scanner.replace(oldPatternName, newPatternName);
 if (!scanner.includes(newPatternName)) throw new Error("PRECHECK_PATTERN_NAME_PATCH_MISSING");
 
+// Price momentum is not benchmark-relative strength. Never relabel changePct as RS.
+scanner = scanner.replace('rs15m: +changePct.toFixed(1),', 'rs15m: null,');
+if (!scanner.includes('rs15m: null,')) throw new Error("PRECHECK_RS_TRUTH_PATCH_MISSING");
+
+// Preserve exact KOSPI/KOSDAQ identity rather than collapsing all KR candidates to KOREA.
+scanner = scanner.replace(
+  'const exchange: UsExchange | string = marketType === "US" \n        ? (US_EXCHANGE_MAP[stock.symbol] || "UNKNOWN") \n        : marketType;',
+  'const exchange: UsExchange | string = marketType === "US"\n        ? (US_EXCHANGE_MAP[stock.symbol] || "UNKNOWN")\n        : marketType === "KOREA"\n          ? stock.market\n          : "UPBIT";'
+);
+
 fs.writeFileSync(serverPath, server, "utf8");
 fs.writeFileSync(scannerPath, scanner, "utf8");
-console.log("V20 MTF candle cap and NO_PATTERN precheck patch applied.");
+console.log("V20 MTF cap, NO_PATTERN, exchange provenance and RS truth patches applied.");
