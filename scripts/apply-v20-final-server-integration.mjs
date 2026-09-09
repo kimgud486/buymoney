@@ -29,8 +29,6 @@ server = replaceExact(
   "FINAL_HTTP_ROUTE"
 );
 
-// Remove fabricated Yahoo volume defaults. Missing provider volume remains 0 and
-// downstream V20 truth gates reject it instead of treating it as evidence.
 server = server.replaceAll(
   'const v = Math.round(quote.volume?.[i] || 1000);',
   'const rawVolume = quote.volume?.[i];\n                    const v = typeof rawVolume === "number" && Number.isFinite(rawVolume) && rawVolume > 0 ? Math.round(rawVolume) : 0;'
@@ -50,7 +48,6 @@ server = replaceExact(
   '          volume: item.volume,\n          tradeValue: item.tradeValue,\n          rvol: Number(item.volumeIncreaseRatio),',
   "HOTLIST_ABSOLUTE_LIQUIDITY"
 );
-
 server = replaceExact(
   server,
   '          patterns: item.patternName ? [item.patternName] : [],',
@@ -58,8 +55,6 @@ server = replaceExact(
   "HOTLIST_EXECUTABLE_PATTERN_ID"
 );
 
-// The old endpoint claimed simulated fills were real KIS fills. Remove the public
-// production-looking route. The legacy simulator remains clearly namespaced only.
 server = replaceExact(
   server,
   'app.post("/api/autotrade/order", (req, res) => {',
@@ -81,7 +76,74 @@ server = server.replaceAll(
   'message: "SIMULATION_ONLY: 실제 브로커 주문이 전송되지 않았습니다."'
 );
 
-// Preserve authoritative absolute liquidity from the verified quote in V19.2.
+// Legacy quant route must fail closed when provider evidence is incomplete.
+// Never manufacture OHLC, absolute volume, traded value, or a one-bar history.
+server = replaceExact(
+  server,
+  `    // Fallback if APIs were unreachable: fetch live quote via fetchLiveStockData
+    if (!livePrice) {
+      const dummyPreset: PresetStock = {
+        symbol: rawSymbol,
+        name: resolvedName,
+        market: marketType,
+        price: 0,
+        change: 0,
+        changePct: 0,
+        marketCap: "N/A",
+        per: 15, pbr: 1.2, roe: 10, debtRatio: 20, revenueGrowth: 5, operatingMargin: 10,
+        news: [],
+        technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+      };
+      const fetchedLive = await fetchLiveStockData(dummyPreset);
+      livePrice = fetchedLive.price || 0;
+      liveChangePct = fetchedLive.changePct || 0;
+      liveChangePrice = fetchedLive.change || 0;
+      liveOpen = Math.round(livePrice * 0.98);
+      liveHigh = Math.round(livePrice * 1.02);
+      liveLow = Math.round(livePrice * 0.97);
+      liveVolume = 250000;
+      liveTradingValue = 1200;
+    }
+
+    // Do not fabricate synthetic bars if empty
+    if (candles.length === 0 && livePrice > 0) {
+      candles.push({
+        time: "1m",
+        open: liveOpen || livePrice,
+        high: liveHigh || livePrice,
+        low: liveLow || livePrice,
+        close: livePrice,
+        volume: liveVolume || 0
+      });
+    }
+`,
+  `    // Truth-first hard gate. Quant factors require provider-backed price,
+    // absolute volume and enough real OHLCV history. Missing evidence is NO_DATA.
+    const realVolumeCandles = candles.filter(c => Number.isFinite(c.volume) && c.volume > 0);
+    if (!(livePrice > 0) || !(liveVolume > 0) || candles.length < 20 || realVolumeCandles.length < 5) {
+      return res.status(200).json({
+        symbol: rawSymbol,
+        name: resolvedName,
+        market: marketType,
+        dataValid: false,
+        dataStatus: "NO_DATA",
+        reason: "INSUFFICIENT_VERIFIED_QUANT_MARKET_DATA",
+        currentPrice: livePrice > 0 ? livePrice : 0,
+        volume: liveVolume > 0 ? liveVolume : 0,
+        candles: []
+      });
+    }
+`,
+  "QUANT_SYNTHETIC_FALLBACK_BLOCK"
+);
+
+server = replaceExact(
+  server,
+  '    const recentVolumes = candles.map(c => c.volume);\n    const avgVol = recentVolumes.length > 1 ? recentVolumes.reduce((a, b) => a + b, 0) / recentVolumes.length : 10000;\n    const currentVol = candles[candles.length - 1]?.volume || avgVol;\n    const rvol = +(Math.max(0.5, currentVol / (avgVol || 1))).toFixed(2);',
+  '    const recentVolumes = candles.map(c => c.volume).filter(v => Number.isFinite(v) && v > 0);\n    const avgVol = recentVolumes.reduce((a, b) => a + b, 0) / recentVolumes.length;\n    const currentVol = candles[candles.length - 1]?.volume;\n    if (!(avgVol > 0) || !(currentVol > 0)) {\n      return res.status(200).json({ symbol: rawSymbol, name: resolvedName, market: marketType, dataValid: false, dataStatus: "NO_DATA", reason: "INVALID_VERIFIED_VOLUME_HISTORY" });\n    }\n    const rvol = +(currentVol / avgVol).toFixed(2);',
+  "QUANT_RVOL_REAL_ONLY"
+);
+
 scanner = replaceExact(
   scanner,
   '  currentPrice: number;\n  priceChange24hPct: number;',
@@ -109,7 +171,11 @@ const forbidden = [
   "tradeValue: item.currentPrice * (item.volumeIncreaseRatio || 1)",
   'app.post("/api/autotrade/order"',
   'app.get("/api/autotrade/status"',
-  "50123984-01"
+  "50123984-01",
+  "liveVolume = 250000",
+  "liveTradingValue = 1200",
+  "recentVolumes.length > 1 ? recentVolumes.reduce",
+  "Math.max(0.5, currentVol / (avgVol || 1))"
 ];
 for (const token of forbidden) {
   if (server.includes(token)) throw new Error(`FORBIDDEN_LEGACY_TOKEN_REMAINS:${token}`);
