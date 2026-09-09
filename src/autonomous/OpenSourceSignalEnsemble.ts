@@ -1,12 +1,15 @@
 /**
  * OpenSourceSignalEnsemble.ts
  *
- * Architecture inspired by open-source quantitative stacks such as FinRL and Qlib:
- * stock selection, timing/momentum, risk overlay and execution authorization stay
- * separate. This implementation is original project code and deliberately fails closed.
+ * Architecture inspired by MIT-licensed open-source quantitative stacks such as
+ * FinRL and Microsoft Qlib: stock selection, timing/momentum, risk overlay and
+ * execution authorization stay separate. This implementation is original project
+ * code and deliberately fails closed.
  *
  * IMPORTANT:
  * - Missing market/indicator inputs are never replaced with synthetic defaults.
+ * - Numeric completeness alone is not enough. Production YES requires explicit
+ *   verified market-data and verified-indicator provenance from the server.
  * - A strong signal is not an execution authorization.
  * - AUTO_LIVE can only be reported as enabled when a server-side execution gate has
  *   already authorized the exact decision.
@@ -20,6 +23,17 @@ export interface SignalExecutionContext {
   mode: SignalExecutionMode;
   serverExecutionAuthorized?: boolean;
 }
+
+export type VerifiedSignalCandidate = Partial<ExplainableTradeIdea> & {
+  /** Must be asserted by a server-owned verified market-data adapter. */
+  marketDataVerified?: boolean;
+  /** Must be asserted after indicators are calculated from the verified candles. */
+  indicatorDataVerified?: boolean;
+  /** Human-readable provider/runtime identifier, never used as authorization by itself. */
+  dataSource?: string;
+  /** Exchange/feed event time for freshness/audit display. */
+  marketTimestamp?: string;
+};
 
 export interface EnsembleEvaluationResult {
   symbol: string;
@@ -40,6 +54,10 @@ export interface EnsembleEvaluationResult {
   approvalRequired: boolean;
   liveAutoOrderEnabled: boolean;
   dataComplete: boolean;
+  marketDataVerified: boolean;
+  indicatorDataVerified: boolean;
+  dataSource?: string;
+  marketTimestamp?: string;
 
   bullishReasons: string[];
   riskReasons: string[];
@@ -52,11 +70,12 @@ const finite = (value: unknown): value is number =>
 
 export class OpenSourceSignalEnsemble {
   /**
-   * Evaluate a verified scanner candidate. The caller must provide real values.
-   * No price, RSI, RVOL, ADX, ATR, stop or target fallback is generated here.
+   * Evaluate a verified scanner candidate. The caller must provide real values and
+   * explicit server-side provenance. No price, RSI, RVOL, ADX, ATR, stop or target
+   * fallback is generated here.
    */
   public static evaluateCandidate(
-    idea: Partial<ExplainableTradeIdea>,
+    idea: VerifiedSignalCandidate,
     execution: SignalExecutionContext = { mode: "ANALYSIS" },
   ): EnsembleEvaluationResult {
     const symbol = typeof idea.symbol === "string" && idea.symbol.trim() ? idea.symbol.trim() : "UNKNOWN";
@@ -65,6 +84,8 @@ export class OpenSourceSignalEnsemble {
       idea.market === "US" || idea.market === "BTC" ? idea.market : "KOREA";
 
     const missing: string[] = [];
+    if (idea.marketDataVerified !== true) missing.push("MARKET_DATA_NOT_VERIFIED");
+    if (idea.indicatorDataVerified !== true) missing.push("INDICATOR_DATA_NOT_VERIFIED");
     if (!finite(idea.price) || idea.price <= 0) missing.push("PRICE_MISSING_OR_INVALID");
     if (!finite(idea.rsi)) missing.push("RSI_MISSING");
     if (!finite(idea.rvol)) missing.push("RVOL_MISSING");
@@ -96,9 +117,13 @@ export class OpenSourceSignalEnsemble {
         approvalRequired: execution.mode === "ASSISTED",
         liveAutoOrderEnabled: false,
         dataComplete: false,
+        marketDataVerified: idea.marketDataVerified === true,
+        indicatorDataVerified: idea.indicatorDataVerified === true,
+        dataSource: idea.dataSource,
+        marketTimestamp: idea.marketTimestamp,
         bullishReasons: [],
         riskReasons: missing,
-        summaryMessage: `검증 가능한 실시간 입력 부족으로 NO_TRADE: ${missing.join(", ")}`,
+        summaryMessage: `검증 가능한 실시간 입력/출처 부족으로 NO_TRADE: ${missing.join(", ")}`,
         evaluatedAt: new Date().toISOString(),
       };
     }
@@ -199,6 +224,10 @@ export class OpenSourceSignalEnsemble {
       approvalRequired,
       liveAutoOrderEnabled,
       dataComplete: true,
+      marketDataVerified: true,
+      indicatorDataVerified: true,
+      dataSource: idea.dataSource,
+      marketTimestamp: idea.marketTimestamp,
       bullishReasons,
       riskReasons,
       summaryMessage,
