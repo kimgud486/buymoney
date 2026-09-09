@@ -38,8 +38,6 @@ for (const [from, to] of [
 }
 server = server.replaceAll('technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }', 'technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }');
 
-// Hardcoded Upbit list entries are metadata seeds only. Zero all quote-looking
-// values so a provider miss can never leak a plausible price or indicator.
 const upbitSeedPrices = ["108000000", "3850000", "215000", "820", "165", "540", "34000"];
 for (const value of upbitSeedPrices) {
   server = server.replaceAll(`price: ${value}, change: 0,`, `price: 0, change: 0,`);
@@ -69,7 +67,6 @@ if (server.includes(naverTier3Start)) {
 }
 server = server.replaceAll('accumulatedTradingVolume: data.accumulatedTradingVolume || "1,000"', 'accumulatedTradingVolume: data.accumulatedTradingVolume || "0"');
 
-// Public quote fetcher must not return the metadata seed on provider failure.
 const fetchStartToken = "async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {";
 const fetchEndToken = "\n// Pass-through function to preserve exact real market quotes without pseudo-random corruption";
 const fetchStart = server.indexOf(fetchStartToken);
@@ -91,7 +88,6 @@ if (!fetchBlock.includes("PUBLIC_VERIFIED_QUOTE_SANITIZER")) {
     "    return fallbackCached.data;",
     "    return sanitizeVerifiedQuote(fallbackCached.data);"
   );
-  // Yahoo branch previously adjusted a seed RSI based on price movement. Remove it.
   fetchBlock = fetchBlock.replace(
     `        let realRsi = preset.technical.rsi;\n        if (changePct > 1.5) realRsi = Math.min(80, realRsi + 3);\n        else if (changePct < -1.5) realRsi = Math.max(20, realRsi - 3);\n        \n`,
     ""
@@ -101,9 +97,18 @@ if (!fetchBlock.includes("PUBLIC_VERIFIED_QUOTE_SANITIZER")) {
     `          technical: { rsi: 0, macd: \"NO_DATA\", bollinger: \"NO_DATA\", trend: \"sideways\" }`
   );
 }
+
+// Idempotent second-pass hardening: even after the sanitizer already exists,
+// cached entries must never bypass it and only sanitized data may enter cache.
+fetchBlock = fetchBlock.replace("    return cached.data;", "    return sanitizeVerifiedQuote(cached.data);");
+fetchBlock = fetchBlock.replaceAll("data: stockRes, expiresAt:", "data: sanitizeVerifiedQuote(stockRes), expiresAt:");
+fetchBlock = fetchBlock.replace("    return fallbackCached.data;", "    return sanitizeVerifiedQuote(fallbackCached.data);");
+fetchBlock = fetchBlock.replace(
+  "        const currentPrice = meta.regularMarketPrice || preset.price;\n        const prevClose = meta.chartPreviousClose || meta.previousClose || currentPrice;",
+  "        const currentPrice = Number(meta.regularMarketPrice);\n        const prevClose = Number(meta.chartPreviousClose || meta.previousClose);\n        if (!(currentPrice > 0) || !(prevClose > 0)) throw new Error(\"MISSING_VERIFIED_US_QUOTE_REFERENCE\");"
+);
 server = server.slice(0, fetchStart) + fetchBlock + server.slice(fetchEnd);
 
-// Index data must not use configured display presets when provider fields are missing.
 server = server.replace(
   "    const current = meta.regularMarketPrice || defaultVal.value;\n    const prev = meta.previousClose || meta.chartPreviousClose || defaultVal.value;",
   "    const current = Number(meta.regularMarketPrice);\n    const prev = Number(meta.previousClose || meta.chartPreviousClose);\n    if (!(current > 0) || !(prev > 0)) throw new Error(\"MISSING_VERIFIED_INDEX_PRICE\");"
@@ -120,11 +125,13 @@ for (const token of [
   'accumulatedTradingVolume: "1,000,000"',
   "return preset;",
   "meta.regularMarketPrice || defaultVal.value",
-  "Math.round(realRsi)"
+  "Math.round(realRsi)",
+  "return cached.data;",
+  "data: stockRes, expiresAt:"
 ]) {
   if (server.includes(token)) throw new Error(`FORBIDDEN_PUBLIC_FAKE_FALLBACK_REMAINS:${token}`);
 }
 if (!server.includes("PUBLIC_VERIFIED_QUOTE_SANITIZER")) throw new Error("PUBLIC_QUOTE_SANITIZER_NOT_INSTALLED");
 
 fs.writeFileSync(serverPath, server, "utf8");
-console.log("Public stock/search/detail/naver/index routes now fail closed and strip unverified quote metadata.");
+console.log("Public stock/search/detail/naver/index routes now fail closed and strip unverified quote metadata, including cache paths.");
