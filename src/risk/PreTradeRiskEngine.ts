@@ -52,7 +52,12 @@ export function evaluatePreTrade(
     return { pass: false, reason: "SESSION_NOT_CONFIRMED" };
   }
 
-  if (ctx.brokerHealthy !== true) {
+  // Broker connectivity is an execution concern. SHADOW/SIGNAL_ONLY must be
+  // able to evaluate the non-broker risk gates without touching a broker.
+  const isLiveExecutionMode =
+    policy.mode === "LIVE_RESTRICTED" || policy.mode === "LIVE";
+
+  if (isLiveExecutionMode && ctx.brokerHealthy !== true) {
     return { pass: false, reason: "BROKER_NOT_HEALTHY" };
   }
 
