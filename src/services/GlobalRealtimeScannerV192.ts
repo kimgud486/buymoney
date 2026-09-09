@@ -4,11 +4,12 @@
 // ----------------------------------------------------------------------
 
 import { getAllStocks, LiveStockItem } from "../data/stockUniverse";
-import { realtimeMarketFeedService, LiveMarketQuote, requireLiveData } from "./realtimeMarketFeedService";
+import { realtimeMarketFeedService, requireLiveData } from "./realtimeMarketFeedService";
 import { realCandleStore } from "./RealCandleStore";
 import { IndicatorTruthEngine } from "./IndicatorTruthEngine";
-import { PatternTruthEngineV192, PatternTruthResultV192 } from "./PatternTruthEngineV192";
+import { PatternTruthEngineV192 } from "./PatternTruthEngineV192";
 import { Candle } from "./StructureBrain";
+import { koreaYesOnlyHotListRuntimeV204 } from "../../server/v20/KoreaYesOnlyHotListRuntimeV204";
 
 export type UsExchange = "NASDAQ" | "NYSE" | "AMEX" | "UNKNOWN";
 
@@ -35,8 +36,8 @@ export interface HotListItemV192 {
   currentPrice: number;
   priceChange24hPct: number;
   volatilityScore: number;
-  aiMatchScore: number; // Equal to setupScore
-  expectedReturnPct: number | null; // ATR 2R Planning Objective (null if no ATR)
+  aiMatchScore: number;
+  expectedReturnPct: number | null;
   planningObjectiveNote: string;
   patternType: string;
   patternName: string;
@@ -66,6 +67,13 @@ export interface ScanResultV192 {
     UPBIT: number;
   };
   hotItems: HotListItemV192[];
+  v204?: {
+    koreaStrictEnabled: boolean;
+    yesOnly: boolean;
+    evaluatedCount: number;
+    rejectedCount: number;
+    note: string;
+  };
 }
 
 const US_EXCHANGE_MAP: Record<string, UsExchange> = {
@@ -81,9 +89,7 @@ const US_EXCHANGE_MAP: Record<string, UsExchange> = {
  * Universal V19.2 Stock Scanner Logic with Strict Real-Data Integrity
  */
 export class GlobalRealtimeScannerV192 {
-  /**
-   * Normalize market input string (BTC/CRYPTO -> UPBIT)
-   */
+  /** Normalize market input string (BTC/CRYPTO -> UPBIT). */
   public static normalizeMarketInput(marketInput?: string): "ALL" | "KOREA" | "US" | "UPBIT" {
     if (!marketInput || marketInput === "ALL") return "ALL";
     const u = marketInput.toUpperCase();
@@ -93,9 +99,7 @@ export class GlobalRealtimeScannerV192 {
     return "ALL";
   }
 
-  /**
-   * Scan market with strict live data requirement and PatternTruthEngineV192
-   */
+  /** Scan market with strict live data requirement and PatternTruthEngineV192. */
   public static scanMarket(
     stocks: LiveStockItem[],
     marketType: "KOREA" | "US" | "UPBIT",
@@ -117,9 +121,8 @@ export class GlobalRealtimeScannerV192 {
     for (const stock of stocks) {
       scannedCount++;
 
-      // Unknown US exchange stays UNKNOWN (not forced to NASDAQ!)
-      const exchange: UsExchange | string = marketType === "US" 
-        ? (US_EXCHANGE_MAP[stock.symbol] || "UNKNOWN") 
+      const exchange: UsExchange | string = marketType === "US"
+        ? (US_EXCHANGE_MAP[stock.symbol] || "UNKNOWN")
         : marketType;
 
       if (marketType === "US" && exchangeFilter !== "ALL" && exchange !== exchangeFilter) {
@@ -127,16 +130,12 @@ export class GlobalRealtimeScannerV192 {
       }
 
       const quote = realtimeMarketFeedService.getQuote(stock.symbol);
-
-      // DATA INTEGRITY GATE: Must satisfy requireLiveData(quote)
       if (!requireLiveData(quote)) {
-        continue; // Skip non-live or unverified execution quotes
+        continue;
       }
 
       const price = quote!.price;
       const candles15m = realCandleStore.getCachedCandles(stock.symbol, "15m");
-
-      // Minimum 35 candles required for warm-up of indicators
       if (!candles15m || candles15m.length < 35) {
         continue;
       }
@@ -159,7 +158,6 @@ export class GlobalRealtimeScannerV192 {
       const rsi = snapshot.rsi14;
       const atr = snapshot.atr14;
 
-      // Filter pattern if specific pattern requested
       const bullishPatterns = patternResults.filter(p => p.direction === "BULLISH");
       if (patternFilter !== "ALL") {
         const matchesPattern = patternResults.some(
@@ -169,20 +167,16 @@ export class GlobalRealtimeScannerV192 {
         if (!matchesPattern) continue;
       }
 
-      // Risk Guards
       const distFromVwap = vwap != null ? ((price - vwap) / vwap) * 100 : 0;
       const chaseRisk = vwap != null && distFromVwap > 7.5;
       const exhaustionRisk = Math.abs(changePct) > 30.0 || (rsi != null && rsi > 80);
-
       if (chaseRisk || exhaustionRisk) continue;
 
-      // Evidence-Driven Setup Score (0 to 100)
       let evidenceCount = 0;
       const evidenceList: string[] = [];
       let totalMaxPoints = 0;
       let earnedPoints = 0;
 
-      // 1. Price Momentum (Max 20)
       totalMaxPoints += 20;
       if (changePct > 0) {
         earnedPoints += Math.min(20, changePct * 2);
@@ -190,7 +184,6 @@ export class GlobalRealtimeScannerV192 {
         evidenceList.push(`24h 변동률 +${changePct.toFixed(2)}% 모멘텀`);
       }
 
-      // 2. Relative Volume RVOL (Max 20)
       if (rvol != null) {
         totalMaxPoints += 20;
         if (rvol >= 2.0) {
@@ -203,17 +196,15 @@ export class GlobalRealtimeScannerV192 {
         evidenceCount++;
       }
 
-      // 3. VWAP Support/Breakout (Max 20)
       if (vwap != null) {
         totalMaxPoints += 20;
         if (price >= vwap) {
           earnedPoints += 20;
-          evidenceList.push(`VWAP $${vwap.toFixed(2)} 지지선 상회`);
+          evidenceList.push(`VWAP ${vwap.toFixed(2)} 지지선 상회`);
         }
         evidenceCount++;
       }
 
-      // 4. RSI Range (Max 20)
       if (rsi != null) {
         totalMaxPoints += 20;
         if (rsi >= 45 && rsi <= 72) {
@@ -223,7 +214,6 @@ export class GlobalRealtimeScannerV192 {
         evidenceCount++;
       }
 
-      // 5. Verified Candlestick Pattern Evidence (Max 20)
       if (bullishPatterns.length > 0) {
         totalMaxPoints += 20;
         const topPattern = bullishPatterns[0];
@@ -234,7 +224,6 @@ export class GlobalRealtimeScannerV192 {
 
       const coverageRatio = totalMaxPoints > 0 ? totalMaxPoints / 100 : 0;
       const setupScore = totalMaxPoints > 0 ? Math.round((earnedPoints / totalMaxPoints) * 100) : 0;
-
       if (setupScore < minSetupScore) continue;
 
       let grade: HotListItemV192["grade"] = "REJECT";
@@ -242,10 +231,8 @@ export class GlobalRealtimeScannerV192 {
       else if (setupScore >= 70) grade = "A";
       else if (setupScore >= 55) grade = "B";
       else if (setupScore >= 45) grade = "WATCH";
-
       if (grade === "REJECT") continue;
 
-      // Planning Objective based ONLY on actual ATR (No fallback multiplier like price * 0.02!)
       let stopLoss: number | null = null;
       let targetPrice: number | null = null;
       let planningYieldPct: number | null = null;
@@ -258,7 +245,6 @@ export class GlobalRealtimeScannerV192 {
         rrRatio = stopLoss < price ? "1 : " + ((targetPrice - price) / (price - stopLoss)).toFixed(1) : "1 : 2.0";
       }
 
-      // If minObjectivePct filter is requested and ATR planning yield is insufficient or missing, skip
       if (minObjectivePct > 0) {
         if (planningYieldPct == null || planningYieldPct < minObjectivePct) {
           continue;
@@ -268,7 +254,6 @@ export class GlobalRealtimeScannerV192 {
       const topBull = bullishPatterns[0];
       const patternType = topBull ? topBull.patternId : "TECHNICAL_SETUP";
       const patternName = topBull ? topBull.patternName : "실시간 수급 변곡 패턴";
-
       const reasoning = `[${marketType} 실시간 스캐너] ${evidenceList.slice(0, 3).join(", ")}.`;
 
       results.push({
@@ -318,9 +303,7 @@ export class GlobalRealtimeScannerV192 {
   }
 }
 
-/**
- * Top-level Scan Execution Function for AI Hot List V19.2
- */
+/** Top-level Scan Execution Function for AI Hot List V19.2 + Korea V20.4. */
 export async function scanGlobalRealtimeHotListV192(options?: {
   marketFilter?: "ALL" | "KOREA" | "US" | "UPBIT" | "BTC" | "CRYPTO";
   exchangeFilter?: string;
@@ -371,6 +354,23 @@ export async function scanGlobalRealtimeHotListV192(options?: {
     totalScanned += upbitRes.scannedCount;
   }
 
+  let v204Meta: ScanResultV192["v204"] | undefined;
+
+  // Korea mode is now a strict YES-only publication path. The V19.2 scan is
+  // only a prefilter. A symbol is not returned to the user until KIS 1m +
+  // Daily history, 1m/3m/5m True MTF, freshness, and V20 setup gates all pass.
+  if (normalizedMarket === "KOREA") {
+    const strict = await koreaYesOnlyHotListRuntimeV204.filterYesOnly(hotItems);
+    hotItems = strict.approved;
+    v204Meta = {
+      koreaStrictEnabled: true,
+      yesOnly: true,
+      evaluatedCount: strict.evaluatedCount,
+      rejectedCount: strict.rejectedCount,
+      note: "KOREA 결과는 KIS 역사봉 + True MTF + V20.4 최종 게이트를 통과한 YES 후보만 표시합니다. 빈 순위는 WATCH/NO로 채우지 않습니다."
+    };
+  }
+
   hotItems.sort((a, b) => b.setupScore - a.setupScore);
 
   const dataStatus = hotItems.length > 0 ? "REALTIME_VERIFIED" : "NO_DATA";
@@ -385,6 +385,7 @@ export async function scanGlobalRealtimeHotListV192(options?: {
       US: usCount,
       UPBIT: upbitCount
     },
-    hotItems
+    hotItems,
+    ...(v204Meta ? { v204: v204Meta } : {})
   };
 }
