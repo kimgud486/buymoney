@@ -12,20 +12,6 @@ function badgeClass(direction: "BULLISH" | "BEARISH" | "NEUTRAL"): string {
   return "border-slate-700 bg-slate-800/70 text-slate-300";
 }
 
-function isStructurePattern(id: string): boolean {
-  return [
-    "DOUBLE_BOTTOM",
-    "HIGHER_LOW",
-    "HL_HH_MSS",
-    "RESISTANCE_BREAKOUT",
-    "BREAKOUT_RETEST_HOLD",
-    "FAILED_BREAKDOWN",
-    "VWAP_RECLAIM",
-    "VOLUME_EXPANSION_BREAKOUT",
-    "FIRST_PULLBACK_HOLD",
-  ].includes(id);
-}
-
 export const VerifiedPatternStatusPanel: React.FC = () => {
   const [symbol, setSymbol] = useState("");
   const [result, setResult] = useState<VerifiedSignalResult | null>(null);
@@ -80,16 +66,17 @@ export const VerifiedPatternStatusPanel: React.FC = () => {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-xs font-black tracking-[0.16em] text-violet-300">
-              <Layers3 size={16} /> VERIFIED PATTERN ENGINE
+              <Layers3 size={16} /> VERIFIED MULTI-PATTERN ENGINE
             </div>
             <h3 className="mt-1 text-lg font-black">{symbol} 패턴 실행 상태</h3>
           </div>
           {result && (
             <div className="flex flex-wrap gap-2 text-xs font-bold">
-              <span className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2">총 등록 {result.patternRegistry.registered}</span>
+              <span className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2">고유 실행규칙 {result.patternRegistry.registered}</span>
               <span className="rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-blue-300">캔들 {result.patternRegistry.candleRegistered}</span>
               <span className="rounded-lg border border-fuchsia-500/30 bg-fuchsia-500/10 px-3 py-2 text-fuchsia-300">구조 {result.patternRegistry.structureRegistered}</span>
-              <span className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-cyan-300">실행 {result.patternRegistry.evaluated}</span>
+              <span className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-300">마스터 {result.patternRegistry.masterExecutableRegistered}</span>
+              <span className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-cyan-300">평가 {result.patternRegistry.evaluated}</span>
               <span className="rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-violet-300">탐지 {result.patternRegistry.matched}</span>
             </div>
           )}
@@ -97,7 +84,7 @@ export const VerifiedPatternStatusPanel: React.FC = () => {
 
         {loading && (
           <div className="mt-3 flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/70 px-4 py-4 text-sm text-slate-400">
-            <Loader2 size={17} className="animate-spin" /> 완료봉에서 캔들 + 차트 구조 패턴을 실제 실행 중...
+            <Loader2 size={17} className="animate-spin" /> 완료봉에서 캔들 + 차트 구조 + 마스터 규칙을 동시에 실행 중...
           </div>
         )}
 
@@ -109,18 +96,19 @@ export const VerifiedPatternStatusPanel: React.FC = () => {
 
         {result && !loading && (
           <>
-            <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-6">
+            <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-7">
               <Count label="상승 패턴" value={result.patternRegistry.bullishMatched} tone="BULLISH" />
               <Count label="약세 패턴" value={result.patternRegistry.bearishMatched} tone="BEARISH" />
               <Count label="캔들 탐지" value={result.patternRegistry.candleMatched} tone="NEUTRAL" />
               <Count label="구조 탐지" value={result.patternRegistry.structureMatched} tone="NEUTRAL" />
-              <Count label="총 탐지" value={result.patternRegistry.matched} tone="NEUTRAL" />
+              <Count label="마스터 탐지" value={result.patternRegistry.masterExecutableMatched} tone="NEUTRAL" />
+              <Count label="총 고유 탐지" value={result.patternRegistry.matched} tone="NEUTRAL" />
               <Count label="미탐지" value={Math.max(0, result.patternRegistry.evaluated - result.patternRegistry.matched)} tone="NEUTRAL" />
             </div>
 
             <div className="mt-3 rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
               <div className="flex items-center justify-between gap-3">
-                <div className="text-xs font-black text-slate-300">이번 완료봉에서 실제 탐지된 패턴</div>
+                <div className="text-xs font-black text-slate-300">이번 완료봉에서 실제 동시 탐지된 패턴</div>
                 {result.failedChecks.includes("BEARISH_PATTERN") ? (
                   <span className="inline-flex items-center gap-1 text-xs font-bold text-rose-300"><ShieldAlert size={14} /> 강한 약세 패턴으로 BUY 차단</span>
                 ) : (
@@ -129,17 +117,12 @@ export const VerifiedPatternStatusPanel: React.FC = () => {
               </div>
 
               {result.patternHits.length === 0 ? (
-                <div className="mt-3 text-sm text-slate-500">현재 완료봉에서는 등록 패턴이 탐지되지 않았습니다. 패턴을 억지로 생성하지 않습니다.</div>
+                <div className="mt-3 text-sm text-slate-500">현재 완료봉에서는 실행 규칙에 맞는 패턴이 없습니다. 패턴을 억지로 생성하지 않습니다.</div>
               ) : (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {result.patternHits.map((hit) => (
                     <div key={hit.id} className={`rounded-xl border px-3 py-2 ${badgeClass(hit.direction)}`}>
-                      <div className="flex items-center gap-2 text-xs font-black">
-                        <span>{hit.name}</span>
-                        <span className="rounded bg-black/20 px-1.5 py-0.5 text-[9px] opacity-80">
-                          {isStructurePattern(hit.id) ? "STRUCTURE" : "CANDLE"}
-                        </span>
-                      </div>
+                      <div className="text-xs font-black">{hit.name}</div>
                       <div className="mt-0.5 text-[10px] opacity-75">{hit.id} · {hit.direction} · {hit.confidence} · weight {hit.weight}</div>
                     </div>
                   ))}
@@ -148,7 +131,7 @@ export const VerifiedPatternStatusPanel: React.FC = () => {
             </div>
 
             <div className="mt-3 text-[11px] text-slate-500">
-              총 등록 수는 실제 TypeScript 판정 함수가 연결된 패턴만 집계합니다. 현재 캔들 패턴과 차트 구조 패턴을 별도로 실행하며, 이름만 저장된 미구현 카탈로그 항목은 포함하지 않습니다.
+              실행규칙 수는 실제 TypeScript 판정 함수가 연결된 항목만 집계합니다. 동일 코드가 캔들/구조/마스터 엔진에서 중복 탐지되면 가장 강한 결과 하나만 최종 탐지 수에 포함합니다.
             </div>
           </>
         )}
