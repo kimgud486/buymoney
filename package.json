@@ -12,12 +12,13 @@
     "test:e2e:safe-ai": "playwright test tests/e2e/safe-ai-scan.spec.ts --project=chromium",
     "test:python": "python3 -m unittest discover -s tests/python -p 'test_*.py'",
     "clean": "rm -rf dist server.js",
+    "audit:truth": "node scripts/check-production-truth-v5.mjs",
     "audit:fake-data": "node scripts/check-no-fake-production-data-v4.mjs",
     "audit:boundaries": "node scripts/check-production-import-boundaries.mjs",
     "audit:buttons": "node scripts/check-production-buttons.mjs",
-    "validate:v20": "node scripts/check-v20-production-truth.mjs && npm run audit:fake-data && npm run lint && npm test && npm run test:python && npm run build",
-    "validate:final": "node scripts/check-final-production-truth.mjs && node scripts/check-v20-production-truth.mjs && npm run audit:fake-data && npm run audit:boundaries && npm run audit:buttons && npm run lint && npm test && npm run test:python && npm run build",
-    "validate:rc5": "node scripts/check-rc5-production-truth.mjs && node scripts/check-final-production-truth.mjs && node scripts/check-v20-production-truth.mjs && npm run audit:fake-data && npm run audit:boundaries && npm run audit:buttons && npm run lint && npm test && npm run test:python && npm run build",
+    "validate:v20": "npm run audit:truth && node scripts/check-v20-production-truth.mjs && npm run audit:fake-data && npm run lint && npm test && npm run test:python && npm run build",
+    "validate:final": "npm run audit:truth && node scripts/check-final-production-truth.mjs && node scripts/check-v20-production-truth.mjs && npm run audit:fake-data && npm run audit:boundaries && npm run audit:buttons && npm run lint && npm test && npm run test:python && npm run build",
+    "validate:rc5": "npm run audit:truth && node scripts/check-rc5-production-truth.mjs && node scripts/check-final-production-truth.mjs && node scripts/check-v20-production-truth.mjs && npm run audit:fake-data && npm run audit:boundaries && npm run audit:buttons && npm run lint && npm test && npm run test:python && npm run build",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
