@@ -76,8 +76,6 @@ server = server.replaceAll(
   'message: "SIMULATION_ONLY: 실제 브로커 주문이 전송되지 않았습니다."'
 );
 
-// Legacy quant route must fail closed when provider evidence is incomplete.
-// Never manufacture OHLC, absolute volume, traded value, or a one-bar history.
 server = replaceExact(
   server,
   `    // Fallback if APIs were unreachable: fetch live quote via fetchLiveStockData
@@ -144,6 +142,57 @@ server = replaceExact(
   "QUANT_RVOL_REAL_ONLY"
 );
 
+// Pattern truth: no chart/candle pattern is a valid result. Never fill an
+// unmatched candidate with a bullish label just to keep the UI populated.
+server = replaceExact(
+  server,
+  '    let detectedCandlePattern = "Bullish Engulfing (상승 장악형)";',
+  '    let detectedCandlePattern = "NO_PATTERN";',
+  "QUANT_CANDLE_PATTERN_DEFAULT"
+);
+server = replaceExact(
+  server,
+  '    } else {\n      detectedCandlePattern = liveChangePct >= 0 ? "Bullish Engulfing (상승 장악형)" : "Tweezer Bottom (집게형 바닥)";\n    }\n\n    // 6. Real Chart Pattern Recognition',
+  '    }\n\n    // 6. Real Chart Pattern Recognition',
+  "QUANT_CANDLE_PATTERN_FORCED_FALLBACK"
+);
+server = replaceExact(
+  server,
+  '    let detectedChartPattern = "Double Bottom (더블 바텀)";',
+  '    let detectedChartPattern = "NO_PATTERN";',
+  "QUANT_CHART_PATTERN_DEFAULT"
+);
+server = replaceExact(
+  server,
+  '    } else if (sslSwept) {\n      detectedChartPattern = "Double Bottom (더블 바텀 반등)";\n    } else {\n      detectedChartPattern = "Inverse Head & Shoulders (역H&S 반전)";\n    }',
+  '    } else if (sslSwept) {\n      detectedChartPattern = "Double Bottom (더블 바텀 반등)";\n    }',
+  "QUANT_CHART_PATTERN_FORCED_FALLBACK"
+);
+server = replaceExact(
+  server,
+  '    const atr = candles.length > 1 ? +(sumTr / (candles.length - 1)).toFixed(2) : +(livePrice * 0.03).toFixed(2);',
+  '    const atr = +(sumTr / (candles.length - 1)).toFixed(2);',
+  "QUANT_ATR_NO_SYNTHETIC_FALLBACK"
+);
+server = replaceExact(
+  server,
+  '    // Factor 2: Candlestick Confirmation (Max 20 pts)\n    score += 20;',
+  '    // Factor 2: Candlestick Confirmation (Max 20 pts)\n    if (detectedCandlePattern !== "NO_PATTERN") score += 20;',
+  "QUANT_PATTERN_SCORE_ONLY_WHEN_DETECTED"
+);
+server = replaceExact(
+  server,
+  '      candleTag: idx === candles.length - 1 ? detectedCandlePattern.split(" ")[0] : undefined,',
+  '      candleTag: idx === candles.length - 1 && detectedCandlePattern !== "NO_PATTERN" ? detectedCandlePattern.split(" ")[0] : undefined,',
+  "QUANT_NO_PATTERN_CHART_TAG"
+);
+server = replaceExact(
+  server,
+  '      isTradeable: score >= 75 && rule30MinId !== "rule_rise_drop" && rule30MinId !== "rule_drop_fail",',
+  '      isTradeable: detectedCandlePattern !== "NO_PATTERN" && detectedChartPattern !== "NO_PATTERN" && score >= 75 && rule30MinId !== "rule_rise_drop" && rule30MinId !== "rule_drop_fail",',
+  "QUANT_TRADEABLE_REQUIRES_PATTERN"
+);
+
 scanner = replaceExact(
   scanner,
   '  currentPrice: number;\n  priceChange24hPct: number;',
@@ -175,7 +224,13 @@ const forbidden = [
   "liveVolume = 250000",
   "liveTradingValue = 1200",
   "recentVolumes.length > 1 ? recentVolumes.reduce",
-  "Math.max(0.5, currentVol / (avgVol || 1))"
+  "Math.max(0.5, currentVol / (avgVol || 1))",
+  'let detectedCandlePattern = "Bullish Engulfing (상승 장악형)"',
+  'detectedCandlePattern = liveChangePct >= 0 ? "Bullish Engulfing',
+  'let detectedChartPattern = "Double Bottom (더블 바텀)"',
+  'detectedChartPattern = "Inverse Head & Shoulders (역H&S 반전)"',
+  'candles.length > 1 ? +(sumTr / (candles.length - 1)).toFixed(2) : +(livePrice * 0.03)',
+  '// Factor 2: Candlestick Confirmation (Max 20 pts)\n    score += 20;'
 ];
 for (const token of forbidden) {
   if (server.includes(token)) throw new Error(`FORBIDDEN_LEGACY_TOKEN_REMAINS:${token}`);
