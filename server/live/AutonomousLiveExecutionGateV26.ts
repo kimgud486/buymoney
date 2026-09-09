@@ -16,10 +16,12 @@ export interface AutonomousLiveExecutionGateInput {
   marketDataAgeMs: number;
   maxMarketDataAgeMs?: number;
 
-  signalDecision: "YES" | "REVIEW_READY" | "WATCH" | "NO";
-  signalScore: number;
+  /** Entry signals are mandatory for BUY. SELL may be driven by a verified exit/stop event. */
+  signalDecision?: "YES" | "REVIEW_READY" | "WATCH" | "NO";
+  signalScore?: number;
   minimumSignalScore?: number;
   riskApproved: boolean;
+  exitTriggerVerified?: boolean;
 
   duplicateOrderDetected: boolean;
   pendingOrderExists: boolean;
@@ -84,15 +86,19 @@ export class AutonomousLiveExecutionGateV26 {
       reasons.push("MARKET_DATA_STALE");
     }
 
-    const minimumScore = Math.min(100, Math.max(0, input.minimumSignalScore ?? 82));
-    if (input.signalDecision !== "YES" && input.signalDecision !== "REVIEW_READY") {
-      reasons.push("SIGNAL_NOT_BUY_ELIGIBLE");
+    if (input.side === "BUY") {
+      const minimumScore = Math.min(100, Math.max(0, input.minimumSignalScore ?? 82));
+      if (input.signalDecision !== "YES") {
+        reasons.push("BUY_SIGNAL_NOT_YES");
+      }
+      if (!Number.isFinite(input.signalScore) || (input.signalScore as number) < minimumScore) {
+        reasons.push("SIGNAL_SCORE_BELOW_THRESHOLD");
+      }
+    } else if (input.exitTriggerVerified !== true) {
+      reasons.push("SELL_EXIT_TRIGGER_NOT_VERIFIED");
     }
-    if (!Number.isFinite(input.signalScore) || input.signalScore < minimumScore) {
-      reasons.push("SIGNAL_SCORE_BELOW_THRESHOLD");
-    }
-    if (!input.riskApproved) reasons.push("RISK_GATE_REJECTED");
 
+    if (!input.riskApproved) reasons.push("RISK_GATE_REJECTED");
     if (input.duplicateOrderDetected) reasons.push("DUPLICATE_ORDER_DETECTED");
     if (input.pendingOrderExists) reasons.push("PENDING_ORDER_ALREADY_EXISTS");
 
