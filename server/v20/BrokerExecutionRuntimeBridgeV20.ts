@@ -77,7 +77,6 @@ export class BrokerExecutionRuntimeBridgeV20 {
     };
 
     const runtimeEntryPrice = positionBefore.entryPrice;
-    const runtimePositionQtyBeforeFill = positionBefore.quantities.currentPositionQty;
     const setup = positionBefore.strategyId;
     const symbol = positionBefore.symbol;
 
@@ -88,7 +87,6 @@ export class BrokerExecutionRuntimeBridgeV20 {
       symbol,
       setup,
       runtimeEntryPrice,
-      runtimePositionQtyBeforeFill,
       nextState: newState
     });
 
