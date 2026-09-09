@@ -1,0 +1,61 @@
+name: Lockfile Repair Once
+
+on:
+  push:
+    branches:
+      - chatgpt/scanner-403-recovery
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lockfile-repair-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: chatgpt/scanner-403-recovery
+          fetch-depth: 0
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.20.2'
+          cache: npm
+
+      - name: Refresh package lock only
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+
+      - name: Verify clean npm ci
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Scanner gate tests
+        env:
+          VITE_FIREBASE_API_KEY: test-only-not-a-secret
+        run: node --import tsx --test tests/yesOnlyScannerGate.test.ts
+
+      - name: Production build
+        run: npm run build
+
+      - name: Commit repaired lockfile
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo "package-lock.json already synchronized"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "fix(ci): sync Playwright dependencies in package lock"
+          git push origin HEAD:chatgpt/scanner-403-recovery
