@@ -4,6 +4,10 @@ import {
   summarizePatternHits,
   type VerifiedPatternHit,
 } from "./verifiedPatternEngine";
+import {
+  VERIFIED_STRUCTURE_PATTERN_REGISTRY,
+  detectVerifiedStructurePatterns,
+} from "./verifiedStructurePatternEngine";
 
 export type ScannerDecision = "BUY_APPROVED" | "BUY_WATCH" | "NO_BUY";
 
@@ -29,6 +33,10 @@ export interface VerifiedSignalResult {
     matched: number;
     bullishMatched: number;
     bearishMatched: number;
+    candleRegistered: number;
+    structureRegistered: number;
+    candleMatched: number;
+    structureMatched: number;
   };
   reasons: string[];
   failedChecks: string[];
@@ -104,7 +112,7 @@ function atr(candles: ScannerCandle[], period = 14): number {
   return tail.reduce((a, b) => a + b, 0) / Math.max(1, tail.length);
 }
 
-function sessionVwap(candles: ScannerCandle[]): number {
+function rollingVwap(candles: ScannerCandle[]): number {
   let pv = 0;
   let vol = 0;
   for (const c of candles) {
@@ -172,10 +180,20 @@ export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalR
   const macdHist = macd - macdSignal;
   const currentRsi = rsi(closes);
   const currentAtr = atr(candles);
-  const vwap = sessionVwap(candles);
+  const vwap = rollingVwap(candles);
   const rvol = relativeVolume(candles);
   const hhhl = detectHHHL(candles);
-  const patternHits = detectVerifiedPatterns(candles);
+
+  const candlePatternHits = detectVerifiedPatterns(candles);
+  const structurePatternHits = detectVerifiedStructurePatterns(candles);
+  const patternHits = [...candlePatternHits, ...structurePatternHits]
+    .filter((hit, index, all) => all.findIndex((candidate) => candidate.id === hit.id) === index)
+    .sort((a, b) => {
+      const strongDiff = (b.confidence === "STRONG" ? 1 : 0) - (a.confidence === "STRONG" ? 1 : 0);
+      if (strongDiff !== 0) return strongDiff;
+      return b.weight - a.weight;
+    });
+
   const patternSummary = summarizePatternHits(patternHits);
   const strongestPattern = patternSummary.strongest;
   const strongBearishPattern = patternHits.some(
@@ -200,7 +218,7 @@ export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalR
 
   if (last.close >= vwap) {
     score += 15;
-    reasons.push("가격이 VWAP 위에서 유지");
+    reasons.push("가격이 rolling VWAP 위에서 유지");
   } else {
     failedChecks.push("VWAP");
   }
@@ -244,10 +262,14 @@ export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalR
     score += patternSummary.bullishScore;
     const bullishNames = patternHits
       .filter((hit) => hit.direction === "BULLISH")
-      .slice(0, 3)
+      .slice(0, 4)
       .map((hit) => hit.id)
       .join(", ");
-    reasons.push(`상승 캔들 패턴: ${bullishNames}`);
+    reasons.push(`검증 패턴: ${bullishNames}`);
+  }
+
+  if (structurePatternHits.length > 0) {
+    reasons.push(`차트 구조 ${structurePatternHits.length}개 실제 탐지`);
   }
 
   if (strongBearishPattern) {
@@ -286,6 +308,9 @@ export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalR
         ? "BEARISH"
         : "NEUTRAL";
 
+  const candleEvaluated = VERIFIED_PATTERN_REGISTRY.filter((item) => candles.length >= item.minBars).length;
+  const structureEvaluated = VERIFIED_STRUCTURE_PATTERN_REGISTRY.filter((item) => candles.length >= item.minBars).length;
+
   return {
     decision,
     score,
@@ -293,11 +318,15 @@ export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalR
     pattern: strongestPattern?.id ?? "NONE",
     patternHits,
     patternRegistry: {
-      registered: VERIFIED_PATTERN_REGISTRY.length,
-      evaluated: VERIFIED_PATTERN_REGISTRY.filter((item) => candles.length >= item.minBars).length,
+      registered: VERIFIED_PATTERN_REGISTRY.length + VERIFIED_STRUCTURE_PATTERN_REGISTRY.length,
+      evaluated: candleEvaluated + structureEvaluated,
       matched: patternHits.length,
       bullishMatched: patternHits.filter((hit) => hit.direction === "BULLISH").length,
       bearishMatched: patternHits.filter((hit) => hit.direction === "BEARISH").length,
+      candleRegistered: VERIFIED_PATTERN_REGISTRY.length,
+      structureRegistered: VERIFIED_STRUCTURE_PATTERN_REGISTRY.length,
+      candleMatched: candlePatternHits.length,
+      structureMatched: structurePatternHits.length,
     },
     reasons,
     failedChecks,
