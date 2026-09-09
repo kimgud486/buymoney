@@ -14,6 +14,7 @@ import { AiBotCommandCenterUi } from "./components/AiBotCommandCenterUi";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { VerifiedAiOpportunityScanner } from "./components/VerifiedAiOpportunityScanner";
 import { VerifiedDecisionDetailPanel } from "./components/VerifiedDecisionDetailPanel";
+import { VerifiedPatternStatusPanel } from "./components/VerifiedPatternStatusPanel";
 import { PatternRecognitionVisualGuide } from "./components/PatternRecognitionVisualGuide";
 import { evaluateVerifiedSignal } from "./scanner/verifiedSignalEngine";
 
@@ -42,7 +43,6 @@ function MainLayout() {
   const [patternSelection, setPatternSelection] = useState<VerifiedPatternSelection | null>(null);
 
   useEffect(() => {
-    // Clear any leftover security credentials from storage
     try {
       localStorage.removeItem("AISTOCK_SECURITY_PIN");
       localStorage.removeItem("AISTOCK_SECURITY_PHONE");
@@ -51,16 +51,13 @@ function MainLayout() {
       // ignore
     }
 
-    // Ensure document and body allow natural vertical scrolling
     document.body.style.overflow = "";
     document.body.style.position = "";
     document.documentElement.style.overflow = "";
 
     const handleOpenConsensus = (e: Event) => {
       const customEvent = e as CustomEvent<string>;
-      if (customEvent.detail) {
-        setConsensusSelectedSymbol(customEvent.detail);
-      }
+      if (customEvent.detail) setConsensusSelectedSymbol(customEvent.detail);
       setIsConsensusModalOpen(true);
     };
 
@@ -84,19 +81,22 @@ function MainLayout() {
           `/api/market/realtime-candles?symbol=${encodeURIComponent(symbol)}&timeframe=D&count=70`,
           { cache: "no-store" },
         );
-        if (!response.ok) {
-          throw new Error(`candle endpoint ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`candle endpoint ${response.status}`);
 
         const payload = await response.json();
         const candles = Array.isArray(payload?.candles) ? payload.candles : [];
         const result = evaluateVerifiedSignal(candles);
-        if (!result) {
-          throw new Error("verified signal engine returned no result");
-        }
+        if (!result) throw new Error("verified signal engine returned no result");
 
-        const detectedPatternCodes =
-          result.pattern && result.pattern !== "NONE" ? [String(result.pattern)] : [];
+        // Forward every actually detected pattern, not only the strongest pattern.
+        // Unsupported/catalog-only names are never injected into the visual guide.
+        const detectedPatternCodes = Array.from(
+          new Set(
+            result.patternHits
+              .filter((hit) => hit.direction !== "NEUTRAL")
+              .map((hit) => String(hit.id)),
+          ),
+        );
 
         setPatternSelection({
           symbol,
@@ -135,17 +135,19 @@ function MainLayout() {
     <div className="min-h-screen bg-white text-slate-800 flex flex-col font-sans relative">
       <RealtimeMarketStreamManager />
 
-      {/* Verified scanner: real candle/indicator checks, no fabricated score and no automatic order */}
       <ErrorBoundary>
         <VerifiedAiOpportunityScanner />
       </ErrorBoundary>
 
-      {/* Candidate detail: same completed-bar verification engine, with transparent score breakdown */}
       <ErrorBoundary>
         <VerifiedDecisionDetailPanel />
       </ErrorBoundary>
 
-      {/* Pattern guide is fed only by a fresh completed-candle verification after scanner selection. */}
+      {/* Transparent registry/evaluation/match counts for the executable pattern engine. */}
+      <ErrorBoundary>
+        <VerifiedPatternStatusPanel />
+      </ErrorBoundary>
+
       {patternSelection && (
         <ErrorBoundary>
           <div className="w-full border-b border-slate-200 bg-slate-50 px-4 md:px-6 py-5">
@@ -191,7 +193,6 @@ function MainLayout() {
         </ErrorBoundary>
       )}
 
-      {/* MASTER AI AUTO TRADING DASHBOARD */}
       <ErrorBoundary>
         {viewMode === "MASTER_IMAGE_EXACT" ? (
           <MasterAiAutoTradingDashboard
@@ -210,10 +211,8 @@ function MainLayout() {
         )}
       </ErrorBoundary>
 
-      {/* Global Real-time Toast Notifications */}
       <ToastContainer />
 
-      {/* AI Multi-Model Securities Consensus Modal */}
       <ErrorBoundary>
         <MultiModelSecuritiesConsensusModal
           isOpen={isConsensusModalOpen}
