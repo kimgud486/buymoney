@@ -1286,27 +1286,8 @@ app.get("/api/market/naver-batch", async (req, res) => {
     }
   } catch (err) {}
 
-  // Tier 3: Internal Universe fallback to ensure 100% endpoint reliability
-  const universeFallback = codeList.map((code) => {
-    const preset = DEMO_STOCKS.find((p) => p.symbol === code);
-    const pPrice = preset?.price || 50000;
-    return {
-      itemCode: code,
-      stockName: preset?.name || `종목_${code}`,
-      closePrice: String(pPrice),
-      closePriceRaw: String(pPrice),
-      compareToPreviousClosePrice: "500",
-      compareToPreviousClosePriceRaw: "500",
-      fluctuationsRatio: "1.00",
-      fluctuationsRatioRaw: "1.00",
-      compareToPreviousPrice: { code: "2", name: "RISING" },
-      stockExchangeType: { nameKor: "코스피" },
-      marketValueFull: "실시간 연동",
-      accumulatedTradingVolume: "1,000,000"
-    };
-  });
-
-  return res.json({ datas: universeFallback });
+  // No synthetic Tier 3. Missing providers remain NO_DATA.
+  return res.status(503).json({ datas: [], dataStatus: "NO_DATA", source: "NAVER_REAL_ONLY" });
 });
 
 let cachedUpbitMarkets: { market: string; korean_name: string; english_name: string }[] = [];
