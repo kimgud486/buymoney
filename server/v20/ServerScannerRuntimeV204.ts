@@ -3,7 +3,10 @@ import {
   ScanCandidateResult,
   ServerGlobalRealtimeScannerV20,
 } from "./ServerGlobalRealtimeScannerV20";
-import { TrueMTFTimeframeV20 } from "./TrueMTFSignalGateV20";
+import {
+  TrueMTFEvidenceV20,
+  TrueMTFTimeframeV20,
+} from "./TrueMTFSignalGateV20";
 import {
   RuntimeBarV204,
   RuntimeHistorySourceV204,
@@ -18,15 +21,23 @@ export interface RuntimeScanResultV204 {
   runtimeReadiness: TrueMTFRuntimeReadinessV204;
 }
 
+const REQUIRED_FRAMES: TrueMTFTimeframeV20[] = ["1m", "3m", "5m", "D"];
+
+function allFramesExecutionVerified(evidence: TrueMTFEvidenceV20): boolean {
+  return REQUIRED_FRAMES.every(
+    (timeframe) => evidence[timeframe]?.dataStatus === "REALTIME_VERIFIED",
+  );
+}
+
 /**
  * Runtime bridge for the production scanner.
  *
  * Flow:
- * broker historical bars -> seedHistory()
- * verified live ticks     -> ingestTick()
- * candidate features      -> evaluateCandidate()
- *                          -> TrueMTF evidence is injected automatically
- *                          -> stale/missing frames can never become BUY
+ * verified broker historical bars -> seedHistory()
+ * verified live ticks             -> ingestTick()
+ * candidate features              -> evaluateCandidate()
+ *                                  -> TrueMTF evidence injected automatically
+ *                                  -> missing/stale/derived frames can never BUY
  */
 export class ServerScannerRuntimeV204 {
   public constructor(
@@ -72,7 +83,7 @@ export class ServerScannerRuntimeV204 {
         runtimeReadiness: {
           ready: false,
           fresh: false,
-          missingTimeframes: ["1m", "3m", "5m", "D"],
+          missingTimeframes: [...REQUIRED_FRAMES],
           staleTimeframes: [],
           reasons: ["TRUE_MTF_RUNTIME_NOT_SUPPORTED_FOR_MARKET"],
         },
@@ -87,10 +98,26 @@ export class ServerScannerRuntimeV204 {
       now,
     );
 
-    const scan = ServerGlobalRealtimeScannerV20.evaluateCandidate({
+    let scan = ServerGlobalRealtimeScannerV20.evaluateCandidate({
       ...candidate,
       trueMtf,
     });
+
+    // Technical analysis may inspect REALTIME_DERIVED evidence, but autonomous
+    // BUY promotion requires four independently verified execution-grade frames.
+    if (
+      scan.recommendation === "BUY_CANDIDATE" &&
+      !allFramesExecutionVerified(trueMtf)
+    ) {
+      scan = {
+        ...scan,
+        recommendation: "WATCH",
+        rejectionReason: "TRUE_MTF_NOT_EXECUTION_VERIFIED:1m+3m+5m+D",
+        missingFields: Array.from(
+          new Set([...scan.missingFields, "trueMTFExecutionVerified"]),
+        ),
+      };
+    }
 
     return { scan, runtimeReadiness };
   }
@@ -120,3 +147,6 @@ export class ServerScannerRuntimeV204 {
       .slice(0, Math.max(0, Math.floor(topN)));
   }
 }
+
+/** Shared server singleton. KIS realtime and scanner routes must use this instance. */
+export const serverScannerRuntimeV204 = new ServerScannerRuntimeV204();
