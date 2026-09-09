@@ -4,7 +4,7 @@ import { VERIFIED_PATTERN_REGISTRY } from "./verifiedPatternEngine";
 import { VERIFIED_STRUCTURE_PATTERN_REGISTRY } from "./verifiedStructurePatternEngine";
 import { MASTER_EXECUTABLE_PATTERN_RULES } from "./masterPatternDetectionEngine";
 import { MASTER_PATTERN_EXPANSION_RULES } from "./masterPatternExpansionEngine";
-import { INTRADAY_PATTERN_REGISTRY } from "./intradayOrbPatternEngine";
+import { VERIFIED_INTRADAY_PATTERN_REGISTRY } from "./verifiedIntradayPatternEngine";
 
 export type PatternAuditDirection = "BULLISH" | "BEARISH";
 
@@ -62,7 +62,7 @@ export function buildPatternExecutionAudit() {
   for (const pattern of MASTER_PATTERN_EXPANSION_RULES) {
     addEngine(engineMap, pattern.id, pattern.direction, "EXPANSION");
   }
-  for (const pattern of INTRADAY_PATTERN_REGISTRY) {
+  for (const pattern of VERIFIED_INTRADAY_PATTERN_REGISTRY) {
     addEngine(engineMap, pattern.id, pattern.direction, "INTRADAY_5M");
   }
 
@@ -137,7 +137,7 @@ export function buildPatternExecutionAudit() {
     orphanExecutableRules,
     orphanExecutableCodes: orphanExecutableRules,
     directionMismatches,
-    intradayRegistered: INTRADAY_PATTERN_REGISTRY.length,
+    intradayRegistered: VERIFIED_INTRADAY_PATTERN_REGISTRY.length,
     rows: deduped,
   };
 }
