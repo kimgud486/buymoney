@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
 import { GraphShapeScanner, CandleData } from "../src/scanner/GraphShapeScanner";
 
 describe("GraphShapeScanner Unit Tests", () => {
@@ -19,9 +20,8 @@ describe("GraphShapeScanner Unit Tests", () => {
 
       const open = price - 50;
       const low = price - 60;
-      const close = price + 30; // Strong close near top
+      const close = price + 30;
       const high = price + 40;
-      // High volume breakout on recent candles
       const volume = i >= count - 5 ? 100000 : 20000;
 
       result.push({ open, high, low, close, volume, timestamp: Date.now() - (count - i) * 60000 });
@@ -33,37 +33,36 @@ describe("GraphShapeScanner Unit Tests", () => {
     const candles = generateSampleCandles(60, "UP");
     const result = scanner.scan(candles, "005930");
 
-    expect(result.graphScore).toBeGreaterThan(60);
-    expect(result.details.emaAligned).toBe(true);
-    expect(result.timeframeChecks.passedCount).toBeGreaterThanOrEqual(2);
+    assert.ok(result.graphScore > 60);
+    assert.equal(result.details.emaAligned, true);
+    assert.ok(result.timeframeChecks.passedCount >= 2);
   });
 
   it("detects Fake Breakout and penalizes score with blocker", () => {
     const candles = generateSampleCandles(50, "UP");
-    // Simulate fake breakout: current High exceeds prev 20-high, but Close drops back low with low RVOL
     const maxPrevHigh = Math.max(...candles.slice(29, 49).map((c) => c.high));
     candles[49] = {
       open: maxPrevHigh - 100,
-      high: maxPrevHigh + 500, // spikes above resistance
-      close: maxPrevHigh - 200, // closes back below resistance
+      high: maxPrevHigh + 500,
+      close: maxPrevHigh - 200,
       low: maxPrevHigh - 300,
-      volume: 100, // low volume
+      volume: 100,
     };
 
     const result = scanner.scan(candles, "005930");
-    expect(result.details.fakeBreakout).toBe(true);
-    expect(result.blockers.some((b) => b.includes("FAKE_BREAKOUT"))).toBe(true);
-    expect(result.verdict).toBe("NO");
+    assert.equal(result.details.fakeBreakout, true);
+    assert.equal(result.blockers.some((b) => b.includes("FAKE_BREAKOUT")), true);
+    assert.equal(result.verdict, "NO");
   });
 
   it("evaluates W-Bottom pattern correctly", () => {
     const candles: CandleData[] = [];
     let base = 50000;
     for (let i = 0; i < 40; i++) {
-      if (i < 10) base -= 500; // First dip
-      else if (i < 20) base += 400; // Neckline rally
-      else if (i < 30) base -= 400; // Second dip
-      else base += 600; // Breakout above neckline
+      if (i < 10) base -= 500;
+      else if (i < 20) base += 400;
+      else if (i < 30) base -= 400;
+      else base += 600;
 
       candles.push({
         open: base - 100,
@@ -75,7 +74,7 @@ describe("GraphShapeScanner Unit Tests", () => {
     }
 
     const result = scanner.scan(candles, "005930");
-    expect(result.details.wBottom).toBe(true);
-    expect(result.patterns.includes("W_BOTTOM_BREAKOUT")).toBe(true);
+    assert.equal(result.details.wBottom, true);
+    assert.equal(result.patterns.includes("W_BOTTOM_BREAKOUT"), true);
   });
 });
