@@ -44,6 +44,8 @@ export interface CoordinatorConfig {
   maxPositionWeight: number;
   minEnsembleScore: number;
   gate: ProductionAutonomyGateInput;
+  killSwitchActive?: boolean;
+  sessionId?: string;
 }
 
 export interface CoordinatorDecision {
@@ -65,8 +67,9 @@ const roundQty = (cash: number, price: number, maxWeight: number): number => {
  * Single authoritative coordinator for:
  * YES scanner -> ensemble verification -> activation gate -> account risk -> broker.
  *
- * The coordinator is dependency-injected so production can wire only real server-side
- * broker/risk adapters, while tests can use harmless fakes. It never fabricates market data.
+ * Architectural separation follows the same broad idea used by open-source
+ * quantitative platforms such as Qlib/FinRL: alpha/signal, risk, and execution
+ * are isolated. This implementation is original TypeScript and fail-closed.
  */
 export class ProductionAutonomousTradeCoordinator {
   constructor(
@@ -79,15 +82,13 @@ export class ProductionAutonomousTradeCoordinator {
     const candidates = await this.source.scanYesOnly(config.maxCandidates);
     const gateResult = ProductionAutonomyGate.evaluate({ ...config.gate, mode: config.mode });
     const decisions: CoordinatorDecision[] = [];
+    const submittedThisRun = new Set<string>();
 
     for (const candidate of candidates) {
       const evaluation = OpenSourceSignalEnsemble.evaluateCandidate(candidate);
       const symbol = evaluation.symbol;
 
-      if (
-        evaluation.decision !== "YES" &&
-        evaluation.decision !== "REVIEW_READY"
-      ) {
+      if (evaluation.decision !== "YES" && evaluation.decision !== "REVIEW_READY") {
         decisions.push({
           symbol,
           status: "SKIP",
@@ -117,6 +118,16 @@ export class ProductionAutonomousTradeCoordinator {
         continue;
       }
 
+      if (config.killSwitchActive) {
+        decisions.push({
+          symbol,
+          status: "BLOCKED",
+          evaluation,
+          reasons: ["KILL_SWITCH_ACTIVE"],
+        });
+        continue;
+      }
+
       if (!gateResult.canSubmitLiveOrder) {
         decisions.push({
           symbol,
@@ -139,14 +150,10 @@ export class ProductionAutonomousTradeCoordinator {
         continue;
       }
 
-      const clientOrderKey = [
-        "AUTO",
-        symbol,
-        evaluation.evaluatedAt.slice(0, 16),
-        evaluation.entryPrice,
-      ].join(":");
+      const sessionId = config.sessionId || new Date().toISOString().slice(0, 10);
+      const clientOrderKey = ["AUTO", sessionId, symbol, "BUY"].join(":");
 
-      if (snapshot.existingOpenOrderKeys.includes(clientOrderKey)) {
+      if (submittedThisRun.has(clientOrderKey) || snapshot.existingOpenOrderKeys.includes(clientOrderKey)) {
         decisions.push({
           symbol,
           status: "BLOCKED",
@@ -177,6 +184,7 @@ export class ProductionAutonomousTradeCoordinator {
         continue;
       }
 
+      submittedThisRun.add(clientOrderKey);
       const order = await this.broker.submitOrder({
         symbol,
         market: evaluation.market,
