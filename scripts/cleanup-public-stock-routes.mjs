@@ -38,6 +38,15 @@ for (const [from, to] of [
 }
 server = server.replaceAll('technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }', 'technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }');
 
+// Hardcoded Upbit list entries are metadata seeds only. Zero all quote-looking
+// values so a provider miss can never leak a plausible price or indicator.
+const upbitSeedPrices = ["108000000", "3850000", "215000", "820", "165", "540", "34000"];
+for (const value of upbitSeedPrices) {
+  server = server.replaceAll(`price: ${value}, change: 0,`, `price: 0, change: 0,`);
+}
+server = server.replaceAll(/marketCap: "[0-9,.]+조원"/g, 'marketCap: "N/A"');
+server = server.replaceAll(/technical: \{ rsi: (?:48|49|52|53|54|55|61), macd: "(?:Bullish|Neutral)", bollinger: "(?:upper|middle)", trend: "(?:up|sideways)" \}/g, 'technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }');
+
 replaceAllExact(
   "    } catch (err: any) {\n      // Quiet fallback to synthetic history\n    }\n  }\n  \n  if (!history || history.length === 0) {\n    history = generateHistory(tickedPreset.price, 30);\n  }",
   "    } catch (err: any) {\n      console.warn(`[Stock Detail] verified history unavailable for ${tickedPreset.symbol}:`, err?.message || err);\n    }\n  }\n  \n  if (!history || history.length === 0) {\n    history = [];\n  }",
@@ -58,6 +67,47 @@ if (server.includes(naverTier3Start)) {
   const replacement = `  // No synthetic Tier 3. Missing providers remain NO_DATA.\n  return res.status(503).json({ datas: [], dataStatus: \"NO_DATA\", source: \"NAVER_REAL_ONLY\" });`;
   server = server.slice(0, start) + replacement + server.slice(end);
 }
+server = server.replaceAll('accumulatedTradingVolume: data.accumulatedTradingVolume || "1,000"', 'accumulatedTradingVolume: data.accumulatedTradingVolume || "0"');
+
+// Public quote fetcher must not return the metadata seed on provider failure.
+const fetchStartToken = "async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {";
+const fetchEndToken = "\n// Pass-through function to preserve exact real market quotes without pseudo-random corruption";
+const fetchStart = server.indexOf(fetchStartToken);
+const fetchEnd = server.indexOf(fetchEndToken, fetchStart);
+if (fetchStart < 0 || fetchEnd < 0) throw new Error("FETCH_LIVE_STOCK_DATA_BOUNDARY_NOT_FOUND");
+let fetchBlock = server.slice(fetchStart, fetchEnd);
+
+if (!fetchBlock.includes("PUBLIC_VERIFIED_QUOTE_SANITIZER")) {
+  fetchBlock = fetchBlock.replace(
+    fetchStartToken,
+    `${fetchStartToken}\n  // PUBLIC_VERIFIED_QUOTE_SANITIZER: public quote endpoints may expose only\n  // provider-verified price fields. Fundamentals/TA placeholders are never truth.\n  const sanitizeVerifiedQuote = (data: PresetStock): PresetStock => ({\n    ...data,\n    per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0,\n    technical: { rsi: 0, macd: \"NO_DATA\", bollinger: \"NO_DATA\", trend: \"sideways\" }\n  });`
+  );
+  fetchBlock = fetchBlock.replaceAll("return stockRes;", "return sanitizeVerifiedQuote(stockRes);");
+  fetchBlock = fetchBlock.replace(
+    "  return preset;\n}",
+    "  return sanitizeVerifiedQuote({ ...preset, price: 0, change: 0, changePct: 0, marketCap: \"N/A\" });\n}"
+  );
+  fetchBlock = fetchBlock.replace(
+    "    return fallbackCached.data;",
+    "    return sanitizeVerifiedQuote(fallbackCached.data);"
+  );
+  // Yahoo branch previously adjusted a seed RSI based on price movement. Remove it.
+  fetchBlock = fetchBlock.replace(
+    `        let realRsi = preset.technical.rsi;\n        if (changePct > 1.5) realRsi = Math.min(80, realRsi + 3);\n        else if (changePct < -1.5) realRsi = Math.max(20, realRsi - 3);\n        \n`,
+    ""
+  );
+  fetchBlock = fetchBlock.replace(
+    `          technical: {\n            ...preset.technical,\n            rsi: Math.round(realRsi)\n          }`,
+    `          technical: { rsi: 0, macd: \"NO_DATA\", bollinger: \"NO_DATA\", trend: \"sideways\" }`
+  );
+}
+server = server.slice(0, fetchStart) + fetchBlock + server.slice(fetchEnd);
+
+// Index data must not use configured display presets when provider fields are missing.
+server = server.replace(
+  "    const current = meta.regularMarketPrice || defaultVal.value;\n    const prev = meta.previousClose || meta.chartPreviousClose || defaultVal.value;",
+  "    const current = Number(meta.regularMarketPrice);\n    const prev = Number(meta.previousClose || meta.chartPreviousClose);\n    if (!(current > 0) || !(prev > 0)) throw new Error(\"MISSING_VERIFIED_INDEX_PRICE\");"
+);
 
 for (const token of [
   "return res.json(upbitPresets);",
@@ -67,10 +117,14 @@ for (const token of [
   'price: marketType === "KOREA" ? 50000 : marketType === "BTC" ? 100000000 : 100,',
   "Tier 3: Internal Universe fallback to ensure 100% endpoint reliability",
   'compareToPreviousClosePrice: "500"',
-  'accumulatedTradingVolume: "1,000,000"'
+  'accumulatedTradingVolume: "1,000,000"',
+  "return preset;",
+  "meta.regularMarketPrice || defaultVal.value",
+  "Math.round(realRsi)"
 ]) {
   if (server.includes(token)) throw new Error(`FORBIDDEN_PUBLIC_FAKE_FALLBACK_REMAINS:${token}`);
 }
+if (!server.includes("PUBLIC_VERIFIED_QUOTE_SANITIZER")) throw new Error("PUBLIC_QUOTE_SANITIZER_NOT_INSTALLED");
 
 fs.writeFileSync(serverPath, server, "utf8");
-console.log("Public stock/search/detail/naver routes now fail closed without synthetic quote/history fallbacks.");
+console.log("Public stock/search/detail/naver/index routes now fail closed and strip unverified quote metadata.");
