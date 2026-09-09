@@ -25,6 +25,7 @@ const requiredFiles = [
   "server/v20/BuyHoldSystemFacadeV20.ts",
   "server/v20/ExecutablePatternGateV20.ts",
   "server/v20/FinalBuyHoldDecisionServiceV20.ts",
+  "server/v20/FinalBuyHoldHttpHandlerV20.ts",
   "src/scanner/patternExecutionAudit.ts",
   "src/components/BuyHoldSystemStatusPanel.tsx",
   "src/components/VerifiedAiOpportunityScanner.tsx",
@@ -48,18 +49,59 @@ const serverContent = read("server.ts");
 if (serverContent) {
   const randomMatches = serverContent.match(/Math\.random\(\)/g) || [];
   if (randomMatches.length > 10) errors.push(`Excessive Math.random() usage in server.ts (${randomMatches.length} occurrences)`);
+
+  for (const token of [
+    "quote.volume?.[i] || 1000",
+    "quote.volume?.[idx] || 10000",
+    "quote.volume?.[idx] || 1000",
+    "volume: item.volumeIncreaseRatio || 1",
+    "tradeValue: item.currentPrice * (item.volumeIncreaseRatio || 1)",
+    "liveVolume = 250000",
+    "liveTradingValue = 1200",
+    'app.post("/api/autotrade/order"',
+    'app.get("/api/autotrade/status"',
+    "50123984-01",
+    'let detectedCandlePattern = "Bullish Engulfing (상승 장악형)"',
+    'detectedCandlePattern = liveChangePct >= 0 ? "Bullish Engulfing',
+    'let detectedChartPattern = "Double Bottom (더블 바텀)"',
+    'detectedChartPattern = "Inverse Head & Shoulders (역H&S 반전)"',
+    'Math.max(0.5, currentVol / (avgVol || 1))'
+  ]) {
+    if (serverContent.includes(token)) errors.push(`Forbidden production fallback remains in server.ts: ${token}`);
+  }
+
+  if (!serverContent.includes('app.post("/api/v20/final-buy-hold", finalBuyHoldHttpHandlerV20)')) {
+    errors.push("Production server must register /api/v20/final-buy-hold with FinalBuyHoldHttpHandlerV20");
+  }
+  if (!serverContent.includes('volume: item.volume') || !serverContent.includes('tradeValue: item.tradeValue')) {
+    errors.push("V20 hot-list adapter must preserve authoritative absolute volume/tradeValue");
+  }
+  if (!serverContent.includes('patterns: item.patternType ? [item.patternType] : []')) {
+    errors.push("V20 hot-list adapter must pass executable pattern IDs instead of display labels");
+  }
 }
 
 const scannerUi = read("src/components/VerifiedAiOpportunityScanner.tsx");
-if (!scannerUi.includes('finalAuthority: "SERVER_V20"')) errors.push("VerifiedAiOpportunityScanner must identify SERVER_V20 as final authority");
-if (!scannerUi.includes('/api/ai/hot-list')) errors.push("VerifiedAiOpportunityScanner must consume the production server V20 hot-list route");
+if (!scannerUi.includes('/api/ai/hot-list')) errors.push("VerifiedAiOpportunityScanner must use server PRECHECK candidate compression");
+if (!scannerUi.includes('/api/v20/final-buy-hold')) errors.push("VerifiedAiOpportunityScanner must call the SERVER_V20_FINAL endpoint");
+if (!scannerUi.includes('"SERVER_V20_FINAL"')) errors.push("VerifiedAiOpportunityScanner must identify SERVER_V20_FINAL as final authority");
+if (!scannerUi.includes('payload?.authority !== "SERVER_V20_FINAL"')) errors.push("UI must verify final authority response before displaying a final decision");
 if (scannerUi.includes("evaluateVerifiedSignal(")) errors.push("VerifiedAiOpportunityScanner must not self-authorize BUY with a client-side signal engine");
-if (!scannerUi.includes("브라우저가 BUY를 만들지 않습니다")) errors.push("VerifiedAiOpportunityScanner must visibly state that browser-side BUY authority is disabled");
+if (scannerUi.includes('verified && score >= 76 ? "BUY"')) errors.push("Browser must never promote PRECHECK score directly to BUY");
+if (!scannerUi.includes("PRECHECK는 후보 압축만 합니다")) errors.push("UI must visibly distinguish PRECHECK from FINAL BUY authority");
+
+const finalHttp = read("server/v20/FinalBuyHoldHttpHandlerV20.ts");
+if (!finalHttp.includes("FinalBuyHoldDecisionServiceV20.evaluate")) errors.push("Final HTTP handler must delegate to FinalBuyHoldDecisionServiceV20");
+if (!finalHttp.includes('execution: "DECISION_ONLY"')) errors.push("Final HTTP handler must remain decision-only");
+for (const forbiddenExecutionToken of ["placeOrder(", "submitOrder(", "sendOrder("]) {
+  if (finalHttp.includes(forbiddenExecutionToken)) errors.push(`Final HTTP handler must not execute orders directly: ${forbiddenExecutionToken}`);
+}
 
 const v20Scanner = read("server/v20/ServerGlobalRealtimeScannerV20.ts");
 if (!v20Scanner.includes("ExecutablePatternGateV20.evaluate")) errors.push("ServerGlobalRealtimeScannerV20 must enforce executable-pattern evidence");
 if (!v20Scanner.includes("patternGate.passed")) errors.push("ServerGlobalRealtimeScannerV20 BUY evidence must require patternGate.passed");
 if (!v20Scanner.includes("trueMtfGate.passed")) errors.push("ServerGlobalRealtimeScannerV20 BUY evidence must require trueMtfGate.passed");
+if (!v20Scanner.includes("SUSPECT_DERIVED_LIQUIDITY_FIELDS")) errors.push("V20 scanner must reject RVOL masquerading as absolute liquidity");
 
 const finalService = read("server/v20/FinalBuyHoldDecisionServiceV20.ts");
 for (const requiredToken of [
