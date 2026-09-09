@@ -1,10 +1,12 @@
 // ----------------------------------------------------------------------
 // BROKER EXECUTION RUNTIME BRIDGE V20 (AISTOCK FINAL RC)
 // Connects BrokerExecutionTruthBusV20 to LivePositionRuntimeService
+// and records verified closed-trade performance.
 // ----------------------------------------------------------------------
 
 import { brokerExecutionTruthBusV20 } from "./BrokerExecutionTruthBusV20";
 import { ParsedExecutionNotice } from "./KISExecutionNoticeParserV20";
+import { brokerFillPerformanceRecorderV20 } from "./BrokerFillPerformanceRecorderV20";
 import { livePositionRuntimeService, BrokerExecutionNotice } from "../../src/trading/LivePositionRuntimeService";
 
 export class BrokerExecutionRuntimeBridgeV20 {
@@ -43,21 +45,24 @@ export class BrokerExecutionRuntimeBridgeV20 {
   }
 
   public routeNoticeToRuntime(parsed: ParsedExecutionNotice): boolean {
-    if (!parsed || parsed.execQty <= 0) return false;
+    if (!parsed || parsed.execQty <= 0 || !parsed.isExecuted) return false;
 
-    // Find positionId by orderId or symbol
     let positionId = this.orderToPositionMap.get(parsed.orderId);
 
     if (!positionId) {
       const allPositions = livePositionRuntimeService.getAllPositions();
       const match = allPositions.find((p) => p.symbol === parsed.symbol && p.state !== "CLOSED");
-      if (match) {
-        positionId = match.positionId;
-      }
+      if (match) positionId = match.positionId;
     }
 
     if (!positionId) {
       console.warn(`[BrokerExecutionRuntimeBridgeV20] No active position found for symbol ${parsed.symbol}`);
+      return false;
+    }
+
+    const positionBefore = livePositionRuntimeService.getPosition(positionId);
+    if (!positionBefore) {
+      console.warn(`[BrokerExecutionRuntimeBridgeV20] Position ${positionId} disappeared before fill routing`);
       return false;
     }
 
@@ -71,7 +76,28 @@ export class BrokerExecutionRuntimeBridgeV20 {
       timestamp: parsed.timestamp
     };
 
+    const runtimeEntryPrice = positionBefore.entryPrice;
+    const runtimePositionQtyBeforeFill = positionBefore.quantities.currentPositionQty;
+    const setup = positionBefore.strategyId;
+    const symbol = positionBefore.symbol;
+
     const newState = livePositionRuntimeService.onBrokerExecutionNotice(positionId, runtimeNotice);
+
+    brokerFillPerformanceRecorderV20.onVerifiedFill(parsed, {
+      positionId,
+      symbol,
+      setup,
+      runtimeEntryPrice,
+      runtimePositionQtyBeforeFill,
+      nextState: newState
+    });
+
+    if (newState === "CLOSED") {
+      for (const [orderId, mappedPositionId] of this.orderToPositionMap.entries()) {
+        if (mappedPositionId === positionId) this.orderToPositionMap.delete(orderId);
+      }
+    }
+
     console.log(`[BrokerExecutionRuntimeBridgeV20] Routed execution fill to position ${positionId}. Next state: ${newState}`);
     return true;
   }
