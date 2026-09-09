@@ -23,9 +23,12 @@ import { ExplainableTradeIdea } from "../scanner/ExplainableOpportunityScannerEn
 
 export const ExplainableOpportunityScanner: React.FC = () => {
   const [market, setMarket] = useState<"ALL" | "KOREA" | "US" | "BTC">("ALL");
+  const [isYesOnlyMode, setIsYesOnlyMode] = useState<boolean>(true);
   const [ideas, setIdeas] = useState<ExplainableTradeIdea[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [scannedAt, setScannedAt] = useState<string>("");
+  const [totalScanned, setTotalScanned] = useState<number>(0);
+  const [rejectedCount, setRejectedCount] = useState<number>(0);
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
   const [selectedIdea, setSelectedIdea] = useState<ExplainableTradeIdea | null>(null);
   const [aiGeneratingSymbol, setAiGeneratingSymbol] = useState<string | null>(null);
@@ -33,12 +36,17 @@ export const ExplainableOpportunityScanner: React.FC = () => {
   const fetchScannerResults = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/explainable-scanner?market=${market}&aiExplain=true`);
+      const endpoint = isYesOnlyMode
+        ? `/api/yes-only-scanner?market=${market}&aiExplain=true`
+        : `/api/explainable-scanner?market=${market}&aiExplain=true`;
+      const res = await fetch(endpoint);
       if (res.ok) {
         const data = await res.json();
         if (data.success && Array.isArray(data.topIdeas)) {
           setIdeas(data.topIdeas);
           setScannedAt(data.scannedAt || new Date().toLocaleTimeString("ko-KR"));
+          setTotalScanned(data.totalScanned || 29);
+          setRejectedCount(data.rejectedCount || (data.totalScanned - data.topIdeas.length));
         }
       }
     } catch (err) {
@@ -46,7 +54,7 @@ export const ExplainableOpportunityScanner: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [market]);
+  }, [market, isYesOnlyMode]);
 
   useEffect(() => {
     fetchScannerResults();
@@ -150,6 +158,18 @@ Opportunity Score: ${idea.score}/100 [${idea.grade}]
 
           {/* Market Filters & Control */}
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setIsYesOnlyMode(!isYesOnlyMode)}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all shadow-md ${
+                isYesOnlyMode
+                  ? "bg-gradient-to-r from-red-900/80 to-amber-900/80 text-amber-200 border-amber-500/50 shadow-amber-900/30 ring-1 ring-amber-500/30"
+                  : "bg-slate-950 text-slate-400 border-slate-800"
+              }`}
+            >
+              <Flame className={`w-3.5 h-3.5 ${isYesOnlyMode ? "text-amber-400 fill-amber-400" : ""}`} />
+              YES ONLY 모드 {isYesOnlyMode ? "ON (🔥 82점+)" : "OFF (전체 랭킹)"}
+            </button>
+
             <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
               {(["ALL", "KOREA", "US", "BTC"] as const).map((m) => (
                 <button
@@ -175,7 +195,7 @@ Opportunity Score: ${idea.score}/100 [${idea.grade}]
               }`}
             >
               <Zap className={`w-3.5 h-3.5 ${autoRefresh ? "text-emerald-400 fill-emerald-400" : ""}`} />
-              실시간 감시 {autoRefresh ? "ON" : "OFF"}
+              실시간 {autoRefresh ? "ON" : "OFF"}
             </button>
 
             <button
@@ -191,15 +211,20 @@ Opportunity Score: ${idea.score}/100 [${idea.grade}]
 
         {/* Scan Status Bar */}
         <div className="mt-4 pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between text-xs text-slate-400 gap-2">
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4">
             <span className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-              스캔 주기: 15초 실시간 동기화
+              15초 동기화
             </span>
-            <span>최근 스캔 시각: <strong className="text-slate-200">{scannedAt || "실시간 감시 중..."}</strong></span>
+            <span>스캔 시각: <strong className="text-slate-200">{scannedAt || "실시간 감시 중..."}</strong></span>
+            {totalScanned > 0 && (
+              <span className="px-2.5 py-0.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-300 font-mono">
+                총 {totalScanned}개 종목 스캔 → <strong className="text-emerald-400">{ideas.length}개 YES 통과</strong>, <span className="text-rose-400">{rejectedCount}개 탈락</span>
+              </span>
+            )}
           </div>
           <div className="text-slate-500 italic">
-            * 본 스캐너는 100점 만점 Profit Opportunity Score 및 엄격한 Signal Gate를 통과한 종목만 매수 후보로 제시합니다.
+            * YES ONLY 스캐너는 15개 하드조건(Score≥82, RVOL≥1.5, EMA정배열, VWAP상단) 통과 종목만 엄격 표시합니다.
           </div>
         </div>
       </div>
@@ -208,13 +233,29 @@ Opportunity Score: ${idea.score}/100 [${idea.grade}]
       {loading && ideas.length === 0 ? (
         <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-12 text-center space-y-3">
           <RefreshCw className="w-8 h-8 text-indigo-400 animate-spin mx-auto" />
-          <p className="text-sm font-medium text-slate-300">실시간 시장 수급, VWAP, 캔들 패턴 및 Opportunity Score 계산 중...</p>
+          <p className="text-sm font-medium text-slate-300">실시간 시장 수급, VWAP, 캔들 패턴 및 YES ONLY 15대 검증조건 계산 중...</p>
         </div>
       ) : ideas.length === 0 ? (
-        <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-12 text-center space-y-2">
-          <AlertTriangle className="w-8 h-8 text-amber-400 mx-auto" />
-          <p className="text-base font-semibold text-slate-200">조건을 충족하는 TOP 5 매수 후보 종목이 없습니다.</p>
-          <p className="text-xs text-slate-400">Signal Validation Gate 기준(Score 78점 이상, RVOL 1.2배)을 충족하는 종목이 수급 확인 시 자동 표시됩니다.</p>
+        <div className="bg-slate-900/80 border border-amber-500/30 rounded-2xl p-10 text-center space-y-4 shadow-2xl backdrop-blur-md">
+          <div className="w-14 h-14 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center justify-center mx-auto text-amber-400 shadow-inner">
+            <ShieldCheck className="w-8 h-8 animate-pulse" />
+          </div>
+          <div className="space-y-1.5">
+            <h2 className="text-lg font-bold text-slate-100">현재 모든 검증을 통과한 YES 종목 없음</h2>
+            <p className="text-xs sm:text-sm text-slate-400 max-w-xl mx-auto">
+              위험 및 약세 종목의 무분별한 매수를 차단하여 원금을 엄격히 보호하고 있습니다.
+              <br />
+              (YES 승인 조건: Profit Opportunity Score 82점 이상 + Signal Gate 100% 통과 + RVOL 1.5배 이상)
+            </p>
+          </div>
+          <div className="pt-2 flex justify-center">
+            <button
+              onClick={() => setIsYesOnlyMode(false)}
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl border border-slate-700 transition-all"
+            >
+              전체 종목 랭킹 보기 (NO / WATCH 포함)
+            </button>
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

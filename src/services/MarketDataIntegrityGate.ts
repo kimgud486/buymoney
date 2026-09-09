@@ -3,6 +3,8 @@
 // Strict Fail-Closed Verification for Quotes and Candle Data
 // ----------------------------------------------------------------------
 
+import { defaultFakeDataDetector, MarketTick } from "../market-data/FakeDataDetector";
+
 export interface VerifiedQuoteMetadata {
   provider: "UPBIT" | "NAVER_POLLING" | "YAHOO_FINANCE" | "KIS" | "SYSTEM_HUB";
   source: string;
@@ -14,6 +16,7 @@ export interface VerifiedQuoteMetadata {
   isVerified: boolean;
   isStale: boolean;
   verificationReason: string;
+  trustScore?: number;
 }
 
 export interface VerifiedCandle {
@@ -65,8 +68,20 @@ export class MarketDataIntegrityGate {
 
     const exchangeName = quote.market || "KOSPI";
 
-    let isVerified = true;
-    let failureReason = "VERIFIED_OK";
+    // Run FakeDataDetector inspection
+    const tick: MarketTick = {
+      symbol: quote.symbol,
+      price: quote.price,
+      volume: typeof quote.volume === "number" ? quote.volume : parseFloat(String(quote.volume || 0)) || 0,
+      timestamp: isNaN(tsMs) ? now : tsMs,
+      source: quote.source || quote.provider || "REALTIME_STREAM",
+    };
+    const detectorResult = defaultFakeDataDetector.inspect(tick, now);
+
+    let isVerified = detectorResult.liveTradingAllowed;
+    let failureReason = detectorResult.reasons.length > 0 
+      ? detectorResult.reasons.map(r => r.code).join(", ")
+      : "VERIFIED_OK";
 
     if (!quote.symbol || typeof quote.symbol !== "string") {
       isVerified = false;
@@ -74,12 +89,6 @@ export class MarketDataIntegrityGate {
     } else if (typeof quote.price !== "number" || isNaN(quote.price) || quote.price <= 0) {
       isVerified = false;
       failureReason = "INVALID_PRICE_NON_POSITIVE";
-    } else if (isFuture) {
-      isVerified = false;
-      failureReason = "FUTURE_TIMESTAMP_DETECTED";
-    } else if (isStale) {
-      isVerified = false;
-      failureReason = "STALE_QUOTE_EXCEEDED_MAX_AGE";
     }
 
     return {
@@ -91,10 +100,11 @@ export class MarketDataIntegrityGate {
         providerTimestamp,
         receivedAt,
         ageMs,
-        isRealtime: !isStale && !isFuture && isVerified,
+        isRealtime: detectorResult.status === "VERIFIED",
         isVerified,
-        isStale,
-        verificationReason: failureReason
+        isStale: detectorResult.status === "STALE",
+        verificationReason: failureReason,
+        trustScore: detectorResult.trustScore,
       }
     };
   }

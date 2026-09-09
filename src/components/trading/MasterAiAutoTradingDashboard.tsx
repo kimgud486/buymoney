@@ -70,6 +70,7 @@ import { AiFutureTrendOverlayChart } from "../AiFutureTrendOverlayChart";
 import { InteractivePredictionCanvasChart } from "../InteractivePredictionCanvasChart";
 import { RealTimeTradingViewChart } from "./RealTimeTradingViewChart";
 import { ExplainableOpportunityScanner } from "../ExplainableOpportunityScanner";
+import { SafeAiAutotradeLauncher } from "./SafeAiAutotradeLauncher";
 import { 
   detectAllChartPatterns, 
   computeUnifiedMarketShape,
@@ -3570,7 +3571,22 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                 닫기 ✕
               </button>
             </div>
-            <ExplainableOpportunityScanner />
+            <div className="space-y-6">
+              <SafeAiAutotradeLauncher
+                onSelectSymbolForChart={(sym) => {
+                  setSelectedSymbol(sym);
+                  setIsExplainableScannerOpen(false);
+                }}
+                onConfirmOrderApproval={(res) => {
+                  addToast?.({
+                    type: "success",
+                    title: `[AI 자율스캔 승인 완료] ${res.name} (${res.symbol})`,
+                    message: `FinRL-X/Qlib 앙상블 승인됨. 진입가 ${res.entryPrice.toLocaleString()}원 / 손절가 ${res.stopLossPrice.toLocaleString()}원`
+                  });
+                }}
+              />
+              <ExplainableOpportunityScanner />
+            </div>
           </div>
         </div>
       )}

@@ -17,7 +17,7 @@ import { ServerGlobalRealtimeScannerV20 } from "./server/v20/ServerGlobalRealtim
 import { ServerKISRealtimeClientV20 } from "./server/v20/ServerKISRealtimeClientV20";
 import { KISBrokerGatewayV121 } from "./server/broker/KISBrokerGatewayV121";
 import { DEMO_FIXTURE_STOCKS } from "./src/data/presetStocks.js";
-import { analyzeStockIdea, CandleRecord, ExplainableTradeIdea } from "./src/scanner/ExplainableOpportunityScannerEngine.js";
+import { analyzeStockIdea, CandleRecord, ExplainableTradeIdea, filterYesOnlyCandidates } from "./src/scanner/ExplainableOpportunityScannerEngine.js";
 
 dotenv.config();
 
@@ -1104,10 +1104,11 @@ app.get("/api/broker/v12/account-balance", async (req, res) => {
   }
 });
 
-// AI Explainable Profit Opportunity Scanner Endpoint
-app.get("/api/explainable-scanner", async (req, res) => {
+// AI Explainable Profit Opportunity Scanner Endpoint & YES ONLY Endpoint
+app.get(["/api/explainable-scanner", "/api/yes-only-scanner"], async (req, res) => {
   try {
     const market = (req.query.market as string || "ALL").toUpperCase();
+    const isYesOnlyRequested = req.path.includes("yes-only") || req.query.yesOnly === "true";
     const candidatePool: { symbol: string; name: string; market: "KOREA" | "US" | "BTC" }[] = [];
 
     if (market === "KOREA" || market === "ALL") {
@@ -1126,6 +1127,7 @@ app.get("/api/explainable-scanner", async (req, res) => {
     }
 
     const ideas: ExplainableTradeIdea[] = [];
+    const rejectedLog: { symbol: string; name: string; reasons: string[] }[] = [];
 
     for (const item of candidatePool) {
       try {
@@ -1165,14 +1167,30 @@ app.get("/api/explainable-scanner", async (req, res) => {
         }
 
         const idea = analyzeStockIdea(item.symbol, item.name, item.market, records, currPrice, liveData.changePct);
-        ideas.push(idea);
+        if (idea.wouldBuy && idea.score >= 82) {
+          ideas.push(idea);
+        } else {
+          rejectedLog.push({
+            symbol: item.symbol,
+            name: item.name,
+            reasons: idea.riskReasons.length > 0 ? idea.riskReasons : ["Profit Opportunity Score 기준 (82점) 미달"]
+          });
+          if (!isYesOnlyRequested) {
+            ideas.push(idea);
+          }
+        }
       } catch (err) {
         // quiet skip
       }
     }
 
-    ideas.sort((a, b) => b.score - a.score);
-    const topIdeas = ideas.slice(0, 5);
+    let topIdeas: ExplainableTradeIdea[] = [];
+    if (isYesOnlyRequested) {
+      topIdeas = filterYesOnlyCandidates(ideas, 5, 82);
+    } else {
+      ideas.sort((a, b) => b.score - a.score);
+      topIdeas = ideas.slice(0, 5);
+    }
 
     const ai = getAI();
     if (ai && topIdeas.length > 0 && req.query.aiExplain === "true") {
@@ -1210,6 +1228,13 @@ Please provide a concise 3-bullet point executive summary in Korean explaining:
       success: true,
       scannedAt: new Date().toLocaleTimeString("ko-KR"),
       market,
+      isYesOnly: isYesOnlyRequested,
+      totalScanned: candidatePool.length,
+      passedCount: topIdeas.length,
+      rejectedCount: rejectedLog.length,
+      message: topIdeas.length === 0
+        ? "현재 모든 검증을 통과한 YES 종목 없음 (위험 및 약세 종목 자동 필터링 완료)"
+        : `🔥 YES ONLY 스캐너: ${candidatePool.length}개 종목 검증 완료 → ${topIdeas.length}개 최종 YES 통과`,
       topIdeas
     });
   } catch (err: any) {

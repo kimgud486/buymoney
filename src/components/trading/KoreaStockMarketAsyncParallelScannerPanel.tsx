@@ -28,6 +28,9 @@ import { StockItem, getAllStocks } from "../../data/stockUniverse";
 import { StrictQuantSignalPipeline, PipelineEvaluationResult } from "../../services/StrictQuantSignalPipeline";
 import { realtimeMarketFeedService, LiveMarketQuote } from "../../services/realtimeMarketFeedService";
 
+import { defaultGraphShapeScanner, ShapeResult } from "../../scanner/GraphShapeScanner";
+import { GraphShapeScannerModal } from "./GraphShapeScannerModal";
+
 export interface KoreaParallelScanResultItem {
   symbol: string;
   name: string;
@@ -44,6 +47,7 @@ export interface KoreaParallelScanResultItem {
   isMarketOpen: boolean;
   lastScanTime: string;
   isExecuted?: boolean;
+  shapeResult?: ShapeResult;
 }
 
 interface KoreaStockMarketAsyncParallelScannerPanelProps {
@@ -82,6 +86,14 @@ export const KoreaStockMarketAsyncParallelScannerPanel: React.FC<
   // Execution cooldown ref to avoid spamming orders for same stock
   const lastExecutedRef = useRef<{ [symbol: string]: number }>({});
   const isScanningRef = useRef<boolean>(false);
+
+  // Modal state for GraphShapeScanner Inspection
+  const [selectedShapeItem, setSelectedShapeItem] = useState<{
+    stockName: string;
+    symbol: string;
+    shapeResult: ShapeResult;
+    finalScore: number;
+  } | null>(null);
 
   // Check if Korean market is currently open (09:00 - 15:30 KST)
   const isKoreaMarketOpen = useMemo(() => {
@@ -131,6 +143,27 @@ export const KoreaStockMarketAsyncParallelScannerPanel: React.FC<
       const rvol = Math.round((volRatio + Math.abs(Math.sin(timeFactor + hash) * 1.8)) * 10) / 10;
       const rsi = Math.round(45 + Math.sin(timeFactor * 0.5 + hash) * 25);
 
+      // Generate synthetic 30-bar candles for Graph Shape Scanner
+      const syntheticCandles = [];
+      let basePx = price * 0.92;
+      for (let cIdx = 0; cIdx < 30; cIdx++) {
+        basePx += (price * 0.08 / 30) + (Math.sin(cIdx + hash) * price * 0.005);
+        const candleOpen = basePx - price * 0.002;
+        const candleLow = basePx - price * 0.004;
+        const candleHigh = basePx + price * 0.006;
+        const candleClose = cIdx === 29 ? price : basePx + price * 0.003;
+        const candleVol = (parsedVol / 30) * (cIdx >= 25 ? rvol : 1.0);
+        syntheticCandles.push({
+          open: candleOpen,
+          high: candleHigh,
+          low: candleLow,
+          close: candleClose,
+          volume: candleVol,
+          timestamp: Date.now() - (30 - cIdx) * 60000,
+        });
+      }
+      const shapeResult = defaultGraphShapeScanner.scan(syntheticCandles, stock.symbol);
+
       // 3. Determine Signal & Decision
       let signal: KoreaParallelScanResultItem["signal"] = "HOLD_WATCH";
 
@@ -163,7 +196,8 @@ export const KoreaStockMarketAsyncParallelScannerPanel: React.FC<
         expectedProfitPct,
         winProbabilityPct,
         isMarketOpen: isKoreaMarketOpen,
-        lastScanTime: timeStr
+        lastScanTime: timeStr,
+        shapeResult
       };
     });
 
@@ -632,7 +666,7 @@ export const KoreaStockMarketAsyncParallelScannerPanel: React.FC<
                 </div>
               </div>
 
-              {/* Quant Metrics Line */}
+              {/* Quant Metrics & Shape Button Line */}
               <div className="pt-1.5 mt-1 border-t border-slate-800/80 flex items-center justify-between text-[10px] font-mono text-slate-400">
                 <div>
                   AI <strong className="text-amber-300">{item.aiScore}점</strong>
@@ -640,9 +674,24 @@ export const KoreaStockMarketAsyncParallelScannerPanel: React.FC<
                 <div>
                   RVOL <strong className="text-cyan-300">{item.rvol}x</strong>
                 </div>
-                <div>
-                  기대 <strong className="text-emerald-400">+{item.expectedProfitPct}%</strong>
-                </div>
+                {item.shapeResult && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (item.shapeResult) {
+                        setSelectedShapeItem({
+                          stockName: item.name,
+                          symbol: item.symbol,
+                          shapeResult: item.shapeResult,
+                          finalScore: item.aiScore,
+                        });
+                      }
+                    }}
+                    className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30 text-[9px] font-bold cursor-pointer transition"
+                  >
+                    📊 차트패턴
+                  </button>
+                )}
               </div>
 
               {/* Action Button */}
@@ -701,6 +750,18 @@ export const KoreaStockMarketAsyncParallelScannerPanel: React.FC<
             ))}
           </div>
         </div>
+      )}
+
+      {/* Graph Shape Scanner Inspection Modal */}
+      {selectedShapeItem && (
+        <GraphShapeScannerModal
+          isOpen={!!selectedShapeItem}
+          onClose={() => setSelectedShapeItem(null)}
+          stockName={selectedShapeItem.stockName}
+          symbol={selectedShapeItem.symbol}
+          shapeResult={selectedShapeItem.shapeResult}
+          finalScore={selectedShapeItem.finalScore}
+        />
       )}
     </div>
   );

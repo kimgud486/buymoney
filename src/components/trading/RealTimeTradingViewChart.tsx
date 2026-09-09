@@ -385,11 +385,15 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
         updatedAt: Date.now()
       });
 
-      if (trailingExitSeriesRef.current) {
-        trailingExitSeriesRef.current.update({
-          time: closedCandle.time as Time,
-          value: res.trailingFloor
-        });
+      try {
+        if (trailingExitSeriesRef.current) {
+          trailingExitSeriesRef.current.update({
+            time: closedCandle.time as Time,
+            value: res.trailingFloor
+          });
+        }
+      } catch {
+        // Ignore if disposed
       }
     }
 
@@ -406,52 +410,76 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
 
     setLastForecast(forecast);
 
-    if (forecastSeriesRef.current && bullForecastSeriesRef.current && bearForecastSeriesRef.current) {
-      forecastSeriesRef.current.setData(
-        forecast
-          .map(p => ({ time: p.time as Time, value: p.predicted }))
-          .filter((p): p is { time: Time; value: number } => Number.isFinite(p.value) && p.value > 0)
-      );
-      bullForecastSeriesRef.current.setData(
-        forecast
-          .map(p => ({ time: p.time as Time, value: p.upper }))
-          .filter((p): p is { time: Time; value: number } => Number.isFinite(p.value) && p.value > 0)
-      );
-      bearForecastSeriesRef.current.setData(
-        forecast
-          .map(p => ({ time: p.time as Time, value: p.lower }))
-          .filter((p): p is { time: Time; value: number } => Number.isFinite(p.value) && p.value > 0)
-      );
-    }
+    try {
+      if (forecastSeriesRef.current && bullForecastSeriesRef.current && bearForecastSeriesRef.current) {
+        forecastSeriesRef.current.setData(
+          forecast
+            .map(p => ({ time: p.time as Time, value: p.predicted }))
+            .filter((p): p is { time: Time; value: number } => Number.isFinite(p.value) && p.value > 0)
+        );
+        bullForecastSeriesRef.current.setData(
+          forecast
+            .map(p => ({ time: p.time as Time, value: p.upper }))
+            .filter((p): p is { time: Time; value: number } => Number.isFinite(p.value) && p.value > 0)
+        );
+        bearForecastSeriesRef.current.setData(
+          forecast
+            .map(p => ({ time: p.time as Time, value: p.lower }))
+            .filter((p): p is { time: Time; value: number } => Number.isFinite(p.value) && p.value > 0)
+        );
+      }
 
-    // 7. Update indicator series lines
-    if (ema9SeriesRef.current && Number.isFinite(indicators.ema9) && indicators.ema9 > 0) {
-      ema9SeriesRef.current.update({ time: closedCandle.time as Time, value: indicators.ema9 });
-    }
-    if (ema20SeriesRef.current && Number.isFinite(indicators.ema20) && indicators.ema20 > 0) {
-      ema20SeriesRef.current.update({ time: closedCandle.time as Time, value: indicators.ema20 });
-    }
-    if (vwapSeriesRef.current && Number.isFinite(indicators.vwap) && indicators.vwap > 0) {
-      vwapSeriesRef.current.update({ time: closedCandle.time as Time, value: indicators.vwap });
-    }
+      // 7. Update indicator series lines
+      if (ema9SeriesRef.current && Number.isFinite(indicators.ema9) && indicators.ema9 > 0) {
+        ema9SeriesRef.current.update({ time: closedCandle.time as Time, value: indicators.ema9 });
+      }
+      if (ema20SeriesRef.current && Number.isFinite(indicators.ema20) && indicators.ema20 > 0) {
+        ema20SeriesRef.current.update({ time: closedCandle.time as Time, value: indicators.ema20 });
+      }
+      if (vwapSeriesRef.current && Number.isFinite(indicators.vwap) && indicators.vwap > 0) {
+        vwapSeriesRef.current.update({ time: closedCandle.time as Time, value: indicators.vwap });
+      }
 
-    // 8. Update marker if special event happened
-    if (markersRef.current && (nextState === "BUY" || nextState === "SELL" || nextState === "SELL_WATCH" || nextState === "PROFIT_HOLD")) {
-      const currentMarkers = markersRef.current.markers() || [];
-      const newMarker = {
-        time: closedCandle.time as Time,
-        position: nextState === "BUY" ? "belowBar" : "aboveBar",
-        color: nextState === "BUY" ? "#10b981" : nextState === "PROFIT_HOLD" ? "#06b6d4" : nextState === "SELL_WATCH" ? "#f59e0b" : "#ef4444",
-        shape: nextState === "BUY" ? "arrowUp" : nextState === "PROFIT_HOLD" ? "circle" : nextState === "SELL_WATCH" ? "square" : "arrowDown",
-        text: `${nextState} (${confidenceScore}%)`
-      };
-      markersRef.current.setMarkers([...currentMarkers.slice(-20), newMarker]);
+      // 8. Update marker if special event happened
+      if (markersRef.current && (nextState === "BUY" || nextState === "SELL" || nextState === "SELL_WATCH" || nextState === "PROFIT_HOLD")) {
+        const currentMarkers = markersRef.current.markers() || [];
+        const newMarker = {
+          time: closedCandle.time as Time,
+          position: nextState === "BUY" ? "belowBar" : "aboveBar",
+          color: nextState === "BUY" ? "#10b981" : nextState === "PROFIT_HOLD" ? "#06b6d4" : nextState === "SELL_WATCH" ? "#f59e0b" : "#ef4444",
+          shape: nextState === "BUY" ? "arrowUp" : nextState === "PROFIT_HOLD" ? "circle" : nextState === "SELL_WATCH" ? "square" : "arrowDown",
+          text: `${nextState} (${confidenceScore}%)`
+        };
+        markersRef.current.setMarkers([...currentMarkers.slice(-20), newMarker]);
+      }
+    } catch {
+      // Ignore if chart is disposed
     }
   }, [symbol, market, selectedTf, onStateChange]);
 
   // Mount TradingView Chart
   useEffect(() => {
     if (!chartContainerRef.current) return;
+
+    // Destroy existing chart instance if present
+    if (chartRef.current) {
+      try {
+        chartRef.current.remove();
+      } catch {
+        // Ignore if already disposed
+      }
+      chartRef.current = null;
+    }
+    candleSeriesRef.current = null;
+    volumeSeriesRef.current = null;
+    ema9SeriesRef.current = null;
+    ema20SeriesRef.current = null;
+    vwapSeriesRef.current = null;
+    forecastSeriesRef.current = null;
+    bullForecastSeriesRef.current = null;
+    bearForecastSeriesRef.current = null;
+    trailingExitSeriesRef.current = null;
+    markersRef.current = null;
 
     historyRef.current = [...normalizedInitialCandles];
 
@@ -701,24 +729,28 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
 
       const res = aggregatorRef.current.update(tick);
 
-      // 1. Update active ongoing candle (animates in real-time)
-      if (candleSeriesRef.current) {
-        candleSeriesRef.current.update({
-          time: res.candle.time as Time,
-          open: res.candle.open,
-          high: res.candle.high,
-          low: res.candle.low,
-          close: res.candle.close
-        });
-      }
+      try {
+        // 1. Update active ongoing candle (animates in real-time)
+        if (candleSeriesRef.current) {
+          candleSeriesRef.current.update({
+            time: res.candle.time as Time,
+            open: res.candle.open,
+            high: res.candle.high,
+            low: res.candle.low,
+            close: res.candle.close
+          });
+        }
 
-      // 2. Update active volume
-      if (volumeSeriesRef.current) {
-        volumeSeriesRef.current.update({
-          time: res.candle.time as Time,
-          value: res.candle.volume,
-          color: res.candle.close >= res.candle.open ? (isKrx ? "#ef444433" : "#10b98133") : (isKrx ? "#3b82f633" : "#f43f5e33")
-        });
+        // 2. Update active volume
+        if (volumeSeriesRef.current) {
+          volumeSeriesRef.current.update({
+            time: res.candle.time as Time,
+            value: res.candle.volume,
+            color: res.candle.close >= res.candle.open ? (isKrx ? "#ef444433" : "#10b98133") : (isKrx ? "#3b82f633" : "#f43f5e33")
+          });
+        }
+      } catch {
+        // Ignore if chart is disposed
       }
 
       // 3. If closed a candle, trigger comprehensive recalculation
@@ -729,21 +761,39 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
 
     return () => {
       unsubscribeFeed();
-      chart.remove();
+      try {
+        chart.remove();
+      } catch {
+        // Ignore if already disposed
+      }
       chartRef.current = null;
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      ema9SeriesRef.current = null;
+      ema20SeriesRef.current = null;
+      vwapSeriesRef.current = null;
+      forecastSeriesRef.current = null;
+      bullForecastSeriesRef.current = null;
+      bearForecastSeriesRef.current = null;
+      trailingExitSeriesRef.current = null;
+      markersRef.current = null;
     };
   }, [symbol, isWhiteTheme, normalizedInitialCandles, market, onClosedCandle]);
 
   // Apply visibility toggles
   useEffect(() => {
-    if (ema9SeriesRef.current) ema9SeriesRef.current.applyOptions({ visible: activeIndicators.ema });
-    if (ema20SeriesRef.current) ema20SeriesRef.current.applyOptions({ visible: activeIndicators.ema });
-    if (vwapSeriesRef.current) vwapSeriesRef.current.applyOptions({ visible: activeIndicators.vwap });
-    if (forecastSeriesRef.current) forecastSeriesRef.current.applyOptions({ visible: activeIndicators.forecast });
-    if (bullForecastSeriesRef.current) bullForecastSeriesRef.current.applyOptions({ visible: activeIndicators.forecast });
-    if (bearForecastSeriesRef.current) bearForecastSeriesRef.current.applyOptions({ visible: activeIndicators.forecast });
-    if (trailingExitSeriesRef.current) trailingExitSeriesRef.current.applyOptions({ visible: activeIndicators.trailing });
-    if (volumeSeriesRef.current) volumeSeriesRef.current.applyOptions({ visible: activeIndicators.volume });
+    try {
+      if (ema9SeriesRef.current) ema9SeriesRef.current.applyOptions({ visible: activeIndicators.ema });
+      if (ema20SeriesRef.current) ema20SeriesRef.current.applyOptions({ visible: activeIndicators.ema });
+      if (vwapSeriesRef.current) vwapSeriesRef.current.applyOptions({ visible: activeIndicators.vwap });
+      if (forecastSeriesRef.current) forecastSeriesRef.current.applyOptions({ visible: activeIndicators.forecast });
+      if (bullForecastSeriesRef.current) bullForecastSeriesRef.current.applyOptions({ visible: activeIndicators.forecast });
+      if (bearForecastSeriesRef.current) bearForecastSeriesRef.current.applyOptions({ visible: activeIndicators.forecast });
+      if (trailingExitSeriesRef.current) trailingExitSeriesRef.current.applyOptions({ visible: activeIndicators.trailing });
+      if (volumeSeriesRef.current) volumeSeriesRef.current.applyOptions({ visible: activeIndicators.volume });
+    } catch {
+      // Ignore if chart is disposed
+    }
   }, [activeIndicators]);
 
   // Stale feed monitoring

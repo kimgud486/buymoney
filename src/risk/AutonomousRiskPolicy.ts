@@ -27,7 +27,7 @@ export interface AutonomousRiskPolicy {
 
 export const DEFAULT_AUTONOMOUS_RISK_POLICY: AutonomousRiskPolicy = {
   enabled: true,
-  mode: "LIVE",
+  mode: "SIGNAL_ONLY",
   maxConcurrentPositions: 5,
   maxPositionWeightPct: 20.0,
   maxDailyLossPct: 3.0,

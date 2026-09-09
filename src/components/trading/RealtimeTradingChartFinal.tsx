@@ -65,6 +65,18 @@ export const RealtimeTradingChartFinal: React.FC<RealtimeTradingChartFinalProps>
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
+    if (chartApiRef.current) {
+      try {
+        chartApiRef.current.remove();
+      } catch {
+        // Ignore if disposed
+      }
+      chartApiRef.current = null;
+    }
+    candlestickSeriesRef.current = null;
+    volumeSeriesRef.current = null;
+    vwapSeriesRef.current = null;
+
     const chart = createChart(chartContainerRef.current, {
       height,
       layout: {
@@ -131,7 +143,11 @@ export const RealtimeTradingChartFinal: React.FC<RealtimeTradingChartFinalProps>
 
     const handleResize = () => {
       if (chartContainerRef.current && chartApiRef.current) {
-        chartApiRef.current.applyOptions({ width: chartContainerRef.current.clientWidth });
+        try {
+          chartApiRef.current.applyOptions({ width: chartContainerRef.current.clientWidth });
+        } catch {
+          // Ignore if disposed
+        }
       }
     };
 
@@ -139,93 +155,104 @@ export const RealtimeTradingChartFinal: React.FC<RealtimeTradingChartFinalProps>
 
     return () => {
       window.removeEventListener("resize", handleResize);
-      chart.remove();
+      try {
+        chart.remove();
+      } catch {
+        // Ignore if disposed
+      }
       chartApiRef.current = null;
+      candlestickSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      vwapSeriesRef.current = null;
     };
   }, [height]);
 
   useEffect(() => {
     if (!candlestickSeriesRef.current || !volumeSeriesRef.current || !vwapSeriesRef.current) return;
 
-    if (!candles || candles.length === 0) {
-      candlestickSeriesRef.current.setData([]);
-      volumeSeriesRef.current.setData([]);
-      vwapSeriesRef.current.setData([]);
-      return;
-    }
-
-    const candleData: CandlestickData<Time>[] = [];
-    const volumeData: any[] = [];
-    const vwapData: any[] = [];
-    const markers: SeriesMarker<Time>[] = [];
-
-    candles.forEach((c, idx) => {
-      const timeVal = typeof c.time === "number" ? (c.time as Time) : (c.time as Time);
-      candleData.push({
-        time: timeVal,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close
-      });
-
-      volumeData.push({
-        time: timeVal,
-        value: c.volume,
-        color: c.close >= c.open ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)"
-      });
-
-      if (c.vwap) {
-        vwapData.push({
-          time: timeVal,
-          value: c.vwap
-        });
+    try {
+      if (!candles || candles.length === 0) {
+        candlestickSeriesRef.current.setData([]);
+        volumeSeriesRef.current.setData([]);
+        vwapSeriesRef.current.setData([]);
+        return;
       }
 
-      // Add position markers on last bar if position exists
-      if (idx === candles.length - 1 && positionDto) {
-        if (positionDto.positionState === "BUY_FILLED") {
-          markers.push({
+      const candleData: CandlestickData<Time>[] = [];
+      const volumeData: any[] = [];
+      const vwapData: any[] = [];
+      const markers: SeriesMarker<Time>[] = [];
+
+      candles.forEach((c, idx) => {
+        const timeVal = typeof c.time === "number" ? (c.time as Time) : (c.time as Time);
+        candleData.push({
+          time: timeVal,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close
+        });
+
+        volumeData.push({
+          time: timeVal,
+          value: c.volume,
+          color: c.close >= c.open ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)"
+        });
+
+        if (c.vwap) {
+          vwapData.push({
             time: timeVal,
-            position: "belowBar",
-            color: "#10B981",
-            shape: "arrowUp",
-            text: "BUY FILLED"
-          });
-        } else if (positionDto.positionState.startsWith("PROFIT_HOLD")) {
-          markers.push({
-            time: timeVal,
-            position: "aboveBar",
-            color: "#3B82F6",
-            shape: "circle",
-            text: positionDto.positionState
-          });
-        } else if (positionDto.positionState.startsWith("SELL_WATCH")) {
-          markers.push({
-            time: timeVal,
-            position: "aboveBar",
-            color: "#F59E0B",
-            shape: "square",
-            text: positionDto.positionState
-          });
-        } else if (positionDto.positionState === "CLOSED") {
-          markers.push({
-            time: timeVal,
-            position: "aboveBar",
-            color: "#EF4444",
-            shape: "arrowDown",
-            text: "SELL FILLED"
+            value: c.vwap
           });
         }
+
+        // Add position markers on last bar if position exists
+        if (idx === candles.length - 1 && positionDto) {
+          if (positionDto.positionState === "BUY_FILLED") {
+            markers.push({
+              time: timeVal,
+              position: "belowBar",
+              color: "#10B981",
+              shape: "arrowUp",
+              text: "BUY FILLED"
+            });
+          } else if (positionDto.positionState.startsWith("PROFIT_HOLD")) {
+            markers.push({
+              time: timeVal,
+              position: "aboveBar",
+              color: "#3B82F6",
+              shape: "circle",
+              text: positionDto.positionState
+            });
+          } else if (positionDto.positionState.startsWith("SELL_WATCH")) {
+            markers.push({
+              time: timeVal,
+              position: "aboveBar",
+              color: "#F59E0B",
+              shape: "square",
+              text: positionDto.positionState
+            });
+          } else if (positionDto.positionState === "CLOSED") {
+            markers.push({
+              time: timeVal,
+              position: "aboveBar",
+              color: "#EF4444",
+              shape: "arrowDown",
+              text: "SELL FILLED"
+            });
+          }
+        }
+      });
+
+      candlestickSeriesRef.current.setData(candleData);
+      volumeSeriesRef.current.setData(volumeData);
+      vwapSeriesRef.current.setData(vwapData);
+
+      if (markers.length > 0) {
+        candlestickSeriesRef.current.setMarkers(markers);
       }
-    });
-
-    candlestickSeriesRef.current.setData(candleData);
-    volumeSeriesRef.current.setData(volumeData);
-    vwapSeriesRef.current.setData(vwapData);
-
-    if (markers.length > 0) {
-      candlestickSeriesRef.current.setMarkers(markers);
+    } catch {
+      // Ignore if chart/series is disposed
     }
   }, [candles, positionDto]);
 

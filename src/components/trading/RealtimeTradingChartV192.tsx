@@ -36,7 +36,11 @@ export const RealtimeTradingChartV192: React.FC<RealtimeTradingChartV192Props> =
 
     // Clean up previous chart
     if (chartApiRef.current) {
-      chartApiRef.current.remove();
+      try {
+        chartApiRef.current.remove();
+      } catch {
+        // Ignore if already disposed
+      }
       chartApiRef.current = null;
     }
 
@@ -245,7 +249,11 @@ export const RealtimeTradingChartV192: React.FC<RealtimeTradingChartV192Props> =
 
     const handleResize = () => {
       if (chartContainerRef.current && chartApiRef.current) {
-        chartApiRef.current.applyOptions({ width: chartContainerRef.current.clientWidth });
+        try {
+          chartApiRef.current.applyOptions({ width: chartContainerRef.current.clientWidth });
+        } catch {
+          // Ignore if disposed
+        }
       }
     };
 
@@ -254,7 +262,11 @@ export const RealtimeTradingChartV192: React.FC<RealtimeTradingChartV192Props> =
     return () => {
       window.removeEventListener("resize", handleResize);
       if (chartApiRef.current) {
-        chartApiRef.current.remove();
+        try {
+          chartApiRef.current.remove();
+        } catch {
+          // Ignore if disposed
+        }
         chartApiRef.current = null;
       }
     };

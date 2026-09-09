@@ -4,6 +4,8 @@
  * Entry/Stop/Target Price Levels, and Signal Validation Gate.
  */
 
+import { defaultGraphShapeScanner, ShapeResult, CandleData } from "./GraphShapeScanner";
+
 export interface CandleRecord {
   open: number;
   high: number;
@@ -19,6 +21,10 @@ export interface ExplainableTradeIdea {
   name: string;
   market: "KOREA" | "US" | "BTC";
   score: number;
+  graphScore?: number;
+  flowScore?: number;
+  riskScore?: number;
+  finalScore?: number;
   grade: "S" | "A+" | "A" | "B" | "NO_SETUP";
   decision: "STRONG_BUY_CANDIDATE" | "BUY_CANDIDATE" | "WATCH_FOR_ENTRY" | "WATCH" | "AVOID";
   price: number;
@@ -40,6 +46,7 @@ export interface ExplainableTradeIdea {
   wouldBuy: boolean;
   aiSummary?: string;
   scannedAt: string;
+  graphShapeResult?: ShapeResult;
 }
 
 export function computeEma(values: number[], period: number): number[] {
@@ -324,9 +331,37 @@ export function analyzeStockIdea(
   const target1 = price + riskAmt * 2.0;
   const target2 = price + riskAmt * 3.0;
 
+  // Run GraphShapeScanner
+  const candleDataList: CandleData[] = records.map((r) => ({
+    open: r.open,
+    high: r.high,
+    low: r.low,
+    close: r.close,
+    volume: r.volume,
+    timestamp: r.timestamp,
+  }));
+  const shapeResult = defaultGraphShapeScanner.scan(candleDataList, symbol);
+
+  // Combine Graph Scanner Reasons & Blockers
+  if (shapeResult.reasons.length > 0) {
+    shapeResult.reasons.forEach((r) => {
+      if (!bullishReasons.includes(r)) bullishReasons.push(`Graph Pattern: ${r}`);
+    });
+  }
+  if (shapeResult.blockers.length > 0) {
+    shapeResult.blockers.forEach((b) => {
+      if (!riskReasons.includes(b)) riskReasons.push(`Graph Blocker: ${b}`);
+    });
+  }
+
+  // Combined Weight Calculation: 65% Trading Engine + 35% Graph Shape Engine
+  const blendedScore = Math.round(score * 0.65 + shapeResult.graphScore * 0.35);
+
   // Signal Validation Gate
   const gatePassed =
-    score >= 78 &&
+    blendedScore >= 78 &&
+    shapeResult.verdict === "YES" &&
+    shapeResult.blockers.length === 0 &&
     vwapDist < 5.0 &&
     xRvol >= 1.2 &&
     xMacdHist > 0 &&
@@ -334,7 +369,9 @@ export function analyzeStockIdea(
     atrPct <= 7.5;
 
   if (!gatePassed) {
-    if (score < 78) riskReasons.push("최소 Profit Opportunity Score (78점) 미달");
+    if (blendedScore < 78) riskReasons.push("최소 Profit Opportunity Score (78점) 미달");
+    if (shapeResult.verdict !== "YES") riskReasons.push("Graph Shape Scanner 기준 미달 (YES 조건 미충족)");
+    if (shapeResult.blockers.length > 0) riskReasons.push(`Graph Blocker 감지 (${shapeResult.blockers.join(", ")})`);
     if (vwapDist >= 5.0) riskReasons.push("VWAP 과대 이격으로 추격 진입 제한");
     if (xRvol < 1.2) riskReasons.push("수급 확인을 위한 RVOL (1.2배) 미달");
   }
@@ -343,19 +380,19 @@ export function analyzeStockIdea(
   let decision: "STRONG_BUY_CANDIDATE" | "BUY_CANDIDATE" | "WATCH_FOR_ENTRY" | "WATCH" | "AVOID" = "AVOID";
   let wouldBuy = false;
 
-  if (score >= 88 && gatePassed) {
+  if (blendedScore >= 88 && gatePassed) {
     grade = "S";
     decision = "STRONG_BUY_CANDIDATE";
     wouldBuy = true;
-  } else if (score >= 78 && gatePassed) {
+  } else if (blendedScore >= 78 && gatePassed) {
     grade = "A+";
     decision = "BUY_CANDIDATE";
     wouldBuy = true;
-  } else if (score >= 68) {
+  } else if (blendedScore >= 68) {
     grade = "A";
     decision = "WATCH_FOR_ENTRY";
     wouldBuy = false;
-  } else if (score >= 55) {
+  } else if (blendedScore >= 55) {
     grade = "B";
     decision = "WATCH";
     wouldBuy = false;
@@ -366,17 +403,25 @@ export function analyzeStockIdea(
   }
 
   const thesis = wouldBuy
-    ? `${name}(${symbol})은 상승 추세, 거래량 폭발(RVOL ${xRvol.toFixed(2)}배), VWAP 상단 유지 및 차트 패턴이 완벽히 정렬된 Signal Gate 통과 종목입니다.`
-    : `${name}(${symbol})은 일부 차트 요소를 갖추었으나, Signal Gate 매수 확증 기준(Score, RVOL, 추격이격)을 완전히 충족하지 않았습니다.`;
+    ? `${name}(${symbol})은 상승 추세, 거래량 폭발(RVOL ${xRvol.toFixed(2)}배), VWAP 상단 유지 및 그래프 모양 스캐너(${shapeResult.patterns.join(", ")})가 완벽히 정렬된 Signal Gate 통과 종목입니다.`
+    : `${name}(${symbol})은 일부 차트 요소를 갖추었으나, Signal Gate 매수 확증 기준(Score, RVOL, 추격이격, Graph Shape)을 완전히 충족하지 않았습니다.`;
 
   const invalidation = `${Math.round(stop).toLocaleString()}원 하향 이탈 또는 VWAP 하역 이탈 후 복귀 실패 시 상승 시나리오 무효화`;
+
+  const detectedPatternStr = shapeResult.patterns.length > 0 
+    ? `${pattern} | ${shapeResult.patterns.join(", ")}`
+    : pattern;
 
   return {
     id: `${symbol}-${Date.now()}`,
     symbol,
     name,
     market,
-    score,
+    score: blendedScore,
+    graphScore: shapeResult.graphScore,
+    flowScore: shapeResult.flowScore,
+    riskScore: shapeResult.riskScore,
+    finalScore: shapeResult.finalScore,
     grade,
     decision,
     price: Math.round(price),
@@ -390,12 +435,29 @@ export function analyzeStockIdea(
     rvol: parseFloat(xRvol.toFixed(2)),
     adx: parseFloat((xRsi * 0.4 + 20).toFixed(1)), // ADX approximation
     atrPct: parseFloat(atrPct.toFixed(2)),
-    pattern,
+    pattern: detectedPatternStr,
     bullishReasons,
     riskReasons,
     thesis,
     invalidation,
     wouldBuy,
-    scannedAt: new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    scannedAt: new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+    graphShapeResult: shapeResult
   };
 }
+
+/**
+ * Filters candidates under YES ONLY constraints.
+ * NO, WATCH, and AVOID signals are excluded completely.
+ * If fewer than topN pass, returns only those that passed without padding.
+ */
+export function filterYesOnlyCandidates(
+  ideas: ExplainableTradeIdea[],
+  topN: number = 5,
+  minScore: number = 82
+): ExplainableTradeIdea[] {
+  const approved = ideas.filter((item) => item.wouldBuy && item.score >= minScore);
+  approved.sort((a, b) => b.score - a.score || b.rvol - a.rvol);
+  return approved.slice(0, topN);
+}
+

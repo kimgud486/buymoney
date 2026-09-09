@@ -89,6 +89,25 @@ export const RealTimeTradingViewChartWithSignalOverlayV20: React.FC<
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
+    if (chartRef.current) {
+      try {
+        chartRef.current.remove();
+      } catch {
+        // Ignore if disposed
+      }
+      chartRef.current = null;
+    }
+    candleSeriesRef.current = null;
+    vwapSeriesRef.current = null;
+    ema9SeriesRef.current = null;
+    ema20SeriesRef.current = null;
+    volumeSeriesRef.current = null;
+    entryLineRef.current = null;
+    slLineRef.current = null;
+    tp1LineRef.current = null;
+    tp2LineRef.current = null;
+    tp3LineRef.current = null;
+
     const chart = createChart(chartContainerRef.current, {
       width: chartContainerRef.current.clientWidth,
       height: 480,
@@ -154,14 +173,33 @@ export const RealTimeTradingViewChartWithSignalOverlayV20: React.FC<
 
     const handleResize = () => {
       if (chartContainerRef.current && chartRef.current) {
-        chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth });
+        try {
+          chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth });
+        } catch {
+          // Ignore if disposed
+        }
       }
     };
     window.addEventListener("resize", handleResize);
 
     return () => {
       window.removeEventListener("resize", handleResize);
-      chart.remove();
+      try {
+        chart.remove();
+      } catch {
+        // Ignore if disposed
+      }
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      vwapSeriesRef.current = null;
+      ema9SeriesRef.current = null;
+      ema20SeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      entryLineRef.current = null;
+      slLineRef.current = null;
+      tp1LineRef.current = null;
+      tp2LineRef.current = null;
+      tp3LineRef.current = null;
     };
   }, [symbol, isWhiteTheme]);
 
@@ -183,130 +221,134 @@ export const RealTimeTradingViewChartWithSignalOverlayV20: React.FC<
       // Aggregate into candle bar
       const { updatedBar, completedBar } = barBuilderRef.current.processTick(v20Tick);
 
-      if (candleSeriesRef.current && updatedBar) {
-        candleSeriesRef.current.update({
-          time: updatedBar.time as any,
-          open: updatedBar.open,
-          high: updatedBar.high,
-          low: updatedBar.low,
-          close: updatedBar.close,
-        });
-      }
-
-      // Compute indicators on bar completion or update
-      const barForIndicators = completedBar || updatedBar;
-      const indicatorSnapshot = indicatorEngineRef.current.calculate({
-        time: barForIndicators.time,
-        open: barForIndicators.open,
-        high: barForIndicators.high,
-        low: barForIndicators.low,
-        close: barForIndicators.close,
-        volume: barForIndicators.volume,
-      });
-
-      if (vwapSeriesRef.current && indicatorSnapshot.vwap) {
-        vwapSeriesRef.current.update({ time: barForIndicators.time as any, value: indicatorSnapshot.vwap });
-      }
-
-      if (ema9SeriesRef.current && indicatorSnapshot.ema9) {
-        ema9SeriesRef.current.update({ time: barForIndicators.time as any, value: indicatorSnapshot.ema9 });
-      }
-
-      if (ema20SeriesRef.current && indicatorSnapshot.ema20) {
-        ema20SeriesRef.current.update({ time: barForIndicators.time as any, value: indicatorSnapshot.ema20 });
-      }
-
-      // Evaluate Setup Score
-      const setupResult = V20SetupScorer.evaluate({
-        price: v20Tick.price,
-        vwap: indicatorSnapshot.vwap,
-        ema9: indicatorSnapshot.ema9,
-        ema20: indicatorSnapshot.ema20,
-        macdHist: indicatorSnapshot.macdHist,
-        rsi14: indicatorSnapshot.rsi14,
-        isHigherHighHigherLow: indicatorSnapshot.structureTrend === "BULLISH",
-        isBreakoutConfirmed: indicatorSnapshot.isBreakoutConfirmed,
-        rvol: indicatorSnapshot.rvol,
-        dataStatus: v20Tick.isVerified ? "REALTIME_VERIFIED" : "STALE",
-      });
-
-      setSetupScoreResult(setupResult);
-
-      // Trigger new trade plan if setup score is qualified and no active signal exists
-      let currentActiveSignal = activeSignal;
-      if (setupResult.isQualified && !currentActiveSignal) {
-        const plan = AdaptiveTradePlanEngineV20.createTradePlan({
-          symbol,
-          market,
-          entryPrice: v20Tick.price,
-          atr14: indicatorSnapshot.atr14,
-          vwap: indicatorSnapshot.vwap,
-          ema20: indicatorSnapshot.ema20,
-          lastSwingLow: indicatorSnapshot.lastSwingLow,
-          rvol: indicatorSnapshot.rvol,
-        });
-
-        currentActiveSignal = signalTrackerRef.current.registerSignal(plan);
-        setActiveSignal(currentActiveSignal);
-
-        // Render Lines on Chart
-        if (chartRef.current) {
-          if (!entryLineRef.current) {
-            entryLineRef.current = chartRef.current.addSeries(LineSeries, {
-              color: "#3b82f6",
-              lineStyle: LineStyle.Dashed,
-              title: "Entry",
-            });
-          }
-          if (!slLineRef.current) {
-            slLineRef.current = chartRef.current.addSeries(LineSeries, {
-              color: "#ef4444",
-              lineStyle: LineStyle.Solid,
-              title: "Stop Loss",
-            });
-          }
-          if (!tp1LineRef.current) {
-            tp1LineRef.current = chartRef.current.addSeries(LineSeries, {
-              color: "#10b981",
-              lineStyle: LineStyle.Dotted,
-              title: "TP1",
-            });
-          }
-          if (!tp2LineRef.current) {
-            tp2LineRef.current = chartRef.current.addSeries(LineSeries, {
-              color: "#10b981",
-              lineStyle: LineStyle.Dashed,
-              title: "TP2",
-            });
-          }
-          if (!tp3LineRef.current) {
-            tp3LineRef.current = chartRef.current.addSeries(LineSeries, {
-              color: "#10b981",
-              lineStyle: LineStyle.Solid,
-              title: "TP3",
-            });
-          }
-
-          const t = barForIndicators.time as any;
-          entryLineRef.current.setData([{ time: t, value: plan.entryPrice }]);
-          slLineRef.current.setData([{ time: t, value: plan.stopLossPrice }]);
-          tp1LineRef.current.setData([{ time: t, value: plan.tp1 }]);
-          tp2LineRef.current.setData([{ time: t, value: plan.tp2 }]);
-          tp3LineRef.current.setData([{ time: t, value: plan.tp3 }]);
+      try {
+        if (candleSeriesRef.current && updatedBar) {
+          candleSeriesRef.current.update({
+            time: updatedBar.time as any,
+            open: updatedBar.open,
+            high: updatedBar.high,
+            low: updatedBar.low,
+            close: updatedBar.close,
+          });
         }
-      }
 
-      // Process ticks through signal tracker
-      signalTrackerRef.current.processTick(v20Tick);
-      const activeList = signalTrackerRef.current.getActiveSignals(symbol);
-      setActiveSignal(activeList[0] || null);
-
-      // Update trailing floor line on chart if active signal exists
-      if (activeList[0] && slLineRef.current) {
-        slLineRef.current.update({
-          time: barForIndicators.time as any,
-          value: activeList[0].currentTrailingFloor,
+        // Compute indicators on bar completion or update
+        const barForIndicators = completedBar || updatedBar;
+        const indicatorSnapshot = indicatorEngineRef.current.calculate({
+          time: barForIndicators.time,
+          open: barForIndicators.open,
+          high: barForIndicators.high,
+          low: barForIndicators.low,
+          close: barForIndicators.close,
+          volume: barForIndicators.volume,
         });
+
+        if (vwapSeriesRef.current && indicatorSnapshot.vwap) {
+          vwapSeriesRef.current.update({ time: barForIndicators.time as any, value: indicatorSnapshot.vwap });
+        }
+
+        if (ema9SeriesRef.current && indicatorSnapshot.ema9) {
+          ema9SeriesRef.current.update({ time: barForIndicators.time as any, value: indicatorSnapshot.ema9 });
+        }
+
+        if (ema20SeriesRef.current && indicatorSnapshot.ema20) {
+          ema20SeriesRef.current.update({ time: barForIndicators.time as any, value: indicatorSnapshot.ema20 });
+        }
+
+        // Evaluate Setup Score
+        const setupResult = V20SetupScorer.evaluate({
+          price: v20Tick.price,
+          vwap: indicatorSnapshot.vwap,
+          ema9: indicatorSnapshot.ema9,
+          ema20: indicatorSnapshot.ema20,
+          macdHist: indicatorSnapshot.macdHist,
+          rsi14: indicatorSnapshot.rsi14,
+          isHigherHighHigherLow: indicatorSnapshot.structureTrend === "BULLISH",
+          isBreakoutConfirmed: indicatorSnapshot.isBreakoutConfirmed,
+          rvol: indicatorSnapshot.rvol,
+          dataStatus: v20Tick.isVerified ? "REALTIME_VERIFIED" : "STALE",
+        });
+
+        setSetupScoreResult(setupResult);
+
+        // Trigger new trade plan if setup score is qualified and no active signal exists
+        let currentActiveSignal = activeSignal;
+        if (setupResult.isQualified && !currentActiveSignal) {
+          const plan = AdaptiveTradePlanEngineV20.createTradePlan({
+            symbol,
+            market,
+            entryPrice: v20Tick.price,
+            atr14: indicatorSnapshot.atr14,
+            vwap: indicatorSnapshot.vwap,
+            ema20: indicatorSnapshot.ema20,
+            lastSwingLow: indicatorSnapshot.lastSwingLow,
+            rvol: indicatorSnapshot.rvol,
+          });
+
+          currentActiveSignal = signalTrackerRef.current.registerSignal(plan);
+          setActiveSignal(currentActiveSignal);
+
+          // Render Lines on Chart
+          if (chartRef.current) {
+            if (!entryLineRef.current) {
+              entryLineRef.current = chartRef.current.addSeries(LineSeries, {
+                color: "#3b82f6",
+                lineStyle: LineStyle.Dashed,
+                title: "Entry",
+              });
+            }
+            if (!slLineRef.current) {
+              slLineRef.current = chartRef.current.addSeries(LineSeries, {
+                color: "#ef4444",
+                lineStyle: LineStyle.Solid,
+                title: "Stop Loss",
+              });
+            }
+            if (!tp1LineRef.current) {
+              tp1LineRef.current = chartRef.current.addSeries(LineSeries, {
+                color: "#10b981",
+                lineStyle: LineStyle.Dotted,
+                title: "TP1",
+              });
+            }
+            if (!tp2LineRef.current) {
+              tp2LineRef.current = chartRef.current.addSeries(LineSeries, {
+                color: "#10b981",
+                lineStyle: LineStyle.Dashed,
+                title: "TP2",
+              });
+            }
+            if (!tp3LineRef.current) {
+              tp3LineRef.current = chartRef.current.addSeries(LineSeries, {
+                color: "#10b981",
+                lineStyle: LineStyle.Solid,
+                title: "TP3",
+              });
+            }
+
+            const t = barForIndicators.time as any;
+            entryLineRef.current.setData([{ time: t, value: plan.entryPrice }]);
+            slLineRef.current.setData([{ time: t, value: plan.stopLossPrice }]);
+            tp1LineRef.current.setData([{ time: t, value: plan.tp1 }]);
+            tp2LineRef.current.setData([{ time: t, value: plan.tp2 }]);
+            tp3LineRef.current.setData([{ time: t, value: plan.tp3 }]);
+          }
+        }
+
+        // Process ticks through signal tracker
+        signalTrackerRef.current.processTick(v20Tick);
+        const activeList = signalTrackerRef.current.getActiveSignals(symbol);
+        setActiveSignal(activeList[0] || null);
+
+        // Update trailing floor line on chart if active signal exists
+        if (activeList[0] && slLineRef.current) {
+          slLineRef.current.update({
+            time: barForIndicators.time as any,
+            value: activeList[0].currentTrailingFloor,
+          });
+        }
+      } catch {
+        // Ignore if chart is disposed
       }
 
       setStats(signalTrackerRef.current.getStats(symbol));
