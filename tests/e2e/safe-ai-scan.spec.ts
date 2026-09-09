@@ -82,17 +82,19 @@ test.describe("Safe AI scan-to-review E2E", () => {
     const launcher = await openDashboardAndGetLauncher(page);
     await launcher.click();
 
-    await expect(page.getByText("E2E 검증종목")).toBeVisible();
-    await expect(page.getByText(/REVIEW_READY/)).toBeVisible();
-    await expect(page.getByText(/R:R 2\.00/)).toBeVisible();
+    const candidateButton = page.getByRole("button", { name: /#1 E2E 검증종목 005930 R:R 2\.00/ });
+    await expect(candidateButton).toBeVisible();
+    await expect(candidateButton).toContainText("REVIEW_READY");
+    await expect(candidateButton).toContainText("R:R 2.00");
+    await expect(page.getByRole("heading", { name: /E2E 검증종목 005930/ })).toBeVisible();
     expect(scannerCalls).toBe(1);
 
     const finalReview = page.getByRole("button", { name: /이 종목 메인 차트로 이동/ });
     await expect(finalReview).toBeVisible();
     await finalReview.click();
 
-    await expect(page.getByText(/메인 차트 검토 종목으로 선택했습니다/)).toBeVisible();
-    await expect(page.getByText(/AI가 브로커 주문을 직접 전송하지 않습니다/)).toBeVisible();
+    await expect(page.getByText(/메인 차트 검토 종목으로 선택했습니다/).first()).toBeVisible();
+    await expect(page.getByText(/AI가 브로커 주문을 직접 전송하지 않습니다/).first()).toBeVisible();
   });
 
   test("missing verified metrics fail closed instead of fabricating a review-ready candidate", async ({ page }) => {
@@ -120,10 +122,14 @@ test.describe("Safe AI scan-to-review E2E", () => {
     const launcher = await openDashboardAndGetLauncher(page);
     await launcher.click();
 
-    await expect(page.getByText("불완전 데이터")).toBeVisible();
-    await expect(page.getByText(/NO ·/)).toBeVisible();
-    await expect(page.getByText(/RSI 실측값이 확인되지 않았습니다/)).toBeVisible();
-    await expect(page.getByText(/RVOL 실측값이 확인되지 않았습니다/)).toBeVisible();
+    const rejectedCandidate = page.getByRole("button", { name: /#1 불완전 데이터 TEST-MISSING R:R 0/ });
+    await expect(rejectedCandidate).toBeVisible();
+    await expect(rejectedCandidate).toContainText("NO ·");
+    await expect(page.getByRole("heading", { name: /불완전 데이터 TEST-MISSING/ })).toBeVisible();
+
+    const riskPanel = page.getByText("위험 / 미충족 조건").locator("..");
+    await expect(riskPanel).toContainText("RSI 실측값이 확인되지 않았습니다");
+    await expect(riskPanel).toContainText("RVOL 실측값이 확인되지 않았습니다");
     await expect(page.getByText(/REVIEW_READY/)).toHaveCount(0);
   });
 });
