@@ -50,9 +50,16 @@ if (serverContent) {
   if (randomMatches.length > 10) errors.push(`Excessive Math.random() usage in server.ts (${randomMatches.length} occurrences)`);
 }
 
-const precheckUi = read("src/components/VerifiedAiOpportunityScanner.tsx");
-if (!precheckUi.includes('finalAuthority: "SERVER_V20"')) errors.push("VerifiedAiOpportunityScanner must hand candidates to SERVER_V20 authority");
-if (!precheckUi.includes("최종 BUY 아님")) errors.push("VerifiedAiOpportunityScanner must visibly state that PRECHECK is not final BUY");
+const scannerUi = read("src/components/VerifiedAiOpportunityScanner.tsx");
+if (!scannerUi.includes('finalAuthority: "SERVER_V20"')) errors.push("VerifiedAiOpportunityScanner must identify SERVER_V20 as final authority");
+if (!scannerUi.includes('/api/ai/hot-list')) errors.push("VerifiedAiOpportunityScanner must consume the production server V20 hot-list route");
+if (scannerUi.includes("evaluateVerifiedSignal(")) errors.push("VerifiedAiOpportunityScanner must not self-authorize BUY with a client-side signal engine");
+if (!scannerUi.includes("브라우저가 BUY를 만들지 않습니다")) errors.push("VerifiedAiOpportunityScanner must visibly state that browser-side BUY authority is disabled");
+
+const v20Scanner = read("server/v20/ServerGlobalRealtimeScannerV20.ts");
+if (!v20Scanner.includes("ExecutablePatternGateV20.evaluate")) errors.push("ServerGlobalRealtimeScannerV20 must enforce executable-pattern evidence");
+if (!v20Scanner.includes("patternGate.passed")) errors.push("ServerGlobalRealtimeScannerV20 BUY evidence must require patternGate.passed");
+if (!v20Scanner.includes("trueMtfGate.passed")) errors.push("ServerGlobalRealtimeScannerV20 BUY evidence must require trueMtfGate.passed");
 
 const finalService = read("server/v20/FinalBuyHoldDecisionServiceV20.ts");
 for (const requiredToken of [
