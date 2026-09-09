@@ -517,6 +517,13 @@ const liveStockDataCache = new Map<string, { data: PresetStock; expiresAt: numbe
 
 // Fetch live stock and crypto data from primary real-time APIs (Naver Polling, Naver Basic, Upbit, Yahoo)
 async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
+  // PUBLIC_VERIFIED_QUOTE_SANITIZER: public quote endpoints may expose only
+  // provider-verified price fields. Fundamentals/TA placeholders are never truth.
+  const sanitizeVerifiedQuote = (data: PresetStock): PresetStock => ({
+    ...data,
+    per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0,
+    technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
+  });
   const symbol = preset.symbol;
   const now = Date.now();
   const cached = liveStockDataCache.get(symbol);
@@ -543,7 +550,7 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
             market: "BTC"
           };
           liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
-          return stockRes;
+          return sanitizeVerifiedQuote(stockRes);
         }
       }
     } catch (e) {}
@@ -604,7 +611,7 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
               marketCap: marketCapStr
             };
             liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
-            return stockRes;
+            return sanitizeVerifiedQuote(stockRes);
           }
         }
       }
@@ -648,7 +655,7 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
               changePct: ratioNum
             };
             liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
-            return stockRes;
+            return sanitizeVerifiedQuote(stockRes);
           }
         }
       }
@@ -680,7 +687,7 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
               changePct: changePctVal
             };
             liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
-            return stockRes;
+            return sanitizeVerifiedQuote(stockRes);
           }
         }
       } catch (e) {
@@ -719,7 +726,7 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
                 changePct: Math.round(signedRatio * 100) / 100
               };
               liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
-              return stockRes;
+              return sanitizeVerifiedQuote(stockRes);
             }
           }
         }
@@ -751,22 +758,15 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
         const change = currentPrice - prevClose;
         const changePct = prevClose !== 0 ? (change / prevClose) * 100 : 0;
         
-        let realRsi = preset.technical.rsi;
-        if (changePct > 1.5) realRsi = Math.min(80, realRsi + 3);
-        else if (changePct < -1.5) realRsi = Math.max(20, realRsi - 3);
-        
         const stockRes: PresetStock = {
           ...preset,
           price: Math.round(currentPrice * 100) / 100,
           change: Math.round(change * 100) / 100,
           changePct: Math.round(changePct * 100) / 100,
-          technical: {
-            ...preset.technical,
-            rsi: Math.round(realRsi)
-          }
+          technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
         };
         liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
-        return stockRes;
+        return sanitizeVerifiedQuote(stockRes);
       }
     }
   } catch (err: any) {
@@ -775,9 +775,9 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
 
   const fallbackCached = liveStockDataCache.get(symbol);
   if (fallbackCached) {
-    return fallbackCached.data;
+    return sanitizeVerifiedQuote(fallbackCached.data);
   }
-  return preset;
+  return sanitizeVerifiedQuote({ ...preset, price: 0, change: 0, changePct: 0, marketCap: "N/A" });
 }
 
 // Pass-through function to preserve exact real market quotes without pseudo-random corruption
@@ -896,8 +896,9 @@ async function fetchIndexData(symbol: string, defaultVal: { value: number; chang
     if (!result) throw new Error("Empty index result");
     
     const meta = result.meta;
-    const current = meta.regularMarketPrice || defaultVal.value;
-    const prev = meta.previousClose || meta.chartPreviousClose || defaultVal.value;
+    const current = Number(meta.regularMarketPrice);
+    const prev = Number(meta.previousClose || meta.chartPreviousClose);
+    if (!(current > 0) || !(prev > 0)) throw new Error("MISSING_VERIFIED_INDEX_PRICE");
     const change = current - prev;
     const pct = prev !== 0 ? (change / prev) * 100 : 0;
     
@@ -1271,7 +1272,7 @@ app.get("/api/market/naver-batch", async (req, res) => {
                   nameKor: data.stockExchangeType?.nameKor || "코스피"
                 },
                 marketValueFull: data.marketValue || "실시간 연동",
-                accumulatedTradingVolume: data.accumulatedTradingVolume || "1,000"
+                accumulatedTradingVolume: data.accumulatedTradingVolume || "0"
               };
             }
           }
@@ -1349,13 +1350,13 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
   if (!queryVal) {
     if (marketFilter === "UPBIT") {
       const upbitPresets: PresetStock[] = [
-        { symbol: "KRW-BTC", name: "비트코인 (Bitcoin)", market: "BTC", price: 108000000, change: 0, changePct: 0, marketCap: "2,000조원", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 55, macd: "Bullish", bollinger: "upper", trend: "up" } },
-        { symbol: "KRW-ETH", name: "이더리움 (Ethereum)", market: "BTC", price: 3850000, change: 0, changePct: 0, marketCap: "450조원", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 52, macd: "Bullish", bollinger: "middle", trend: "up" } },
-        { symbol: "KRW-SOL", name: "솔라나 (Solana)", market: "BTC", price: 215000, change: 0, changePct: 0, marketCap: "95조원", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 61, macd: "Bullish", bollinger: "upper", trend: "up" } },
-        { symbol: "KRW-XRP", name: "리플 (Ripple)", market: "BTC", price: 820, change: 0, changePct: 0, marketCap: "48조원", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 48, macd: "Neutral", bollinger: "middle", trend: "sideways" } },
-        { symbol: "KRW-DOGE", name: "도지코인 (Dogecoin)", market: "BTC", price: 165, change: 0, changePct: 0, marketCap: "24조원", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 54, macd: "Bullish", bollinger: "middle", trend: "up" } },
-        { symbol: "KRW-ADA", name: "에이다 (Cardano)", market: "BTC", price: 540, change: 0, changePct: 0, marketCap: "19조원", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 49, macd: "Neutral", bollinger: "middle", trend: "sideways" } },
-        { symbol: "KRW-AVAX", name: "아발란체 (Avalanche)", market: "BTC", price: 34000, change: 0, changePct: 0, marketCap: "14조원", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 53, macd: "Bullish", bollinger: "middle", trend: "up" } },
+        { symbol: "KRW-BTC", name: "비트코인 (Bitcoin)", market: "BTC", price: 0, change: 0, changePct: 0, marketCap: "N/A", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" } },
+        { symbol: "KRW-ETH", name: "이더리움 (Ethereum)", market: "BTC", price: 0, change: 0, changePct: 0, marketCap: "N/A", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" } },
+        { symbol: "KRW-SOL", name: "솔라나 (Solana)", market: "BTC", price: 0, change: 0, changePct: 0, marketCap: "N/A", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" } },
+        { symbol: "KRW-XRP", name: "리플 (Ripple)", market: "BTC", price: 0, change: 0, changePct: 0, marketCap: "N/A", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" } },
+        { symbol: "KRW-DOGE", name: "도지코인 (Dogecoin)", market: "BTC", price: 0, change: 0, changePct: 0, marketCap: "N/A", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" } },
+        { symbol: "KRW-ADA", name: "에이다 (Cardano)", market: "BTC", price: 0, change: 0, changePct: 0, marketCap: "N/A", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" } },
+        { symbol: "KRW-AVAX", name: "아발란체 (Avalanche)", market: "BTC", price: 0, change: 0, changePct: 0, marketCap: "N/A", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" } },
       ];
       try {
         const liveUpbit = await Promise.all(upbitPresets.map(stock => fetchLiveStockData(stock)));
@@ -3765,7 +3766,7 @@ JSON 구조 요구사항:
               price: st.price || 45000,
               change: 1000,
               changePct: st.changePct || 2.5,
-              marketCap: "N/A", per: 15, pbr: 1.2, roe: 10, debtRatio: 20, revenueGrowth: 10, operatingMargin: 12, news: [], technical: { rsi: 55, macd: "Bullish", bollinger: "middle", trend: "up" }
+              marketCap: "N/A", per: 15, pbr: 1.2, roe: 10, debtRatio: 20, revenueGrowth: 10, operatingMargin: 12, news: [], technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
             };
             const live = await fetchLiveStockData(preset as PresetStock).catch(() => ({ price: st.price, changePct: st.changePct }));
             return {
@@ -3842,59 +3843,59 @@ JSON 구조 요구사항:
   // Master List of 100+ Real Listed Stocks across KOSPI, KOSDAQ, US, Upbit
   const ALL_REAL_STOCKS_MASTER = [
     // 반도체 & HBM & 소부장
-    { symbol: "005930", name: "삼성전자", market: "KOSPI", price: 78500, changePct: 1.42, category: "반도체/파운드리", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "468.2조원", tags: ["삼성", "반도체", "hbm", "파운드리", "메모리", "대장주", "냉각", "방열", "cxl"] },
-    { symbol: "000660", name: "SK하이닉스", market: "KOSPI", price: 198500, changePct: 2.10, category: "AI 반도체", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "144.5조원", tags: ["sk", "하이닉스", "반도체", "hbm", "dram", "ai", "cxl", "유리기판"] },
-    { symbol: "042700", name: "한미반도체", market: "KOSPI", price: 135000, changePct: 3.80, category: "HBM 장비", capGroup: "MID", capGroupKo: "중형주", marketCap: "13.1조원", tags: ["한미반도체", "hbm", "tc본더", "반도체장비", "냉각"] },
+    { symbol: "005930", name: "삼성전자", market: "KOSPI", price: 78500, changePct: 1.42, category: "반도체/파운드리", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["삼성", "반도체", "hbm", "파운드리", "메모리", "대장주", "냉각", "방열", "cxl"] },
+    { symbol: "000660", name: "SK하이닉스", market: "KOSPI", price: 198500, changePct: 2.10, category: "AI 반도체", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["sk", "하이닉스", "반도체", "hbm", "dram", "ai", "cxl", "유리기판"] },
+    { symbol: "042700", name: "한미반도체", market: "KOSPI", price: 135000, changePct: 3.80, category: "HBM 장비", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["한미반도체", "hbm", "tc본더", "반도체장비", "냉각"] },
     { symbol: "399720", name: "가온칩스", market: "KOSDAQ", price: 82500, changePct: 4.50, category: "디자인하우스", capGroup: "MID", capGroupKo: "중형주", marketCap: "9,500억원", tags: ["가온칩스", "디자인하우스", "팹리스", "삼성파운드리"] },
     { symbol: "394280", name: "오픈엣지테크놀로지", market: "KOSDAQ", price: 21500, changePct: 5.20, category: "AI IP", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "4,600억원", tags: ["오픈엣지", "팹리스", "ip", "cxl", "npu"] },
-    { symbol: "025770", name: "리노공업", market: "KOSDAQ", price: 210000, changePct: 2.80, category: "반도체 소켓", capGroup: "MID", capGroupKo: "중형주", marketCap: "3.2조원", tags: ["리노공업", "리노핀", "소켓", "테스트"] },
-    { symbol: "089030", name: "테크윙", market: "KOSDAQ", price: 38500, changePct: 6.10, category: "HBM 검사장비", capGroup: "MID", capGroupKo: "중형주", marketCap: "1.4조원", tags: ["테크윙", "hbm", "핸들러", "검사장비"] },
+    { symbol: "025770", name: "리노공업", market: "KOSDAQ", price: 210000, changePct: 2.80, category: "반도체 소켓", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["리노공업", "리노핀", "소켓", "테스트"] },
+    { symbol: "089030", name: "테크윙", market: "KOSDAQ", price: 38500, changePct: 6.10, category: "HBM 검사장비", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["테크윙", "hbm", "핸들러", "검사장비"] },
     { symbol: "161580", name: "필옵틱스", market: "KOSDAQ", price: 24500, changePct: 7.20, category: "유리기판", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "5,800억원", tags: ["필옵틱스", "유리기판", "tgv", "레이저"] },
 
     // 2차전지 & 배터리 & 리튬
-    { symbol: "373220", name: "LG에너지솔루션", market: "KOSPI", price: 342000, changePct: 0.88, category: "배터리 셀", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "80.0조원", tags: ["lg", "lg엔솔", "배터리", "2차전지", "전기차"] },
-    { symbol: "247540", name: "에코프로비엠", market: "KOSDAQ", price: 185000, changePct: 2.30, category: "양극재", capGroup: "MID", capGroupKo: "중형주", marketCap: "18.1조원", tags: ["에코프로", "에코프로비엠", "양극재", "2차전지", "코스닥"] },
-    { symbol: "086520", name: "에코프로", market: "KOSDAQ", price: 92000, changePct: 3.12, category: "2차전지 지주사", capGroup: "MID", capGroupKo: "중형주", marketCap: "12.2조원", tags: ["에코프로", "지주사", "2차전지", "리튬"] },
-    { symbol: "003670", name: "포스코퓨처엠", market: "KOSPI", price: 245000, changePct: 1.80, category: "음/양극재", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "18.9조원", tags: ["포스코", "퓨처엠", "양극재", "음극재", "배터리"] },
-    { symbol: "066970", name: "엘앤에프", market: "KOSPI", price: 112000, changePct: 2.10, category: "양극재", capGroup: "MID", capGroupKo: "중형주", marketCap: "4.1조원", tags: ["엘앤에프", "양극재", "테슬라 supply", "2차전지"] },
-    { symbol: "006400", name: "삼성SDI", market: "KOSPI", price: 382000, changePct: 1.50, category: "전고체 배터리", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "26.2조원", tags: ["삼성", "삼성sdi", "전고체", "배터리", "2차전지"] },
-    { symbol: "457190", name: "이수스페셜티케미컬", market: "KOSDAQ", price: 42500, changePct: 8.10, category: "전고체 황화물", capGroup: "MID", capGroupKo: "중형주", marketCap: "1.2조원", tags: ["이수", "전고체", "황화리튬", "배터리소재"] },
+    { symbol: "373220", name: "LG에너지솔루션", market: "KOSPI", price: 342000, changePct: 0.88, category: "배터리 셀", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["lg", "lg엔솔", "배터리", "2차전지", "전기차"] },
+    { symbol: "247540", name: "에코프로비엠", market: "KOSDAQ", price: 185000, changePct: 2.30, category: "양극재", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["에코프로", "에코프로비엠", "양극재", "2차전지", "코스닥"] },
+    { symbol: "086520", name: "에코프로", market: "KOSDAQ", price: 92000, changePct: 3.12, category: "2차전지 지주사", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["에코프로", "지주사", "2차전지", "리튬"] },
+    { symbol: "003670", name: "포스코퓨처엠", market: "KOSPI", price: 245000, changePct: 1.80, category: "음/양극재", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["포스코", "퓨처엠", "양극재", "음극재", "배터리"] },
+    { symbol: "066970", name: "엘앤에프", market: "KOSPI", price: 112000, changePct: 2.10, category: "양극재", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["엘앤에프", "양극재", "테슬라 supply", "2차전지"] },
+    { symbol: "006400", name: "삼성SDI", market: "KOSPI", price: 382000, changePct: 1.50, category: "전고체 배터리", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["삼성", "삼성sdi", "전고체", "배터리", "2차전지"] },
+    { symbol: "457190", name: "이수스페셜티케미컬", market: "KOSDAQ", price: 42500, changePct: 8.10, category: "전고체 황화물", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["이수", "전고체", "황화리튬", "배터리소재"] },
 
     // 바이오 & 제약 & 비만치료제
-    { symbol: "207940", name: "삼성바이오로직스", market: "KOSPI", price: 780000, changePct: 1.15, category: "CDMO", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "55.5조원", tags: ["삼성", "삼바", "바이오", "cdmo", "제약"] },
-    { symbol: "068270", name: "셀트리온", market: "KOSPI", price: 184000, changePct: 0.55, category: "바이오시밀러", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "40.2조원", tags: ["셀트리온", "바이오", "바이오시밀러", "짐펜트라"] },
-    { symbol: "196170", name: "알테오젠", market: "KOSDAQ", price: 285000, changePct: 5.80, category: "피하주사 플랫폼", capGroup: "MID", capGroupKo: "중형주", marketCap: "15.1조원", tags: ["알테오젠", "바이오", "키트루다", "피하주사", "코스닥1위"] },
-    { symbol: "000100", name: "유한양행", market: "KOSPI", price: 128000, changePct: 4.20, category: "폐암신약 렉라자", capGroup: "MID", capGroupKo: "중형주", marketCap: "10.2조원", tags: ["유한양행", "렉라자", "제약", "항암제"] },
-    { symbol: "087010", name: "펩트론", market: "KOSDAQ", price: 78500, changePct: 6.90, category: "비만치료제", capGroup: "MID", capGroupKo: "중형주", marketCap: "1.8조원", tags: ["펩트론", "비만", "비만치료제", "glp1", "지속형"] },
-    { symbol: "141080", name: "리가켐바이오", market: "KOSDAQ", price: 98000, changePct: 3.80, category: "ADC 항암제", capGroup: "MID", capGroupKo: "중형주", marketCap: "3.5조원", tags: ["리가켐", "adc", "항암제", "바이오"] },
-    { symbol: "028300", name: "HLB", market: "KOSDAQ", price: 82000, changePct: 2.90, category: "간암신약", capGroup: "MID", capGroupKo: "중형주", marketCap: "10.7조원", tags: ["hlb", "리보세라닙", "바이오", "항암제"] },
+    { symbol: "207940", name: "삼성바이오로직스", market: "KOSPI", price: 780000, changePct: 1.15, category: "CDMO", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["삼성", "삼바", "바이오", "cdmo", "제약"] },
+    { symbol: "068270", name: "셀트리온", market: "KOSPI", price: 184000, changePct: 0.55, category: "바이오시밀러", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["셀트리온", "바이오", "바이오시밀러", "짐펜트라"] },
+    { symbol: "196170", name: "알테오젠", market: "KOSDAQ", price: 285000, changePct: 5.80, category: "피하주사 플랫폼", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["알테오젠", "바이오", "키트루다", "피하주사", "코스닥1위"] },
+    { symbol: "000100", name: "유한양행", market: "KOSPI", price: 128000, changePct: 4.20, category: "폐암신약 렉라자", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["유한양행", "렉라자", "제약", "항암제"] },
+    { symbol: "087010", name: "펩트론", market: "KOSDAQ", price: 78500, changePct: 6.90, category: "비만치료제", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["펩트론", "비만", "비만치료제", "glp1", "지속형"] },
+    { symbol: "141080", name: "리가켐바이오", market: "KOSDAQ", price: 98000, changePct: 3.80, category: "ADC 항암제", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["리가켐", "adc", "항암제", "바이오"] },
+    { symbol: "028300", name: "HLB", market: "KOSDAQ", price: 82000, changePct: 2.90, category: "간암신약", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["hlb", "리보세라닙", "바이오", "항암제"] },
 
     // 자동차 & 전기차 & 자율주행
-    { symbol: "005380", name: "현대차", market: "KOSPI", price: 245000, changePct: 1.24, category: "완성차", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "51.8조원", tags: ["현대", "현대차", "자동차", "전기차", "인도ipo", "밸류업", "자율주행", "로봇"] },
-    { symbol: "000270", name: "기아", market: "KOSPI", price: 118000, changePct: 1.72, category: "완성차", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "47.2조원", tags: ["기아", "자동차", "pbv", "전기차", "고배당", "자율주행"] },
-    { symbol: "012330", name: "현대모비스", market: "KOSPI", price: 228000, changePct: 0.80, category: "자동차 부품", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "21.5조원", tags: ["현대", "모비스", "전장", "자율주행", "부품"] },
-    { symbol: "204320", name: "HL만도", market: "KOSPI", price: 38500, changePct: 2.10, category: "자율주행 섀시", capGroup: "MID", capGroupKo: "중형주", marketCap: "1.8조원", tags: ["만도", "자율주행", "섀시", "전장"] },
+    { symbol: "005380", name: "현대차", market: "KOSPI", price: 245000, changePct: 1.24, category: "완성차", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["현대", "현대차", "자동차", "전기차", "인도ipo", "밸류업", "자율주행", "로봇"] },
+    { symbol: "000270", name: "기아", market: "KOSPI", price: 118000, changePct: 1.72, category: "완성차", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["기아", "자동차", "pbv", "전기차", "고배당", "자율주행"] },
+    { symbol: "012330", name: "현대모비스", market: "KOSPI", price: 228000, changePct: 0.80, category: "자동차 부품", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["현대", "모비스", "전장", "자율주행", "부품"] },
+    { symbol: "204320", name: "HL만도", market: "KOSPI", price: 38500, changePct: 2.10, category: "자율주행 섀시", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["만도", "자율주행", "섀시", "전장"] },
 
     // 방산 & 우주항공 & 드론
-    { symbol: "012450", name: "한화에어로스페이스", market: "KOSPI", price: 295000, changePct: 4.20, category: "방산/K9자주포", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "14.9조원", tags: ["한화", "한화에어로", "방산", "k9", "우주", "누리호", "우주항공"] },
-    { symbol: "064350", name: "현대로템", market: "KOSPI", price: 54000, changePct: 5.10, category: "전차/K2", capGroup: "MID", capGroupKo: "중형주", marketCap: "5.8조원", tags: ["현대", "현대로템", "방산", "k2전차", "철도"] },
-    { symbol: "079550", name: "LIG넥스원", market: "KOSPI", price: 182000, changePct: 3.90, category: "유도무기/천궁", capGroup: "MID", capGroupKo: "중형주", marketCap: "4.0조원", tags: ["lig", "lig넥스원", "방산", "미사일", "천궁"] },
-    { symbol: "047810", name: "한국항공우주", market: "KOSPI", price: 52000, changePct: 2.40, category: "KF-21 전투기", capGroup: "MID", capGroupKo: "중형주", marketCap: "5.0조원", tags: ["kai", "한국항공우주", "전투기", "우주", "방산", "우주항공"] },
+    { symbol: "012450", name: "한화에어로스페이스", market: "KOSPI", price: 295000, changePct: 4.20, category: "방산/K9자주포", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["한화", "한화에어로", "방산", "k9", "우주", "누리호", "우주항공"] },
+    { symbol: "064350", name: "현대로템", market: "KOSPI", price: 54000, changePct: 5.10, category: "전차/K2", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["현대", "현대로템", "방산", "k2전차", "철도"] },
+    { symbol: "079550", name: "LIG넥스원", market: "KOSPI", price: 182000, changePct: 3.90, category: "유도무기/천궁", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["lig", "lig넥스원", "방산", "미사일", "천궁"] },
+    { symbol: "047810", name: "한국항공우주", market: "KOSPI", price: 52000, changePct: 2.40, category: "KF-21 전투기", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["kai", "한국항공우주", "전투기", "우주", "방산", "우주항공"] },
 
     // 철강 & 구리 & 방열소재 & 원자재
-    { symbol: "005490", name: "POSCO홀딩스", market: "KOSPI", price: 375000, changePct: -1.10, category: "철강/리튬", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "31.7조원", tags: ["포스코", "posco", "철강", "리튬", "지주사", "방열"] },
+    { symbol: "005490", name: "POSCO홀딩스", market: "KOSPI", price: 375000, changePct: -1.10, category: "철강/리튬", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["포스코", "posco", "철강", "리튬", "지주사", "방열"] },
     { symbol: "021050", name: "서원", market: "KOSPI", price: 1650, changePct: 8.45, category: "동합금/구리", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "780억원", tags: ["서원", "구리", "동합금", "방열", "방열소재", "초전도체"] },
     { symbol: "091700", name: "파트론", market: "KOSDAQ", price: 8900, changePct: 3.20, category: "방열부품/카메라", capGroup: "MID", capGroupKo: "중형주", marketCap: "4,800억원", tags: ["파트론", "방열", "방열소재", "히트파이프", "카메라모듈"] },
     { symbol: "052710", name: "아모텍", market: "KOSDAQ", price: 12500, changePct: 4.10, category: "방열/바리스터", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "1,200억원", tags: ["아모텍", "방열", "방열소재", "칩바리스터"] },
     { symbol: "185500", name: "신화콘텍", market: "KOSDAQ", price: 3850, changePct: 6.80, category: "커넥터/방열소재", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "420억원", tags: ["신화콘텍", "방열", "방열소재", "커넥터"] },
-    { symbol: "103140", name: "풍산", market: "KOSPI", price: 62000, changePct: 4.10, category: "신동/탄약방산", capGroup: "MID", capGroupKo: "중형주", marketCap: "1.7조원", tags: ["풍산", "구리", "신동", "탄약", "방산", "방열"] },
+    { symbol: "103140", name: "풍산", market: "KOSPI", price: 62000, changePct: 4.10, category: "신동/탄약방산", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["풍산", "구리", "신동", "탄약", "방산", "방열"] },
 
     // 로봇 & SMR & 원전 & 냉각
-    { symbol: "277810", name: "레인보우로보틱스", market: "KOSDAQ", price: 165000, changePct: 5.40, category: "휴머노이드 로봇", capGroup: "MID", capGroupKo: "중형주", marketCap: "3.1조원", tags: ["레인보우로보틱스", "로봇", "삼성 인수", "휴머노이드", "협동로봇"] },
-    { symbol: "454910", name: "두산로보틱스", market: "KOSPI", price: 82000, changePct: 4.50, category: "협동로봇", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "5.3조원", tags: ["두산", "두산로보틱스", "로봇", "협동로봇"] },
+    { symbol: "277810", name: "레인보우로보틱스", market: "KOSDAQ", price: 165000, changePct: 5.40, category: "휴머노이드 로봇", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["레인보우로보틱스", "로봇", "삼성 인수", "휴머노이드", "협동로봇"] },
+    { symbol: "454910", name: "두산로보틱스", market: "KOSPI", price: 82000, changePct: 4.50, category: "협동로봇", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["두산", "두산로보틱스", "로봇", "협동로봇"] },
     { symbol: "348340", name: "뉴로메카", market: "KOSDAQ", price: 28500, changePct: 6.20, category: "협동로봇/인디", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "2,800억원", tags: ["뉴로메카", "로봇", "협동로봇"] },
     { symbol: "440840", name: "엔젤로보틱스", market: "KOSDAQ", price: 32400, changePct: 7.10, category: "웨어러블 로봇", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "3,100억원", tags: ["엔젤로보틱스", "로봇", "웨어러블"] },
-    { symbol: "034020", name: "두산에너빌리티", market: "KOSPI", price: 21500, changePct: 3.20, category: "SMR/원전 주기기", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "13.7조원", tags: ["두산", "두산에너빌리티", "smr", "원전", "원자력", "체코원전"] },
+    { symbol: "034020", name: "두산에너빌리티", market: "KOSPI", price: 21500, changePct: 3.20, category: "SMR/원전 주기기", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["두산", "두산에너빌리티", "smr", "원전", "원자력", "체코원전"] },
     { symbol: "452880", name: "우진엔텍", market: "KOSDAQ", price: 18200, changePct: 9.10, category: "원전 정비/계측", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "1,900억원", tags: ["우진엔텍", "원전", "smr", "체코원전"] },
     { symbol: "083650", name: "비에이치아이", market: "KOSDAQ", price: 11400, changePct: 5.80, category: "원전 보조기기", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "3,800억원", tags: ["비에이치아이", "원전", "smr", "hrsgg"] },
     { symbol: "083450", name: "GST", market: "KOSDAQ", price: 34500, changePct: 7.82, category: "액체냉각 칠러", capGroup: "MID", capGroupKo: "중형주", marketCap: "6,500억원", tags: ["gst", "냉각", "액체냉각", "칠러", "데이터센터"] },
@@ -3903,10 +3904,10 @@ JSON 구조 요구사항:
     { symbol: "036200", name: "유니셈", market: "KOSDAQ", price: 8200, changePct: 4.80, category: "칠러/스크러버", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "2,500억원", tags: ["유니셈", "냉각", "칠러", "스크러버"] },
 
     // 엔터 & K-뷰티 & K-푸드 & 전력망
-    { symbol: "267260", name: "HD현대일렉트릭", market: "KOSPI", price: 315000, changePct: 7.40, category: "초고압 변압기", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "11.3조원", tags: ["hd현대", "현대일렉트릭", "변압기", "전력망", "전력인프라", "미국수주"] },
-    { symbol: "298040", name: "효성중공업", market: "KOSPI", price: 382000, changePct: 5.90, category: "변압기/차단기", capGroup: "MID", capGroupKo: "중형주", marketCap: "3.5조원", tags: ["효성", "효성중공업", "변압기", "전력인프라"] },
-    { symbol: "257720", name: "실리콘투", market: "KOSDAQ", price: 42500, changePct: 9.20, category: "K-뷰티 유통", capGroup: "MID", capGroupKo: "중형주", marketCap: "2.5조원", tags: ["실리콘투", "화장품", "k뷰티", "역직구", "스타일코리안"] },
-    { symbol: "003230", name: "삼양식품", market: "KOSPI", price: 612000, changePct: 6.80, category: "K-푸드/불닭볶음면", capGroup: "MID", capGroupKo: "중형주", marketCap: "4.6조원", tags: ["삼양식품", "불닭", "라면", "식품", "k푸드", "수출"] },
+    { symbol: "267260", name: "HD현대일렉트릭", market: "KOSPI", price: 315000, changePct: 7.40, category: "초고압 변압기", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["hd현대", "현대일렉트릭", "변압기", "전력망", "전력인프라", "미국수주"] },
+    { symbol: "298040", name: "효성중공업", market: "KOSPI", price: 382000, changePct: 5.90, category: "변압기/차단기", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["효성", "효성중공업", "변압기", "전력인프라"] },
+    { symbol: "257720", name: "실리콘투", market: "KOSDAQ", price: 42500, changePct: 9.20, category: "K-뷰티 유통", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["실리콘투", "화장품", "k뷰티", "역직구", "스타일코리안"] },
+    { symbol: "003230", name: "삼양식품", market: "KOSPI", price: 612000, changePct: 6.80, category: "K-푸드/불닭볶음면", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["삼양식품", "불닭", "라면", "식품", "k푸드", "수출"] },
 
     // 미국 빅테크
     { symbol: "NVDA", name: "NVIDIA Corp. (엔비디아)", market: "NASDAQ", price: 128.5, changePct: 4.25, category: "AI GPU", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "3.15조달러", tags: ["nvda", "엔비디아", "nvidia", "gpu", "ai", "블랙웰", "미국", "냉각", "방열"] },
