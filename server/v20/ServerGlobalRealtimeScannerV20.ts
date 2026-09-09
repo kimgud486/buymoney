@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------
-// SERVER GLOBAL REALTIME SCANNER V20.4
+// SERVER GLOBAL REALTIME SCANNER V20.5
 // TRUTH-FIRST / NO FABRICATED FALLBACKS
 // KR + US + UPBIT
 // BUY promotion requires verified 1m -> 3m -> 5m -> Daily evidence
@@ -117,6 +117,40 @@ function positive(v: unknown): v is number {
   return validNumber(v) && v > 0;
 }
 
+function approximatelyEqual(a: number, b: number, relativeTolerance = 1e-9): boolean {
+  const scale = Math.max(1, Math.abs(a), Math.abs(b));
+  return Math.abs(a - b) <= scale * relativeTolerance;
+}
+
+/**
+ * Detects the known legacy hot-list fallback shape where an RVOL ratio was
+ * copied into `volume`, and `tradeValue` was then manufactured as price*RVOL.
+ * A ratio such as 1.8x is evidence about relative volume, not authoritative
+ * traded shares/contracts. V20 must fail closed instead of treating it as
+ * verified liquidity.
+ */
+function hasSuspectDerivedLiquidityShape(input: ScanCandidateInput): boolean {
+  if (!positive(input.price) || !positive(input.volume) || !positive(input.rvol)) {
+    return false;
+  }
+
+  if (!validNumber(input.tradeValue)) return false;
+
+  const implausiblySmallAbsoluteVolume = input.volume <= 20;
+  const volumeMirrorsRvol = approximatelyEqual(input.volume, input.rvol, 1e-7);
+  const tradeValueMirrorsPriceTimesVolume = approximatelyEqual(
+    input.tradeValue,
+    input.price * input.volume,
+    1e-7
+  );
+
+  return (
+    implausiblySmallAbsoluteVolume &&
+    volumeMirrorsRvol &&
+    tradeValueMirrorsPriceTimesVolume
+  );
+}
+
 export class ServerGlobalRealtimeScannerV20 {
   public static evaluateCandidate(
     input: ScanCandidateInput
@@ -168,6 +202,15 @@ export class ServerGlobalRealtimeScannerV20 {
 
     if (!positive(input.rvol)) {
       return reject("INVALID_OR_MISSING_RVOL");
+    }
+
+    // Legacy compatibility paths must never be allowed to convert an RVOL
+    // ratio into fake absolute volume/trade value and call it verified data.
+    if (hasSuspectDerivedLiquidityShape(input)) {
+      return reject("SUSPECT_DERIVED_LIQUIDITY_FIELDS", [
+        "authoritativeVolume",
+        "authoritativeTradeValue"
+      ]);
     }
 
     if (input.chaseRisk) {
