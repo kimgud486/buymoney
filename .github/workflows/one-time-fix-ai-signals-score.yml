@@ -16,79 +16,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Patch RealTimeTradingViewChart
+      - name: Patch AI signals score publication
         shell: bash
-        run: |
-          python <<'PY'
-          from pathlib import Path
-
-          path = Path('src/components/trading/RealTimeTradingViewChart.tsx')
-          text = path.read_text(encoding='utf-8')
-
-          anchor = "  }, [initialCandles]);\n\n  // Recalculate indicators, prediction, and state when candle closes\n"
-          replacement = """  }, [initialCandles]);
-
-  // Publish an initial technical score from already-fetched completed candles.
-  // This intentionally does NOT unlock trading. Execution remains gated by the
-  // verified realtime feed/state machine below.
-  useEffect(() => {
-    if (normalizedInitialCandles.length === 0) {
-      setAiConfidence(0);
-      onStateChange?.(tradingStateRef.current, 0);
-      return;
-    }
-
-    try {
-      const indicators = IndicatorEngine.calculate(normalizedInitialCandles);
-      const structure = MarketStructureEngine.analyze(normalizedInitialCandles, indicators.vwap);
-      const confidenceScore = Math.max(
-        0,
-        Math.min(
-          100,
-          Math.round(
-            (indicators.trendStrength * 0.4 +
-              (indicators.macdHistogram > 0 ? 0.3 : 0.1) +
-              (structure.hhhlValid ? 0.3 : 0)) *
-              100,
-          ),
-        ),
-      );
-
-      setAiConfidence(confidenceScore);
-      onStateChange?.(tradingStateRef.current, confidenceScore);
-    } catch (error) {
-      console.warn('[RealTimeTradingViewChart] initial technical score failed', error);
-      setAiConfidence(0);
-      onStateChange?.(tradingStateRef.current, 0);
-    }
-  }, [normalizedInitialCandles, onStateChange]);
-
-  // Recalculate indicators, prediction, and state when candle closes
-"""
-
-          if anchor not in text:
-            raise SystemExit('initial-score anchor not found; refusing unsafe patch')
-          text = text.replace(anchor, replacement, 1)
-
-          old = "      tradingStateRef.current = nextState;\n      setTradingState(nextState);\n      onStateChange?.(nextState, confidenceScore);\n    }\n\n    // 5. Update dynamic trailing stop via AdaptiveTrailingExitEngineV137 & ExitDecisionBridgeV138\n"
-          new = """      tradingStateRef.current = nextState;
-      setTradingState(nextState);
-    }
-
-    // Always publish a fresh Technical Score, even when the state remains
-    // NO_TRADE. Previously this callback only fired on state transitions, so
-    // NO_TRADE -> NO_TRADE left the parent UI stuck on \"계산 중...\" forever.
-    onStateChange?.(tradingStateRef.current, confidenceScore);
-
-    // 5. Update dynamic trailing stop via AdaptiveTrailingExitEngineV137 & ExitDecisionBridgeV138
-"""
-
-          if old not in text:
-            raise SystemExit('state-callback anchor not found; refusing unsafe patch')
-          text = text.replace(old, new, 1)
-
-          path.write_text(text, encoding='utf-8')
-          PY
+        run: python -c "import base64; exec(base64.b64decode('ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpwYXRoID0gUGF0aCgic3JjL2NvbXBvbmVudHMvdHJhZGluZy9SZWFsVGltZVRyYWRpbmdWaWV3Q2hhcnQudHN4IikKdGV4dCA9IHBhdGgucmVhZF90ZXh0KGVuY29kaW5nPSJ1dGYtOCIpCgpyZWZfYW5jaG9yID0gJyAgY29uc3QgdHJhZGluZ1N0YXRlUmVmID0gdXNlUmVmPFRyYWRpbmdTdGF0ZT4oIk5PX1RSQURFIik7XG4nCnJlZl9pbnNlcnQgPSAnJycgIGNvbnN0IHRyYWRpbmdTdGF0ZVJlZiA9IHVzZVJlZjxUcmFkaW5nU3RhdGU+KCJOT19UUkFERSIpOwogIGNvbnN0IG9uU3RhdGVDaGFuZ2VSZWYgPSB1c2VSZWYob25TdGF0ZUNoYW5nZSk7CgogIHVzZUVmZmVjdCgoKSA9PiB7CiAgICBvblN0YXRlQ2hhbmdlUmVmLmN1cnJlbnQgPSBvblN0YXRlQ2hhbmdlOwogIH0sIFtvblN0YXRlQ2hhbmdlXSk7CicnJwppZiAnY29uc3Qgb25TdGF0ZUNoYW5nZVJlZiA9IHVzZVJlZihvblN0YXRlQ2hhbmdlKTsnIG5vdCBpbiB0ZXh0OgogICAgaWYgcmVmX2FuY2hvciBub3QgaW4gdGV4dDoKICAgICAgICByYWlzZSBTeXN0ZW1FeGl0KCJzdGF0ZSBjYWxsYmFjayByZWYgYW5jaG9yIG5vdCBmb3VuZCIpCiAgICB0ZXh0ID0gdGV4dC5yZXBsYWNlKHJlZl9hbmNob3IsIHJlZl9pbnNlcnQsIDEpCgppbml0aWFsX2FuY2hvciA9ICcnJyAgfSwgW2luaXRpYWxDYW5kbGVzXSk7CgogIC8vIFJlY2FsY3VsYXRlIGluZGljYXRvcnMsIHByZWRpY3Rpb24sIGFuZCBzdGF0ZSB3aGVuIGNhbmRsZSBjbG9zZXMKJycnCmluaXRpYWxfaW5zZXJ0ID0gJycnICB9LCBbaW5pdGlhbENhbmRsZXNdKTsKCiAgLy8gUHVibGlzaCBhbiBpbml0aWFsIHRlY2huaWNhbCBzY29yZSBmcm9tIGFscmVhZHktZmV0Y2hlZCBjb21wbGV0ZWQgY2FuZGxlcy4KICAvLyBUaGlzIGRvZXMgbm90IHVubG9jayB0cmFkaW5nLiBFeGVjdXRpb24gcmVtYWlucyBnYXRlZCBieSB0aGUgdmVyaWZpZWQKICAvLyByZWFsdGltZSBmZWVkIGFuZCBzdGF0ZSBtYWNoaW5lIGJlbG93LgogIHVzZUVmZmVjdCgoKSA9PiB7CiAgICBpZiAobm9ybWFsaXplZEluaXRpYWxDYW5kbGVzLmxlbmd0aCA9PT0gMCkgewogICAgICBzZXRBaUNvbmZpZGVuY2UoMCk7CiAgICAgIG9uU3RhdGVDaGFuZ2VSZWYuY3VycmVudD8uKHRyYWRpbmdTdGF0ZVJlZi5jdXJyZW50LCAwKTsKICAgICAgcmV0dXJuOwogICAgfQoKICAgIHRyeSB7CiAgICAgIGNvbnN0IGluZGljYXRvcnMgPSBJbmRpY2F0b3JFbmdpbmUuY2FsY3VsYXRlKG5vcm1hbGl6ZWRJbml0aWFsQ2FuZGxlcyk7CiAgICAgIGNvbnN0IHN0cnVjdHVyZSA9IE1hcmtldFN0cnVjdHVyZUVuZ2luZS5hbmFseXplKG5vcm1hbGl6ZWRJbml0aWFsQ2FuZGxlcywgaW5kaWNhdG9ycy52d2FwKTsKICAgICAgY29uc3QgY29uZmlkZW5jZVNjb3JlID0gTWF0aC5tYXgoCiAgICAgICAgMCwKICAgICAgICBNYXRoLm1pbigKICAgICAgICAgIDEwMCwKICAgICAgICAgIE1hdGgucm91bmQoCiAgICAgICAgICAgIChpbmRpY2F0b3JzLnRyZW5kU3RyZW5ndGggKiAwLjQgKwogICAgICAgICAgICAgIChpbmRpY2F0b3JzLm1hY2RIaXN0b2dyYW0gPiAwID8gMC4zIDogMC4xKSArCiAgICAgICAgICAgICAgKHN0cnVjdHVyZS5oaGhsVmFsaWQgPyAwLjMgOiAwKSkgKgogICAgICAgICAgICAgIDEwMCwKICAgICAgICAgICksCiAgICAgICAgKSwKICAgICAgKTsKCiAgICAgIGhpc3RvcnlSZWYuY3VycmVudCA9IG5vcm1hbGl6ZWRJbml0aWFsQ2FuZGxlcy5zbGljZSgtNjAwKTsKICAgICAgc2V0QWlDb25maWRlbmNlKGNvbmZpZGVuY2VTY29yZSk7CiAgICAgIG9uU3RhdGVDaGFuZ2VSZWYuY3VycmVudD8uKHRyYWRpbmdTdGF0ZVJlZi5jdXJyZW50LCBjb25maWRlbmNlU2NvcmUpOwogICAgfSBjYXRjaCAoZXJyb3IpIHsKICAgICAgY29uc29sZS53YXJuKCJbUmVhbFRpbWVUcmFkaW5nVmlld0NoYXJ0XSBpbml0aWFsIHRlY2huaWNhbCBzY29yZSBmYWlsZWQiLCBlcnJvcik7CiAgICAgIHNldEFpQ29uZmlkZW5jZSgwKTsKICAgICAgb25TdGF0ZUNoYW5nZVJlZi5jdXJycmVudD8uKHRyYWRpbmdTdGF0ZVJlZi5jdXJyZW50LCAwKTsKICAgIH0KICB9LCBbbm9ybWFsaXplZEluaXRpYWxDYW5kbGVzXSk7CgogIC8vIFJlY2FsY3VsYXRlIGluZGljYXRvcnMsIHByZWRpY3Rpb24sIGFuZCBzdGF0ZSB3aGVuIGNhbmRsZSBjbG9zZXMKJycnCmlmICdQdWJsaXNoIGFuIGluaXRpYWwgdGVjaG5pY2FsIHNjb3JlIGZyb20gYWxyZWFkeS1mZXRjaGVkIGNvbXBsZXRlZCBjYW5kbGVzLicgbm90IGluIHRleHQ6CiAgICBpZiBpbml0aWFsX2FuY2hvciBub3QgaW4gdGV4dDoKICAgICAgICByYWlzZSBTeXN0ZW1FeGl0KCJpbml0aWFsIHNjb3JlIGFuY2hvciBub3QgZm91bmQiKQogICAgdGV4dCA9IHRleHQucmVwbGFjZShpbml0aWFsX2FuY2hvciwgaW5pdGlhbF9pbnNlcnQsIDEpCgpvbGRfdHJhbnNpdGlvbiA9ICcnJyAgICAgIHRyYWRpbmdTdGF0ZVJlZi5jdXJyZW50ID0gbmV4dFN0YXRlOwogICAgICBzZXRUcmFkaW5nU3RhdGUobmV4dFN0YXRlKTsKICAgICAgb25TdGF0ZUNoYW5nZT8uKG5leHRTdGF0ZSwgY29uZmlkZW5jZVNjb3JlKTsKICAgIH0KCiAgICAvLyA1LiBVcGRhdGUgZHluYW1pYyB0cmFpbGluZyBzdG9wIHZpYSBBZGFwdGl2ZVRyYWlsaW5nRXhpdEVuZ2luZVYxMzcgJiBFeGl0RGVjaXNpb25CcmlkZ2VWMTM4CicnJwpuZXdfdHJhbnNpdGlvbiA9ICcnJyAgICAgIHRyYWRpbmdTdGF0ZVJlZi5jdXJyZW50ID0gbmV4dFN0YXRlOwogICAgICBzZXRUcmFkaW5nU3RhdGUobmV4dFN0YXRlKTsKICAgIH0KCiAgICAvLyBBbHdheXMgcHVibGlzaCBhIGZyZXNoIFRlY2huaWNhbCBTY29yZSwgaW5jbHVkaW5nIE5PX1RSQURFIC0+IE5PX1RSQURFLgogICAgLy8gU3RhdGUgdHJhbnNpdGlvbnMgc3RpbGwgY29udHJvbCBleGVjdXRpb247IHRoaXMgb25seSBwcmV2ZW50cyB0aGUgcGFyZW50CiAgICAvLyBBSSBTSUdOQUxTIGNhcmQgZnJvbSBiZWluZyBzdHVjayBvbiAi6rOE7IKwIOykkS4uLiIuCiAgICBvblN0YXRlQ2hhbmdlUmVmLmN1cnJlbnQ/Lih0cmFkaW5nU3RhdGVSZWYuY3VycmVudCwgY29uZmlkZW5jZVNjb3JlKTsKCiAgICAvLyA1LiBVcGRhdGUgZHluYW1pYyB0cmFpbGluZyBzdG9wIHZpYSBBZGFwdGl2ZVRyYWlsaW5nRXhpdEVuZ2luZVYxMzcgJiBFeGl0RGVjaXNpb25CcmlkZ2VWMTM4CicnJwppZiAnaW5jbHVkaW5nIE5PX1RSQURFIC0+IE5PX1RSQURFJyBub3QgaW4gdGV4dDoKICAgIGlmIG9sZF90cmFuc2l0aW9uIG5vdCBpbiB0ZXh0OgogICAgICAgIHJhaXNlIFN5c3RlbUV4aXQoInRyYW5zaXRpb24gY2FsbGJhY2sgYW5jaG9yIG5vdCBmb3VuZCIpCiAgICB0ZXh0ID0gdGV4dC5yZXBsYWNlKG9sZF90cmFuc2l0aW9uLCBuZXdfdHJhbnNpdGlvbiwgMSkKCnBhdGgud3JpdGVfdGV4dCh0ZXh0LCBlbmNvZGluZz0idXRmLTgiKQo='))"
 
       - name: Commit fix
         shell: bash
