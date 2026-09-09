@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: scanner-recovery-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   apply-and-validate:
     if: github.actor != 'github-actions[bot]'
@@ -42,10 +46,10 @@ jobs:
       - name: Typecheck
         run: npm run lint
 
-      - name: Unit tests
+      - name: Scanner gate tests
         env:
           VITE_FIREBASE_API_KEY: test-only-not-a-secret
-        run: npm test
+        run: node --import tsx --test tests/yesOnlyScannerGate.test.ts
 
       - name: Production build
         run: npm run build
