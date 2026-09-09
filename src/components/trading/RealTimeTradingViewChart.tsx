@@ -129,6 +129,11 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
   const previousTrailingFloorRef = useRef<number>(0);
   const trailingExitRef = useRef<number>(0);
   const tradingStateRef = useRef<TradingState>("NO_TRADE");
+  const onStateChangeRef = useRef(onStateChange);
+
+  useEffect(() => {
+    onStateChangeRef.current = onStateChange;
+  }, [onStateChange]);
 
   // Restore persisted position trailing state on mount
   useEffect(() => {
@@ -187,6 +192,42 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
     // LIVE MODE ENFORCEMENT: No synthetic seed candle generation!
     return [];
   }, [initialCandles]);
+
+  // Publish an initial technical score from already-fetched completed candles.
+  // This does not unlock trading. Execution remains gated by the verified
+  // realtime feed and state machine below.
+  useEffect(() => {
+    if (normalizedInitialCandles.length === 0) {
+      setAiConfidence(0);
+      onStateChangeRef.current?.(tradingStateRef.current, 0);
+      return;
+    }
+
+    try {
+      const indicators = IndicatorEngine.calculate(normalizedInitialCandles);
+      const structure = MarketStructureEngine.analyze(normalizedInitialCandles, indicators.vwap);
+      const confidenceScore = Math.max(
+        0,
+        Math.min(
+          100,
+          Math.round(
+            (indicators.trendStrength * 0.4 +
+              (indicators.macdHistogram > 0 ? 0.3 : 0.1) +
+              (structure.hhhlValid ? 0.3 : 0)) *
+              100,
+          ),
+        ),
+      );
+
+      historyRef.current = normalizedInitialCandles.slice(-600);
+      setAiConfidence(confidenceScore);
+      onStateChangeRef.current?.(tradingStateRef.current, confidenceScore);
+    } catch (error) {
+      console.warn("[RealTimeTradingViewChart] initial technical score failed", error);
+      setAiConfidence(0);
+      onStateChangeRef.currrent?.(tradingStateRef.current, 0);
+    }
+  }, [normalizedInitialCandles]);
 
   // Recalculate indicators, prediction, and state when candle closes
   const onClosedCandle = useCallback((closedCandle: LiveCandle) => {
@@ -318,8 +359,12 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
       }
       tradingStateRef.current = nextState;
       setTradingState(nextState);
-      onStateChange?.(nextState, confidenceScore);
     }
+
+    // Always publish a fresh Technical Score, including NO_TRADE -> NO_TRADE.
+    // State transitions still control execution; this only prevents the parent
+    // AI SIGNALS card from being stuck on "계산 중...".
+    onStateChangeRef.current?.(tradingStateRef.current, confidenceScore);
 
     // 5. Update dynamic trailing stop via AdaptiveTrailingExitEngineV137 & ExitDecisionBridgeV138
     if (["BUY", "HOLD", "PROFIT_HOLD", "SELL_WATCH"].includes(tradingStateRef.current) && entryPriceRef.current > 0) {
