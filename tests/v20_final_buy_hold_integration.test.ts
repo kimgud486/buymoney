@@ -107,17 +107,18 @@ test("final service builds entry/stop/TP only after V20 BUY, executable pattern 
   assert.ok(result.blockers.includes("NO_VERIFIED_CLOSED_TRADES"));
 });
 
-test("final service downgrades new BUY to WATCH when pattern is registered-looking but not executable", () => {
+test("final service fails closed before BUY when pattern is registered-looking but not executable", () => {
   const result = FinalBuyHoldDecisionServiceV20.evaluate({
     candidate: candidate({ patterns: ["DECORATIVE_FAKE_PATTERN"] }),
     performanceKey: { setup: "DECORATIVE_FAKE_PATTERN", market: "KR" }
   });
 
-  assert.equal(result.recommendation, "BUY_CANDIDATE");
+  assert.equal(result.recommendation, "WATCH");
   assert.equal(result.patternGate.passed, false);
   assert.equal(result.action, "WATCH");
   assert.equal(result.plan.source, "NO_VERIFIED_PLAN");
-  assert.ok(result.reasons.includes("FINAL_PATTERN_GATE_BLOCK"));
+  assert.ok(result.blockers.includes("NO_EXECUTABLE_PATTERN_MATCH"));
+  assert.ok(result.blockers.some((blocker) => blocker.startsWith("NON_EXECUTABLE_PATTERN:")));
 });
 
 test("final service exits an existing position when hard stop is breached", () => {
