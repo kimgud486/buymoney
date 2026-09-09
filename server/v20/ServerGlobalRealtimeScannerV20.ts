@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------
-// SERVER GLOBAL REALTIME SCANNER V20.3
+// SERVER GLOBAL REALTIME SCANNER V20.4
 // TRUTH-FIRST / NO FABRICATED FALLBACKS
 // KR + US + UPBIT
 // BUY promotion requires verified 1m -> 3m -> 5m -> Daily evidence.
@@ -10,6 +10,7 @@ import {
   TrueMTFGateResultV20,
   TrueMTFSignalGateV20
 } from "./TrueMTFSignalGateV20";
+import { ScannerCandidateTruthBridgeV20 } from "./ScannerCandidateTruthBridgeV20";
 
 export type MarketType = "KR" | "US" | "CRYPTO";
 
@@ -47,6 +48,8 @@ export interface ScanCandidateInput {
   volume: number;
   tradeValue: number;
   rvol: number;
+  /** Verified source used when legacy projected liquidity had to be repaired. */
+  liquiditySource?: string;
 
   rs5m?: number;
   rs15m?: number;
@@ -115,6 +118,11 @@ export class ServerGlobalRealtimeScannerV20 {
   public static evaluateCandidate(
     input: ScanCandidateInput
   ): ScanCandidateResult {
+    // Normalize legacy runtime market labels and repair the known historical
+    // RVOL-as-volume projection only from a verified realtime source.
+    const truthBridge = ScannerCandidateTruthBridgeV20.normalize(input);
+    input = truthBridge.candidate;
+
     const timestamp = Date.now();
     const trueMtfGate = TrueMTFSignalGateV20.evaluate(input.trueMtf);
 
@@ -136,6 +144,10 @@ export class ServerGlobalRealtimeScannerV20 {
     // ------------------------------------------------------------
     // 1. DATA TRUTH HARD GATE
     // ------------------------------------------------------------
+
+    if (truthBridge.rejectionReason) {
+      return reject(truthBridge.rejectionReason, ["volume", "tradeValue"]);
+    }
 
     if (
       input.dataStatus !== "REALTIME_VERIFIED" &&
