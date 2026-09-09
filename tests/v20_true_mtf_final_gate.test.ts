@@ -81,7 +81,7 @@ function makeStrongCandidate(
     spreadBps: 12,
     orderbookImbalance: 0.35,
     signedFlow: 1,
-    patterns: ["BULLISH_ENGULFING"],
+    patterns: ["DOUBLE_BOTTOM"],
     structureTrend: "BULLISH",
     isBreakout: true,
     isRetest: true,
@@ -93,13 +93,14 @@ function makeStrongCandidate(
   };
 }
 
-test("V20 True MTF: verified 1m/3m/5m/D can promote a strong candidate to BUY", () => {
+test("V20 True MTF: verified 1m/3m/5m/D plus executable pattern can promote a strong candidate to BUY", () => {
   const result = ServerGlobalRealtimeScannerV20.evaluateCandidate(
     makeStrongCandidate()
   );
 
   assert.equal(result.trueMtfGate.passed, true);
   assert.equal(result.trueMtfGate.hardReject, false);
+  assert.equal(result.executablePatternGate.passed, true);
   assert.equal(result.recommendation, "BUY_CANDIDATE");
   assert.ok(result.setupScore >= 76);
 });
