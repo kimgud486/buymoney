@@ -1,4 +1,4 @@
-import { KISBrokerGatewayV123, KIS_REAL_REST_DOMAIN } from "../broker/KISBrokerGatewayV123";
+import { getKisMarketDataCredentialsV204 } from "./KISMarketDataCredentialRegistryV204";
 
 export type HistoricalTimeframeV204 = "1m" | "D";
 
@@ -25,23 +25,48 @@ export interface HistoricalSeedResultV204 {
 
 type KisRow = Record<string, unknown>;
 
+type TokenCache = {
+  accessToken: string;
+  expiresAt: number;
+};
+
+const KIS_REAL_REST_DOMAIN = process.env.KIS_REAL_DOMAIN ?? "https://openapi.koreainvestment.com:9443";
+
 function n(value: unknown): number {
   const parsed = typeof value === "number" ? value : Number(String(value ?? "").replace(/,/g, ""));
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function ymd(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}${m}${d}`;
+function kstParts(date: Date): Record<string, string> {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+
+  const out: Record<string, string> = {};
+  for (const part of parts) {
+    if (part.type !== "literal") out[part.type] = part.value;
+  }
+  return out;
 }
 
-function hms(date: Date): string {
-  return `${String(date.getHours()).padStart(2, "0")}${String(date.getMinutes()).padStart(2, "0")}${String(date.getSeconds()).padStart(2, "0")}`;
+export function ymdKst(date: Date): string {
+  const p = kstParts(date);
+  return `${p.year || ""}${p.month || ""}${p.day || ""}`;
 }
 
-function parseKisDateTime(dateText: unknown, timeText?: unknown): number {
+export function hmsKst(date: Date): string {
+  const p = kstParts(date);
+  return `${p.hour || "00"}${p.minute || "00"}${p.second || "00"}`;
+}
+
+export function parseKisDateTime(dateText: unknown, timeText?: unknown): number {
   const date = String(dateText ?? "").replace(/\D/g, "");
   const time = String(timeText ?? "000000").replace(/\D/g, "").padStart(6, "0");
   if (date.length !== 8 || time.length !== 6) return 0;
@@ -53,8 +78,14 @@ function parseKisDateTime(dateText: unknown, timeText?: unknown): number {
   const minute = Number(time.slice(2, 4));
   const second = Number(time.slice(4, 6));
 
-  // The KIS domestic timestamps are Korea local time. Date.UTC minus nine hours
-  // yields the matching Unix epoch without depending on the server timezone.
+  if (
+    !Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day) ||
+    hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59
+  ) {
+    return 0;
+  }
+
+  // KIS domestic date/time is Asia/Seoul. Convert explicitly to UTC epoch.
   return Date.UTC(year, month, day, hour - 9, minute, second);
 }
 
@@ -67,37 +98,66 @@ function dedupeAndSort(candles: VerifiedHistoricalCandleV204[]): VerifiedHistori
   return [...byTimestamp.values()].sort((a, b) => a.timestamp - b.timestamp);
 }
 
+/**
+ * Read-only KIS domestic market history provider.
+ *
+ * Deliberately does not require CANO/account credentials. Historical quote
+ * endpoints only need appKey/appSecret + OAuth, and must not be coupled to the
+ * order gateway or to whether live trading is enabled.
+ */
 export class KISHistoricalDataProviderV204 {
-  private gateway: KISBrokerGatewayV123;
-  private appKey: string;
-  private appSecret: string;
-
-  constructor(gateway?: KISBrokerGatewayV123) {
-    this.gateway = gateway ?? new KISBrokerGatewayV123();
-    this.appKey = process.env.KIS_APPKEY ?? "";
-    this.appSecret = process.env.KIS_APPSECRET ?? "";
-  }
+  private tokenCache: TokenCache | null = null;
 
   public isConfigured(): boolean {
-    return Boolean(this.appKey && this.appSecret && this.gateway.isConfigured());
+    return getKisMarketDataCredentialsV204() !== null;
+  }
+
+  private async getAccessToken(): Promise<string> {
+    const credentials = getKisMarketDataCredentialsV204();
+    if (!credentials) throw new Error("KIS_HISTORY_NOT_CONFIGURED");
+
+    const now = Date.now();
+    if (this.tokenCache && this.tokenCache.expiresAt > now + 60_000) {
+      return this.tokenCache.accessToken;
+    }
+
+    const response = await fetch(`${KIS_REAL_REST_DOMAIN}/oauth2/tokenP`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        grant_type: "client_credentials",
+        appkey: credentials.appKey,
+        appsecret: credentials.appSecret,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`KIS_HISTORY_OAUTH_HTTP_${response.status}`);
+    }
+
+    const body = await response.json() as any;
+    const accessToken = String(body?.access_token || "").trim();
+    if (!accessToken) throw new Error("KIS_HISTORY_OAUTH_MISSING_TOKEN");
+
+    const expiresIn = Number(body?.expires_in ?? 86_400);
+    this.tokenCache = {
+      accessToken,
+      expiresAt: now + (Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : 86_400) * 1000,
+    };
+    return accessToken;
   }
 
   private async getJson(path: string, trId: string, params: URLSearchParams): Promise<any> {
-    if (!this.isConfigured()) {
-      throw new Error("KIS_HISTORY_NOT_CONFIGURED");
-    }
+    const credentials = getKisMarketDataCredentialsV204();
+    if (!credentials) throw new Error("KIS_HISTORY_NOT_CONFIGURED");
 
-    const token = await this.gateway.getOAuthToken(false);
-    if (!token) {
-      throw new Error("KIS_HISTORY_OAUTH_FAILED");
-    }
-
+    const token = await this.getAccessToken();
     const response = await fetch(`${KIS_REAL_REST_DOMAIN}${path}?${params.toString()}`, {
       method: "GET",
       headers: {
         authorization: `Bearer ${token}`,
-        appkey: this.appKey,
-        appsecret: this.appSecret,
+        appkey: credentials.appKey,
+        appsecret: credentials.appSecret,
         tr_id: trId,
         "content-type": "application/json; charset=utf-8"
       }
@@ -116,15 +176,14 @@ export class KISHistoricalDataProviderV204 {
 
   public async fetchDaily(symbol: string, requiredBars = 50, asOf = new Date()): Promise<HistoricalSeedResultV204> {
     try {
-      const end = new Date(asOf);
-      const start = new Date(asOf);
-      start.setDate(start.getDate() - Math.max(120, requiredBars * 3));
+      const end = new Date(asOf.getTime());
+      const start = new Date(asOf.getTime() - Math.max(120, requiredBars * 3) * 86_400_000);
 
       const params = new URLSearchParams({
         FID_COND_MRKT_DIV_CODE: "J",
         FID_INPUT_ISCD: symbol,
-        FID_INPUT_DATE_1: ymd(start),
-        FID_INPUT_DATE_2: ymd(end),
+        FID_INPUT_DATE_1: ymdKst(start),
+        FID_INPUT_DATE_2: ymdKst(end),
         FID_PERIOD_DIV_CODE: "D",
         FID_ORG_ADJ_PRC: "0"
       });
@@ -174,7 +233,7 @@ export class KISHistoricalDataProviderV204 {
 
   public async fetchIntraday1m(symbol: string, requiredBars = 50, asOf = new Date()): Promise<HistoricalSeedResultV204> {
     const collected: VerifiedHistoricalCandleV204[] = [];
-    let cursor = new Date(asOf);
+    let cursor = new Date(asOf.getTime());
 
     try {
       // KIS returns a bounded number of rows per intraday request. Walk backward
@@ -183,7 +242,7 @@ export class KISHistoricalDataProviderV204 {
         const params = new URLSearchParams({
           FID_COND_MRKT_DIV_CODE: "J",
           FID_INPUT_ISCD: symbol,
-          FID_INPUT_HOUR_1: hms(cursor),
+          FID_INPUT_HOUR_1: hmsKst(cursor),
           FID_PW_DATA_INCU_YN: "Y",
           FID_ETC_CLS_CODE: ""
         });
