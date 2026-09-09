@@ -1,11 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "fs";
-import os from "os";
-import path from "path";
 
 import { FinalBuyHoldDecisionServiceV20 } from "../server/v20/FinalBuyHoldDecisionServiceV20";
-import { buyHoldPerformanceStoreV20 } from "../server/v20/BuyHoldPerformanceStoreV20";
 import type { ScanCandidateInput } from "../server/v20/ServerGlobalRealtimeScannerV20";
 import type {
   TrueMTFEvidenceV20,
@@ -69,7 +65,7 @@ function candidate(overrides: Partial<ScanCandidateInput> = {}): ScanCandidateIn
     spreadBps: 10,
     orderbookImbalance: 0.3,
     signedFlow: 1,
-    patterns: ["BREAKOUT_RETEST", "VWAP_RECLAIM"],
+    patterns: ["DOUBLE_BOTTOM"],
     structureTrend: "BULLISH",
     isBreakout: true,
     isRetest: true,
@@ -84,7 +80,7 @@ function candidate(overrides: Partial<ScanCandidateInput> = {}): ScanCandidateIn
 test("final service produces no verified plan when True MTF evidence is missing", () => {
   const result = FinalBuyHoldDecisionServiceV20.evaluate({
     candidate: candidate({ trueMtf: undefined }),
-    performanceKey: { setup: "BREAKOUT_RETEST", market: "KR" }
+    performanceKey: { setup: "DOUBLE_BOTTOM", market: "KR" }
   });
 
   assert.notEqual(result.action, "STRONG_BUY");
@@ -94,13 +90,15 @@ test("final service produces no verified plan when True MTF evidence is missing"
   assert.equal(result.plan.entry, null);
 });
 
-test("final service builds entry/stop/TP only after V20 BUY and verified True MTF", () => {
+test("final service builds entry/stop/TP only after V20 BUY, executable pattern and verified True MTF", () => {
   const result = FinalBuyHoldDecisionServiceV20.evaluate({
     candidate: candidate(),
     performanceKey: { setup: "NO_HISTORY_SETUP", market: "KR" }
   });
 
   assert.equal(result.recommendation, "BUY_CANDIDATE");
+  assert.equal(result.patternGate.passed, true);
+  assert.ok(result.patternGate.executableMatches.includes("DOUBLE_BOTTOM"));
   assert.equal(result.action, "BUY");
   assert.equal(result.trueMtfPassed, true);
   assert.equal(result.plan.source, "ATR_STRUCTURE");
@@ -109,10 +107,23 @@ test("final service builds entry/stop/TP only after V20 BUY and verified True MT
   assert.ok(result.blockers.includes("NO_VERIFIED_CLOSED_TRADES"));
 });
 
+test("final service downgrades new BUY to WATCH when pattern is registered-looking but not executable", () => {
+  const result = FinalBuyHoldDecisionServiceV20.evaluate({
+    candidate: candidate({ patterns: ["DECORATIVE_FAKE_PATTERN"] }),
+    performanceKey: { setup: "DECORATIVE_FAKE_PATTERN", market: "KR" }
+  });
+
+  assert.equal(result.recommendation, "BUY_CANDIDATE");
+  assert.equal(result.patternGate.passed, false);
+  assert.equal(result.action, "WATCH");
+  assert.equal(result.plan.source, "NO_VERIFIED_PLAN");
+  assert.ok(result.reasons.includes("FINAL_PATTERN_GATE_BLOCK"));
+});
+
 test("final service exits an existing position when hard stop is breached", () => {
   const result = FinalBuyHoldDecisionServiceV20.evaluate({
     candidate: candidate({ price: 93 }),
-    performanceKey: { setup: "BREAKOUT_RETEST", market: "KR" },
+    performanceKey: { setup: "DOUBLE_BOTTOM", market: "KR" },
     currentPrice: 93,
     position: {
       quantity: 10,
