@@ -9,6 +9,7 @@ import { brokerExecutionTruthBusV20 } from "./BrokerExecutionTruthBusV20";
 import { KISOverseasParserV20 } from "./KISOverseasParserV20";
 import { KISDomesticTradeParserV20 } from "./KISDomesticTradeParserV20";
 import { serverRealtimeMarketHubV20 } from "./ServerRealtimeMarketHubV20";
+import { registerKisMarketDataCredentialsV204 } from "./KISMarketDataCredentialRegistryV204";
 
 export interface KISRealtimeClientConfig {
   appKey: string;
@@ -29,6 +30,10 @@ export class ServerKISRealtimeClientV20 {
 
   constructor(config: KISRealtimeClientConfig) {
     this.config = config;
+    registerKisMarketDataCredentialsV204({
+      appKey: config.appKey,
+      appSecret: config.appSecret,
+    });
   }
 
   public connect(): void {
