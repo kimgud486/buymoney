@@ -12,6 +12,7 @@ const requiredFiles = [
   "server/v20/ServerKISRealtimeClientV20.ts",
   "server/v20/BrokerExecutionTruthBusV20.ts",
   "server/v20/BrokerExecutionRuntimeBridgeV20.ts",
+  "server/v20/BrokerFillPerformanceRecorderV20.ts",
   "server/v20/KISExecutionNoticeParserV20.ts",
   "server/v20/KISOverseasParserV20.ts",
   "server/v20/ServerRealtimeMarketHubV20.ts",
@@ -33,7 +34,6 @@ const requiredFiles = [
 ];
 
 const errors = [];
-
 for (const file of requiredFiles) {
   const fullPath = path.join(process.cwd(), file);
   if (!fs.existsSync(fullPath)) errors.push(`Missing required FINAL file: ${file}`);
@@ -44,25 +44,15 @@ function read(relative) {
   return fs.existsSync(full) ? fs.readFileSync(full, "utf8") : "";
 }
 
-// Existing broad random-generator guard.
 const serverContent = read("server.ts");
 if (serverContent) {
   const randomMatches = serverContent.match(/Math\.random\(\)/g) || [];
-  if (randomMatches.length > 10) {
-    errors.push(`Excessive Math.random() usage in server.ts (${randomMatches.length} occurrences)`);
-  }
+  if (randomMatches.length > 10) errors.push(`Excessive Math.random() usage in server.ts (${randomMatches.length} occurrences)`);
 }
 
-// V20 must remain the final BUY/HOLD authority. The client-side daily scanner
-// is allowed only as PRECHECK and must explicitly route selected candidates
-// toward SERVER_V20 rather than presenting itself as final authority.
 const precheckUi = read("src/components/VerifiedAiOpportunityScanner.tsx");
-if (!precheckUi.includes('finalAuthority: "SERVER_V20"')) {
-  errors.push("VerifiedAiOpportunityScanner must hand candidates to SERVER_V20 authority");
-}
-if (!precheckUi.includes("최종 BUY 아님")) {
-  errors.push("VerifiedAiOpportunityScanner must visibly state that PRECHECK is not final BUY");
-}
+if (!precheckUi.includes('finalAuthority: "SERVER_V20"')) errors.push("VerifiedAiOpportunityScanner must hand candidates to SERVER_V20 authority");
+if (!precheckUi.includes("최종 BUY 아님")) errors.push("VerifiedAiOpportunityScanner must visibly state that PRECHECK is not final BUY");
 
 const finalService = read("server/v20/FinalBuyHoldDecisionServiceV20.ts");
 for (const requiredToken of [
@@ -71,28 +61,27 @@ for (const requiredToken of [
   "BuyHoldSystemFacadeV20.evaluate",
   "buyHoldPerformanceStoreV20.evaluate"
 ]) {
-  if (!finalService.includes(requiredToken)) {
-    errors.push(`FinalBuyHoldDecisionServiceV20 missing authority link: ${requiredToken}`);
-  }
+  if (!finalService.includes(requiredToken)) errors.push(`FinalBuyHoldDecisionServiceV20 missing authority link: ${requiredToken}`);
 }
-
-// Decision service intentionally cannot place orders. Execution remains behind
-// the existing account/risk/idempotency/kill-switch/broker acknowledgement path.
 for (const forbiddenExecutionToken of ["placeOrder(", "submitOrder(", "sendOrder("]) {
-  if (finalService.includes(forbiddenExecutionToken)) {
-    errors.push(`FinalBuyHoldDecisionServiceV20 must not execute orders directly: ${forbiddenExecutionToken}`);
-  }
+  if (finalService.includes(forbiddenExecutionToken)) errors.push(`FinalBuyHoldDecisionServiceV20 must not execute orders directly: ${forbiddenExecutionToken}`);
 }
 
 const patternGate = read("server/v20/ExecutablePatternGateV20.ts");
-if (!patternGate.includes("PATTERN_EXECUTION_AUDIT")) {
-  errors.push("ExecutablePatternGateV20 must use audited executable pattern registry");
-}
+if (!patternGate.includes("PATTERN_EXECUTION_AUDIT")) errors.push("ExecutablePatternGateV20 must use audited executable pattern registry");
 
 const performanceGate = read("server/v20/VerifiedPerformanceGateV20.ts");
 if (!performanceGate.includes("minSamples") || !performanceGate.includes("minProfitFactor") || !performanceGate.includes("minExpectancyPct")) {
   errors.push("VerifiedPerformanceGateV20 must verify sample size, profit factor and expectancy");
 }
+
+const executionBridge = read("server/v20/BrokerExecutionRuntimeBridgeV20.ts");
+if (!executionBridge.includes("brokerFillPerformanceRecorderV20.onVerifiedFill")) {
+  errors.push("Verified broker fills must feed the V20 performance recorder");
+}
+const fillRecorder = read("server/v20/BrokerFillPerformanceRecorderV20.ts");
+if (!fillRecorder.includes('context.nextState !== "CLOSED"')) errors.push("Performance recorder must wait for CLOSED position state");
+if (!fillRecorder.includes("sellNotional") || !fillRecorder.includes("buyNotional")) errors.push("Performance recorder must aggregate real fill notional instead of guessing P&L");
 
 if (errors.length > 0) {
   console.error("❌ BUYMONEY FINAL Production Truth Audit FAILED:");
