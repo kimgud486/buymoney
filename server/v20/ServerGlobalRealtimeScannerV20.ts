@@ -1,8 +1,9 @@
 // ----------------------------------------------------------------------
-// SERVER GLOBAL REALTIME SCANNER V20.3
+// SERVER GLOBAL REALTIME SCANNER V20.4
 // TRUTH-FIRST / NO FABRICATED FALLBACKS
 // KR + US + UPBIT
-// BUY promotion requires verified 1m -> 3m -> 5m -> Daily evidence.
+// BUY promotion requires verified 1m -> 3m -> 5m -> Daily evidence
+// and at least one audited executable chart-pattern rule.
 // ----------------------------------------------------------------------
 
 import {
@@ -10,6 +11,10 @@ import {
   TrueMTFGateResultV20,
   TrueMTFSignalGateV20
 } from "./TrueMTFSignalGateV20";
+import {
+  ExecutablePatternGateResultV20,
+  ExecutablePatternGateV20
+} from "./ExecutablePatternGateV20";
 
 export type MarketType = "KR" | "US" | "CRYPTO";
 
@@ -99,6 +104,7 @@ export interface ScanCandidateResult extends ScanCandidateInput {
   dataCoveragePct: number;
 
   trueMtfGate: TrueMTFGateResultV20;
+  patternGate: ExecutablePatternGateResultV20;
 
   timestamp: number;
 }
@@ -117,6 +123,7 @@ export class ServerGlobalRealtimeScannerV20 {
   ): ScanCandidateResult {
     const timestamp = Date.now();
     const trueMtfGate = TrueMTFSignalGateV20.evaluate(input.trueMtf);
+    const patternGate = ExecutablePatternGateV20.evaluate(input.patterns);
 
     const reject = (
       reason: string,
@@ -130,6 +137,7 @@ export class ServerGlobalRealtimeScannerV20 {
       missingFields,
       dataCoveragePct: 0,
       trueMtfGate,
+      patternGate,
       timestamp
     });
 
@@ -170,8 +178,6 @@ export class ServerGlobalRealtimeScannerV20 {
       return reject("EXHAUSTION_RISK_EXCEEDED");
     }
 
-    // True MTF hard blockers such as fake breakout / RSI overheat /
-    // extreme VWAP extension are immediate rejections.
     if (trueMtfGate.hardReject) {
       return reject(
         `TRUE_MTF_HARD_REJECT:${trueMtfGate.blockers.join("|")}`
@@ -216,6 +222,10 @@ export class ServerGlobalRealtimeScannerV20 {
       missingFields.push("trueMTF:1m+3m+5m+D");
     }
 
+    if (!patternGate.passed) {
+      missingFields.push("executablePattern");
+    }
+
     const coverageChecks = [
       rsValues.length > 0,
       positive(input.vwap),
@@ -226,7 +236,7 @@ export class ServerGlobalRealtimeScannerV20 {
       validNumber(input.rsi14),
       validNumber(input.spreadBps),
       Boolean(input.structureTrend),
-      Array.isArray(input.patterns),
+      patternGate.passed,
       trueMtfGate.passed
     ];
 
@@ -243,14 +253,12 @@ export class ServerGlobalRealtimeScannerV20 {
 
     let score = 35;
 
-    // RVOL
     if (input.rvol >= 3.0) score += 22;
     else if (input.rvol >= 2.0) score += 17;
     else if (input.rvol >= 1.5) score += 11;
     else if (input.rvol >= 1.2) score += 5;
     else score -= 15;
 
-    // Relative Strength
     if (rsValues.length > 0) {
       const rsAvg =
         rsValues.reduce((a, b) => a + b, 0) /
@@ -262,7 +270,6 @@ export class ServerGlobalRealtimeScannerV20 {
       else if (rsAvg < 45) score -= 10;
     }
 
-    // VWAP
     if (positive(input.vwap)) {
       if (input.price > input.vwap) {
         score += 9;
@@ -271,7 +278,6 @@ export class ServerGlobalRealtimeScannerV20 {
       }
     }
 
-    // EMA alignment
     if (
       positive(input.ema9) &&
       positive(input.ema20)
@@ -285,32 +291,27 @@ export class ServerGlobalRealtimeScannerV20 {
 
     if (
       positive(input.ema20) &&
-      positive(input.ema50)
+      positive(input.ema50) &&
+      input.ema20 > input.ema50
     ) {
-      if (input.ema20 > input.ema50) {
-        score += 5;
-      }
+      score += 5;
     }
 
-    // Structure
     if (input.structureTrend === "BULLISH") {
       score += 10;
     } else if (input.structureTrend === "BEARISH") {
       score -= 15;
     }
 
-    // Breakout / Retest
     if (input.isBreakout) score += 7;
     if (input.isRetest) score += 6;
 
-    // Spread
     if (validNumber(input.spreadBps)) {
       if (input.spreadBps > 80) score -= 20;
       else if (input.spreadBps > 50) score -= 12;
       else if (input.spreadBps <= 20) score += 3;
     }
 
-    // Orderbook
     if (validNumber(input.orderbookImbalance)) {
       if (input.orderbookImbalance > 0.20) {
         score += 4;
@@ -319,10 +320,13 @@ export class ServerGlobalRealtimeScannerV20 {
       }
     }
 
-    // Signed Flow
     if (validNumber(input.signedFlow)) {
       if (input.signedFlow > 0) score += 3;
       if (input.signedFlow < 0) score -= 3;
+    }
+
+    if (patternGate.passed) {
+      score += Math.min(6, patternGate.executableMatches.length * 2);
     }
 
     score = Math.max(
@@ -331,7 +335,7 @@ export class ServerGlobalRealtimeScannerV20 {
     );
 
     // ------------------------------------------------------------
-    // 4. QUALITY + TRUE MTF FINAL BUY GATE
+    // 4. QUALITY + TRUE MTF + EXECUTABLE PATTERN FINAL BUY GATE
     // ------------------------------------------------------------
 
     const buyEvidenceComplete =
@@ -341,6 +345,7 @@ export class ServerGlobalRealtimeScannerV20 {
       positive(input.vwap) &&
       positive(input.ema20) &&
       positive(input.rvol) &&
+      patternGate.passed &&
       trueMtfGate.passed;
 
     let grade: ScanCandidateResult["grade"];
@@ -361,7 +366,6 @@ export class ServerGlobalRealtimeScannerV20 {
       recommendation = "REJECT";
     }
 
-    // REALTIME_DERIVED never becomes executable BUY.
     if (
       input.dataStatus === "REALTIME_DERIVED" &&
       recommendation === "BUY_CANDIDATE"
@@ -369,8 +373,6 @@ export class ServerGlobalRealtimeScannerV20 {
       recommendation = "WATCH";
     }
 
-    // Missing critical evidence or True MTF disagreement never becomes BUY.
-    // Keep it visible as WATCH instead of inventing a YES result.
     if (
       recommendation === "BUY_CANDIDATE" &&
       !buyEvidenceComplete
@@ -386,13 +388,11 @@ export class ServerGlobalRealtimeScannerV20 {
       missingFields,
       dataCoveragePct,
       trueMtfGate,
+      patternGate,
       timestamp
     };
   }
 
-  /**
-   * General ranked scan: WATCH items are retained for observation.
-   */
   public static scanCandidates(
     candidates: ScanCandidateInput[]
   ): ScanCandidateResult[] {
@@ -418,10 +418,6 @@ export class ServerGlobalRealtimeScannerV20 {
       });
   }
 
-  /**
-   * YES-only shortlist. Never fills empty ranks with WATCH/REJECT candidates.
-   * If only two symbols pass every gate, this returns exactly two.
-   */
   public static scanBuyCandidates(
     candidates: ScanCandidateInput[],
     topN: number = 5
