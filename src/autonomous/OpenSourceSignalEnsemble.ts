@@ -1,139 +1,194 @@
 /**
  * OpenSourceSignalEnsemble.ts
  *
- * Inspired by FinRL-X & Qlib architecture:
- * Separates Stock Selection, Timing & Momentum, Risk Overlay, and Execution Control.
- * Applies Ensemble Scoring + R:R / RVOL / RSI / ATR Hard Risk Gates.
+ * Safe scan-to-review ensemble for buymoney.
+ * Architecture inspiration: FinRL-X / Qlib style separation of
+ * signal generation, timing/liquidity overlays, risk gates, and execution.
  *
- * STRICT SAFETY RULE:
- * - approvalRequired IS ALWAYS true
- * - liveAutoOrderEnabled IS ALWAYS false
- * AI evaluates and recommends YES/WATCH/NO; Human trader retains final authorization.
+ * IMPORTANT:
+ * - This module never sends broker orders.
+ * - approvalRequired is always true.
+ * - liveAutoOrderEnabled is always false.
+ * - Missing market data is treated as a risk, never replaced by synthetic values.
  */
 
-import { ExplainableTradeIdea } from "../scanner/ExplainableOpportunityScannerEngine";
+import type { ExplainableTradeIdea } from "../scanner/ExplainableOpportunityScannerEngine";
+
+export type EnsembleDecision = "REVIEW_READY" | "WATCH" | "NO";
 
 export interface EnsembleEvaluationResult {
   symbol: string;
   name: string;
   market: "KOREA" | "US" | "BTC";
-  decision: "YES" | "REVIEW_READY" | "WATCH" | "NO";
+  decision: EnsembleDecision;
   ensembleScore: number;
+  sourceScore: number;
   rrRatio: number;
   rvol: number;
   rsi: number;
   atrPct: number;
-  
+  adx: number;
+  entryLow: number;
+  entryHigh: number;
   entryPrice: number;
   stopLossPrice: number;
   targetPrice: number;
-  
-  approvalRequired: boolean; // Always true
-  liveAutoOrderEnabled: boolean; // Always false
-  
+  target2Price: number;
+  approvalRequired: true;
+  liveAutoOrderEnabled: false;
   bullishReasons: string[];
   riskReasons: string[];
   summaryMessage: string;
   evaluatedAt: string;
 }
 
+export interface EnsemblePolicy {
+  minimumSourceScore: number;
+  minimumReviewScore: number;
+  minimumRiskReward: number;
+  minimumRvol: number;
+  preferredRsiLow: number;
+  preferredRsiHigh: number;
+  maximumAtrPct: number;
+}
+
+export const DEFAULT_ENSEMBLE_POLICY: EnsemblePolicy = {
+  minimumSourceScore: 78,
+  minimumReviewScore: 78,
+  minimumRiskReward: 1.5,
+  minimumRvol: 1.2,
+  preferredRsiLow: 45,
+  preferredRsiHigh: 70,
+  maximumAtrPct: 8,
+};
+
+const finiteOrNull = (value: unknown): number | null => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const clamp = (value: number, low = 0, high = 100): number =>
+  Math.max(low, Math.min(high, value));
+
+const normalizeMarket = (value: unknown): "KOREA" | "US" | "BTC" => {
+  const market = String(value || "").toUpperCase();
+  if (market === "US") return "US";
+  if (market === "BTC" || market === "UPBIT" || market === "CRYPTO") return "BTC";
+  return "KOREA";
+};
+
 export class OpenSourceSignalEnsemble {
-  /**
-   * Evaluates a trade idea or candidate stock through FinRL-X/Qlib multi-agent ensemble gates.
-   */
-  public static evaluateCandidate(idea: Partial<ExplainableTradeIdea>): EnsembleEvaluationResult {
-    const symbol = idea.symbol || "UNKNOWN";
-    const name = idea.name || symbol;
-    const market = idea.market || "KOREA";
-    const price = idea.price || idea.entryHigh || 10000;
+  public static evaluateCandidate(
+    idea: Partial<ExplainableTradeIdea>,
+    policy: EnsemblePolicy = DEFAULT_ENSEMBLE_POLICY,
+  ): EnsembleEvaluationResult {
+    const symbol = String(idea.symbol || "").trim() || "UNKNOWN";
+    const name = String(idea.name || symbol);
+    const market = normalizeMarket(idea.market);
 
-    const rsi = idea.rsi ?? 52;
-    const rvol = idea.rvol ?? 1.8;
-    const adx = idea.adx ?? 28;
-    const atrPct = idea.atrPct ?? 2.5;
+    const price = finiteOrNull(idea.price);
+    const entryLowRaw = finiteOrNull(idea.entryLow);
+    const entryHighRaw = finiteOrNull(idea.entryHigh);
+    const stop = finiteOrNull(idea.stop);
+    const target1 = finiteOrNull(idea.target1);
+    const target2 = finiteOrNull(idea.target2);
+    const sourceScoreRaw = finiteOrNull(idea.score);
+    const rsiRaw = finiteOrNull(idea.rsi);
+    const rvolRaw = finiteOrNull(idea.rvol);
+    const atrPctRaw = finiteOrNull(idea.atrPct);
+    const adxRaw = finiteOrNull(idea.adx);
 
-    const entry = price;
-    const stopLoss = idea.stop && idea.stop < entry ? idea.stop : Math.round(entry * (1 - (atrPct * 1.5) / 100));
-    const targetPrice = idea.target1 && idea.target1 > entry ? idea.target1 : Math.round(entry * (1 + (atrPct * 3.5) / 100));
+    const sourceScore = clamp(sourceScoreRaw ?? 0);
+    const rsi = clamp(rsiRaw ?? 0, 0, 100);
+    const rvol = Math.max(0, rvolRaw ?? 0);
+    const atrPct = Math.max(0, atrPctRaw ?? 0);
+    const adx = Math.max(0, adxRaw ?? 0);
 
-    const risk = Math.max(0.001, entry - stopLoss);
-    const reward = Math.max(0.001, targetPrice - entry);
-    const rawRR = reward / risk;
-    const rrRatio = Math.round(rawRR * 100) / 100;
+    const entryLow = entryLowRaw ?? price ?? 0;
+    const entryHigh = entryHighRaw ?? price ?? 0;
+    const entryPrice = entryLow > 0 && entryHigh > 0
+      ? (entryLow + entryHigh) / 2
+      : price ?? 0;
+    const stopLossPrice = stop ?? 0;
+    const targetPrice = target1 ?? 0;
+    const target2Price = target2 ?? 0;
 
-    // Component Scores (FinRL-X Layered Evaluation)
-    // 1. Trend & Momentum (0-25)
-    let trendScore = 15;
-    if (adx >= 25) trendScore += 5;
-    if (rsi >= 45 && rsi <= 65) trendScore += 5;
+    const risk = entryPrice > 0 && stopLossPrice > 0 ? entryPrice - stopLossPrice : 0;
+    const reward = entryPrice > 0 && targetPrice > 0 ? targetPrice - entryPrice : 0;
+    const rrRatio = risk > 0 && reward > 0 ? Number((reward / risk).toFixed(2)) : 0;
 
-    // 2. Volume & RVOL (0-25)
-    let volumeScore = 12;
-    if (rvol >= 2.0) volumeScore = 25;
-    else if (rvol >= 1.5) volumeScore = 20;
-    else if (rvol >= 1.2) volumeScore = 15;
+    const bullishReasons = Array.isArray(idea.bullishReasons) ? [...idea.bullishReasons] : [];
+    const riskReasons = Array.isArray(idea.riskReasons) ? [...idea.riskReasons] : [];
 
-    // 3. Pattern & Structure (0-25)
-    let patternScore = 15;
-    if (idea.grade === "S" || idea.grade === "A+") patternScore = 25;
-    else if (idea.grade === "A") patternScore = 20;
-
-    // 4. Risk / Reward Quality (0-25)
-    let rrScore = 10;
-    if (rrRatio >= 2.5) rrScore = 25;
-    else if (rrRatio >= 2.0) rrScore = 20;
-    else if (rrRatio >= 1.5) rrScore = 15;
-
-    const ensembleScore = Math.min(100, trendScore + volumeScore + patternScore + rrScore);
-
-    // Hard Risk Gate Verification
-    const bullishReasons: string[] = [];
-    const riskReasons: string[] = [];
-
-    if (rrRatio >= 1.5) {
-      bullishReasons.push(`손익비(R:R) ${rrRatio.toFixed(2)}:1 충족 (최저 기준 1.5:1 이상)`);
+    if (price === null || price <= 0) riskReasons.push("실시간 현재가가 확인되지 않았습니다.");
+    if (sourceScoreRaw === null) riskReasons.push("Opportunity Score가 확인되지 않았습니다.");
+    if (rsiRaw === null) riskReasons.push("RSI 실측값이 확인되지 않았습니다.");
+    if (rvolRaw === null) riskReasons.push("RVOL 실측값이 확인되지 않았습니다.");
+    if (atrPctRaw === null) riskReasons.push("ATR 변동성 실측값이 확인되지 않았습니다.");
+    if (stop === null || stopLossPrice <= 0 || stopLossPrice >= entryLow) {
+      riskReasons.push("유효한 손절가가 진입구간 아래에 확인되지 않았습니다.");
+    }
+    if (target1 === null || targetPrice <= entryHigh) {
+      riskReasons.push("유효한 목표1 가격이 진입구간 위에 확인되지 않았습니다.");
+    }
+    if (idea.wouldBuy === false) riskReasons.push("기존 Explainable Scanner의 wouldBuy 게이트가 NO입니다.");
+    if (sourceScore < policy.minimumSourceScore) {
+      riskReasons.push(`Opportunity Score ${sourceScore} < ${policy.minimumSourceScore}`);
+    }
+    if (rrRatio < policy.minimumRiskReward) {
+      riskReasons.push(`손익비 ${rrRatio.toFixed(2)} < ${policy.minimumRiskReward}`);
     } else {
-      riskReasons.push(`손익비 미달 (${rrRatio.toFixed(2)}:1 < 1.5:1)`);
+      bullishReasons.push(`목표1 기준 손익비 ${rrRatio.toFixed(2)}:1`);
+    }
+    if (rvolRaw !== null && rvol < policy.minimumRvol) {
+      riskReasons.push(`RVOL ${rvol.toFixed(2)}x < ${policy.minimumRvol}x`);
+    } else if (rvolRaw !== null) {
+      bullishReasons.push(`RVOL ${rvol.toFixed(2)}x`);
+    }
+    if (rsiRaw !== null && (rsi < policy.preferredRsiLow || rsi > policy.preferredRsiHigh)) {
+      riskReasons.push(`RSI ${rsi.toFixed(1)}이 선호 구간 ${policy.preferredRsiLow}~${policy.preferredRsiHigh} 밖입니다.`);
+    }
+    if (atrPctRaw !== null && atrPct > policy.maximumAtrPct) {
+      riskReasons.push(`ATR 변동성 ${atrPct.toFixed(1)}% > ${policy.maximumAtrPct}%`);
     }
 
-    if (rvol >= 1.2) {
-      bullishReasons.push(`상대거래량(RVOL) ${rvol.toFixed(2)}x 거래 수급 확인`);
-    } else {
-      riskReasons.push(`상대거래량 부족 (${rvol.toFixed(2)}x < 1.2x)`);
-    }
+    const alphaComponent = sourceScore * 0.60;
+    const rrComponent = clamp((rrRatio / 3) * 100) * 0.20;
+    const liquidityComponent = clamp((rvol / 2.5) * 100) * 0.10;
+    const timingDistance = rsiRaw === null
+      ? 20
+      : rsi < policy.preferredRsiLow
+        ? policy.preferredRsiLow - rsi
+        : rsi > policy.preferredRsiHigh
+          ? rsi - policy.preferredRsiHigh
+          : 0;
+    const timingComponent = clamp(100 - timingDistance * 5) * 0.10;
+    const ensembleScore = Math.round(clamp(alphaComponent + rrComponent + liquidityComponent + timingComponent));
 
-    if (rsi >= 30 && rsi <= 70) {
-      bullishReasons.push(`RSI ${rsi.toFixed(1)} 정상 매수 가능 구간 (30~70)`);
-    } else if (rsi > 70) {
-      riskReasons.push(`RSI ${rsi.toFixed(1)} 과매수 추격 경고`);
-    } else {
-      riskReasons.push(`RSI ${rsi.toFixed(1)} 과매도 이탈 중`);
-    }
+    const hardDataMissing = price === null || sourceScoreRaw === null || rsiRaw === null || rvolRaw === null || atrPctRaw === null;
+    const hardGateFailed =
+      hardDataMissing ||
+      idea.wouldBuy === false ||
+      sourceScore < policy.minimumSourceScore ||
+      rrRatio < policy.minimumRiskReward ||
+      rvol < policy.minimumRvol ||
+      stopLossPrice <= 0 ||
+      stopLossPrice >= entryLow ||
+      targetPrice <= entryHigh ||
+      atrPct > policy.maximumAtrPct;
 
-    if (atrPct <= 8.0) {
-      bullishReasons.push(`ATR 변동성 ${atrPct.toFixed(1)}% 안심 범위`);
-    } else {
-      riskReasons.push(`고변동성 위험 (${atrPct.toFixed(1)}% > 8.0%)`);
-    }
-
-    // Final Decision Categorization
-    let decision: "YES" | "REVIEW_READY" | "WATCH" | "NO";
-    if (riskReasons.length === 0 && ensembleScore >= 80 && rrRatio >= 1.8) {
-      decision = "REVIEW_READY"; // Ready for human approval ("YES")
-    } else if (riskReasons.length === 0 && ensembleScore >= 70) {
-      decision = "YES";
-    } else if (ensembleScore >= 55) {
+    let decision: EnsembleDecision = "NO";
+    if (!hardGateFailed && ensembleScore >= policy.minimumReviewScore) {
+      decision = "REVIEW_READY";
+    } else if (!hardDataMissing && sourceScore >= 60 && ensembleScore >= 55) {
       decision = "WATCH";
-    } else {
-      decision = "NO";
     }
 
-    const summaryMessage =
-      decision === "REVIEW_READY" || decision === "YES"
-        ? `FinRL-X/Qlib 앙상블 점수 ${ensembleScore}점 / R:R ${rrRatio.toFixed(2)} - 모든 위험검증 통과. 사용자 승인 대기중.`
-        : decision === "WATCH"
-        ? `앙상블 점수 ${ensembleScore}점 - 관망 대상. 추세 수급 보완 필요.`
-        : `앙상블 점수 ${ensembleScore}점 - 위험 요인 발견 (${riskReasons.join(", ")})`;
+    const summaryMessage = decision === "REVIEW_READY"
+      ? `앙상블 ${ensembleScore}/100, R:R ${rrRatio.toFixed(2)}. 위험 게이트 통과, 사용자 최종 검토 가능.`
+      : decision === "WATCH"
+        ? `앙상블 ${ensembleScore}/100. 일부 조건이 부족하여 관망 대상으로 분류되었습니다.`
+        : `앙상블 ${ensembleScore}/100. 데이터 또는 위험 게이트를 통과하지 못했습니다.`;
 
     return {
       symbol,
@@ -141,19 +196,42 @@ export class OpenSourceSignalEnsemble {
       market,
       decision,
       ensembleScore,
+      sourceScore,
       rrRatio,
       rvol,
       rsi,
       atrPct,
-      entryPrice: entry,
-      stopLossPrice: stopLoss,
+      adx,
+      entryLow,
+      entryHigh,
+      entryPrice,
+      stopLossPrice,
       targetPrice,
+      target2Price,
       approvalRequired: true,
       liveAutoOrderEnabled: false,
-      bullishReasons,
-      riskReasons,
+      bullishReasons: Array.from(new Set(bullishReasons)).slice(0, 8),
+      riskReasons: Array.from(new Set(riskReasons)).slice(0, 10),
       summaryMessage,
       evaluatedAt: new Date().toISOString(),
     };
+  }
+
+  public static rankCandidates(
+    ideas: Partial<ExplainableTradeIdea>[],
+    limit = 5,
+    policy: EnsemblePolicy = DEFAULT_ENSEMBLE_POLICY,
+  ): EnsembleEvaluationResult[] {
+    const rank = (decision: EnsembleDecision): number =>
+      decision === "REVIEW_READY" ? 2 : decision === "WATCH" ? 1 : 0;
+
+    return ideas
+      .map((idea) => this.evaluateCandidate(idea, policy))
+      .sort((a, b) => {
+        const decisionDiff = rank(b.decision) - rank(a.decision);
+        if (decisionDiff !== 0) return decisionDiff;
+        return b.ensembleScore - a.ensembleScore;
+      })
+      .slice(0, Math.max(1, limit));
   }
 }
