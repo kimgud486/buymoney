@@ -17,6 +17,7 @@ import { VerifiedAiOpportunityScanner } from "./components/VerifiedAiOpportunity
 import { VerifiedDecisionDetailPanel } from "./components/VerifiedDecisionDetailPanel";
 import { VerifiedPatternStatusPanel } from "./components/VerifiedPatternStatusPanel";
 import { PatternRecognitionVisualGuide } from "./components/PatternRecognitionVisualGuide";
+import { BuyHoldSystemStatusPanel } from "./components/BuyHoldSystemStatusPanel";
 import { evaluateVerifiedSignal } from "./scanner/verifiedSignalEngine";
 
 type VerifiedPatternSelection = {
@@ -133,6 +134,10 @@ function MainLayout() {
   return (
     <div className="min-h-screen bg-white text-slate-800 flex flex-col font-sans relative">
       <RealtimeMarketStreamManager />
+
+      <ErrorBoundary>
+        <BuyHoldSystemStatusPanel />
+      </ErrorBoundary>
 
       <ErrorBoundary>
         <SafeAiAutotradeLauncher />
