@@ -58,8 +58,6 @@ const DEFAULT_CONFIG: KoreaYesOnlyRuntimeConfigV204 = {
   // 180 one-minute bars provide 36 five-minute buckets without fabrication.
   intradayRequiredBars: 180,
   dailyRequiredBars: 50,
-  // KIS history is rate-limited. Deep verification is applied to the strongest
-  // pre-candidates first, then only final YES candidates are published.
   maxSeedCandidates: 12,
   topN: 5,
   historyTtlMs: 15 * 60_000,
@@ -85,16 +83,26 @@ function sessionStartKst(timestamp: number): number {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
   }).formatToParts(new Date(timestamp));
 
   const get = (type: string) => Number(parts.find((part) => part.type === type)?.value || 0);
   const year = get("year");
   const month = get("month");
   const day = get("day");
+  const hour = get("hour");
+  const minute = get("minute");
   if (!year || !month || !day) return 0;
 
-  // 09:00 KST equals 00:00 UTC.
-  return Date.UTC(year, month - 1, day, 0, 0, 0);
+  // 09:00 KST equals 00:00 UTC. If a timestamp is before the regular session
+  // open, use the previous Korean session anchor instead of a future anchor.
+  let start = Date.UTC(year, month - 1, day, 0, 0, 0);
+  if (hour < 9 || (hour === 9 && minute < 0)) {
+    start -= 86_400_000;
+  }
+  return start;
 }
 
 function toIndicatorCandles(candles: Array<Candle>): Candle[] {
@@ -148,6 +156,25 @@ function mergeCandles(
   }
 
   return [...byTimestamp.values()].sort((a, b) => timestampOf(a) - timestampOf(b));
+}
+
+function dailyReturnPct(candles: VerifiedHistoricalCandleV204[]): number | null {
+  if (candles.length < 2) return null;
+  const last = candles[candles.length - 1];
+  const prev = candles[candles.length - 2];
+  if (!positive(prev.close) || !positive(last.close)) return null;
+  return ((last.close - prev.close) / prev.close) * 100;
+}
+
+function percentileRanks(valuesBySymbol: Map<string, number>): Map<string, number> {
+  const entries = [...valuesBySymbol.entries()].sort((a, b) => a[1] - b[1]);
+  const out = new Map<string, number>();
+  const n = entries.length;
+  if (!n) return out;
+  entries.forEach(([symbol], index) => {
+    out.set(symbol, Math.round(((index + 1) / n) * 100));
+  });
+  return out;
 }
 
 export class KoreaYesOnlyHotListRuntimeV204 {
@@ -285,6 +312,7 @@ export class KoreaYesOnlyHotListRuntimeV204 {
   private buildCandidate(
     item: HotListItemV192,
     history: V204HistoryState,
+    rs1dPercentile: number | undefined,
   ): ScanCandidateInput | null {
     if (history.status !== "HISTORY_VERIFIED") return null;
 
@@ -321,20 +349,27 @@ export class KoreaYesOnlyHotListRuntimeV204 {
       ? item.exchange
       : "UNKNOWN";
 
+    const prevDaily = history.dailyCandles.length >= 2
+      ? history.dailyCandles[history.dailyCandles.length - 2].close
+      : 0;
+    const changePct = positive(prevDaily)
+      ? ((m1.close - prevDaily) / prevDaily) * 100
+      : 0;
+
     return {
       symbol: item.symbol,
       name: item.name,
       market: "KR",
       exchange,
-      price: item.currentPrice,
+      price: m1.close,
       openPrice: latest1m.open,
       highPrice: latest1m.high,
       lowPrice: latest1m.low,
-      changePct: item.priceChange24hPct,
+      changePct,
       volume: latest1m.volume,
-      tradeValue: item.currentPrice * latest1m.volume,
+      tradeValue: m1.close * latest1m.volume,
       rvol: m1.rvol,
-      rs15m: item.metrics.rs15m ?? undefined,
+      rs1d: rs1dPercentile,
       vwap: m1.vwap,
       ema9: m1.ema9,
       ema20: m1.ema20,
@@ -342,14 +377,17 @@ export class KoreaYesOnlyHotListRuntimeV204 {
       atr14: IndicatorTruthEngine.calculateATR(toIndicatorCandles(oneMinute), 14) ?? undefined,
       rsi14: m1.rsi14,
       spreadBps: candidateSpread,
-      patterns: item.patternName ? [item.patternName] : [],
+      // Discovery labels are never promoted to technical pattern evidence.
+      patterns: [],
       structureTrend: trend,
-      isBreakout: positive(m1.previousHigh20) ? item.currentPrice > m1.previousHigh20 : undefined,
+      isBreakout: positive(m1.previousHigh20) ? m1.close > m1.previousHigh20 : undefined,
       isRetest: undefined,
-      chaseRisk: item.metrics.chaseRisk === true,
-      exhaustionRisk: item.metrics.exhaustionRisk === true,
+      chaseRisk: false,
+      exhaustionRisk: false,
       trueMtf,
-      dataStatus: item.dataStatus,
+      // This status is earned from fresh KIS history + final TrueMTF freshness,
+      // not inherited from Naver discovery data.
+      dataStatus: "REALTIME_VERIFIED",
     };
   }
 
@@ -363,18 +401,36 @@ export class KoreaYesOnlyHotListRuntimeV204 {
         ? "A"
         : "B";
 
+    const atr = positive(result.atr14) ? result.atr14 : null;
+    const stopLoss = atr ? Math.max(0, result.price - atr * 1.5) : null;
+    const targetPrice = atr ? result.price + atr * 3 : null;
+    const expectedReturnPct = targetPrice
+      ? ((targetPrice - result.price) / result.price) * 100
+      : null;
+
     return {
       ...item,
+      currentPrice: result.price,
+      priceChange24hPct: result.changePct,
       setupScore: result.setupScore,
       aiMatchScore: result.setupScore,
       grade,
+      expectedReturnPct: expectedReturnPct == null ? null : +expectedReturnPct.toFixed(2),
+      planningObjectiveNote: atr
+        ? "검증된 KIS ATR 기반 2R 계획목표. 수익 보장 수치 아님."
+        : "KIS ATR 미산출로 목표가 미제공",
+      patternType: "V20_4_TRUE_MTF",
+      patternName: "KIS 1m/3m/5m/D 정합",
+      targetPrice: targetPrice == null ? null : +targetPrice.toFixed(2),
+      stopLoss: stopLoss == null ? null : +stopLoss.toFixed(2),
+      holdingPeriod: "신호 유효성 기반",
+      riskRewardRatio: atr ? "1 : 2.0" : "N/A",
       volumeIncreaseRatio: result.rvol,
-      rsiIndicator: result.rsi14 ?? item.rsiIndicator,
-      reasoning: `[V20.4 YES] ${result.trueMtfGate.confirmations.slice(0, 5).join(", ")}`,
-      evidenceList: [
-        ...item.evidenceList,
-        ...result.trueMtfGate.confirmations,
-      ],
+      rsiIndicator: result.rsi14 ?? null,
+      reasoning: `[V20.4 YES] ${result.trueMtfGate.confirmations.slice(0, 6).join(", ")}`,
+      dataStatus: "REALTIME_VERIFIED",
+      evidenceCount: result.trueMtfGate.confirmations.length,
+      evidenceList: [...result.trueMtfGate.confirmations],
       metrics: {
         ...item.metrics,
         rvol: result.rvol,
@@ -384,22 +440,43 @@ export class KoreaYesOnlyHotListRuntimeV204 {
         ema50: result.ema50 ?? null,
         rsi14: result.rsi14 ?? null,
         atr14: result.atr14 ?? null,
+        rs15m: null,
         breakoutConfirmed: typeof result.isBreakout === "boolean" ? result.isBreakout : null,
+        chaseRisk: false,
+        exhaustionRisk: false,
+        evidenceCoveragePct: result.dataCoveragePct,
       },
     };
   }
 
   public async filterYesOnly(items: HotListItemV192[]): Promise<V204StrictHotListResult> {
     const koreaItems = items
-      .filter((item) => item.market === "KOREA" && item.dataStatus === "REALTIME_VERIFIED")
+      .filter((item) => item.market === "KOREA")
       .sort((a, b) => b.setupScore - a.setupScore)
       .slice(0, this.config.maxSeedCandidates);
 
     const approved: HotListItemV192[] = [];
     const audit: V204HotListAudit[] = [];
+    const historyBySymbol = new Map<string, V204HistoryState>();
+    const returnBySymbol = new Map<string, number>();
 
+    // Stage A: Naver discovery candidate -> KIS history verification.
     for (const item of koreaItems) {
       const history = await this.ensureHistory(item.symbol);
+      historyBySymbol.set(item.symbol, history);
+      if (history.status === "HISTORY_VERIFIED") {
+        const ret = dailyReturnPct(history.dailyCandles);
+        if (ret !== null) returnBySymbol.set(item.symbol, ret);
+      }
+    }
+
+    // Relative strength is recomputed from KIS daily returns across the
+    // deep-verified candidate set. Naver discovery rank is not reused.
+    const rsPercentile = percentileRanks(returnBySymbol);
+
+    // Stage B: True MTF + deterministic V20 final gate.
+    for (const item of koreaItems) {
+      const history = historyBySymbol.get(item.symbol)!;
       if (history.status !== "HISTORY_VERIFIED") {
         audit.push({
           symbol: item.symbol,
@@ -410,7 +487,7 @@ export class KoreaYesOnlyHotListRuntimeV204 {
         continue;
       }
 
-      const input = this.buildCandidate(item, history);
+      const input = this.buildCandidate(item, history, rsPercentile.get(item.symbol));
       if (!input) {
         audit.push({
           symbol: item.symbol,
@@ -438,7 +515,7 @@ export class KoreaYesOnlyHotListRuntimeV204 {
       audit.push({
         symbol: item.symbol,
         verdict: "YES",
-        reason: "HISTORY+REALTIME+TRUE_MTF+SETUP_SCORE_PASS",
+        reason: "KIS_HISTORY+KIS_PRICE+TRUE_MTF+V20_SCORE_PASS",
         historyStatus: history.status,
         setupScore: result.setupScore,
       });
