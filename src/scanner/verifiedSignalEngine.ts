@@ -1,3 +1,10 @@
+import {
+  VERIFIED_PATTERN_REGISTRY,
+  detectVerifiedPatterns,
+  summarizePatternHits,
+  type VerifiedPatternHit,
+} from "./verifiedPatternEngine";
+
 export type ScannerDecision = "BUY_APPROVED" | "BUY_WATCH" | "NO_BUY";
 
 export interface ScannerCandle {
@@ -15,6 +22,14 @@ export interface VerifiedSignalResult {
   score: number;
   direction: "BULLISH" | "NEUTRAL" | "BEARISH";
   pattern: string;
+  patternHits: VerifiedPatternHit[];
+  patternRegistry: {
+    registered: number;
+    evaluated: number;
+    matched: number;
+    bullishMatched: number;
+    bearishMatched: number;
+  };
   reasons: string[];
   failedChecks: string[];
   metrics: {
@@ -120,27 +135,6 @@ function detectHHHL(candles: ScannerCandle[]): boolean {
   return bHigh > aHigh && bLow > aLow;
 }
 
-function detectPattern(candles: ScannerCandle[]): { name: string; bullish: boolean; points: number } {
-  if (candles.length < 3) return { name: "NONE", bullish: false, points: 0 };
-  const c = candles[candles.length - 1];
-  const p = candles[candles.length - 2];
-  const p2 = candles[candles.length - 3];
-  const body = Math.abs(c.close - c.open);
-  const lowerWick = Math.min(c.open, c.close) - c.low;
-  const upperWick = c.high - Math.max(c.open, c.close);
-
-  if (p.close < p.open && c.close > c.open && c.open <= p.close && c.close >= p.open) {
-    return { name: "BULLISH_ENGULFING", bullish: true, points: 10 };
-  }
-  if (c.close > c.open && lowerWick >= body * 2 && upperWick <= Math.max(body, EPS)) {
-    return { name: "HAMMER", bullish: true, points: 7 };
-  }
-  if (p2.close < p2.open && p.close > p.open && c.close > c.open && c.close > p.close) {
-    return { name: "MORNING_REVERSAL", bullish: true, points: 8 };
-  }
-  return { name: "NONE", bullish: false, points: 0 };
-}
-
 export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalResult | null {
   const normalized = inputCandles
     .map((raw: any) => ({
@@ -181,7 +175,12 @@ export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalR
   const vwap = sessionVwap(candles);
   const rvol = relativeVolume(candles);
   const hhhl = detectHHHL(candles);
-  const pattern = detectPattern(candles);
+  const patternHits = detectVerifiedPatterns(candles);
+  const patternSummary = summarizePatternHits(patternHits);
+  const strongestPattern = patternSummary.strongest;
+  const strongBearishPattern = patternHits.some(
+    (hit) => hit.direction === "BEARISH" && (hit.confidence === "STRONG" || hit.weight >= 8),
+  );
 
   let score = 0;
   const reasons: string[] = [];
@@ -241,12 +240,31 @@ export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalR
     failedChecks.push("HH_HL");
   }
 
-  score += pattern.points;
-  if (pattern.bullish) reasons.push(`캔들 패턴: ${pattern.name}`);
+  if (patternSummary.bullishScore > 0) {
+    score += patternSummary.bullishScore;
+    const bullishNames = patternHits
+      .filter((hit) => hit.direction === "BULLISH")
+      .slice(0, 3)
+      .map((hit) => hit.id)
+      .join(", ");
+    reasons.push(`상승 캔들 패턴: ${bullishNames}`);
+  }
+
+  if (strongBearishPattern) {
+    failedChecks.push("BEARISH_PATTERN");
+  }
 
   score = Math.min(100, Math.round(score));
 
-  const requiredBuy = fullTrend && last.close >= vwap && macdHist > 0 && currentRsi >= 52 && currentRsi <= 74 && rvol >= 1.5 && hhhl;
+  const requiredBuy = fullTrend
+    && last.close >= vwap
+    && macdHist > 0
+    && currentRsi >= 52
+    && currentRsi <= 74
+    && rvol >= 1.5
+    && hhhl
+    && !strongBearishPattern;
+
   const decision: ScannerDecision = requiredBuy && score >= 82
     ? "BUY_APPROVED"
     : score >= 70
@@ -260,11 +278,27 @@ export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalR
   const target1 = last.close + riskUnit * 2;
   const target2 = last.close + riskUnit * 3;
 
+  const technicalDirection: "BULLISH" | "NEUTRAL" | "BEARISH" = strongBearishPattern
+    ? "BEARISH"
+    : fullTrend || baseTrend
+      ? "BULLISH"
+      : last.close < ema20
+        ? "BEARISH"
+        : "NEUTRAL";
+
   return {
     decision,
     score,
-    direction: fullTrend || baseTrend ? "BULLISH" : last.close < ema20 ? "BEARISH" : "NEUTRAL",
-    pattern: pattern.name,
+    direction: technicalDirection,
+    pattern: strongestPattern?.id ?? "NONE",
+    patternHits,
+    patternRegistry: {
+      registered: VERIFIED_PATTERN_REGISTRY.length,
+      evaluated: VERIFIED_PATTERN_REGISTRY.filter((item) => candles.length >= item.minBars).length,
+      matched: patternHits.length,
+      bullishMatched: patternHits.filter((hit) => hit.direction === "BULLISH").length,
+      bearishMatched: patternHits.filter((hit) => hit.direction === "BEARISH").length,
+    },
     reasons,
     failedChecks,
     metrics: {
