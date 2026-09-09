@@ -1,0 +1,110 @@
+name: One-time fix AI signals score
+
+on:
+  push:
+    paths:
+      - '.github/workflows/one-time-fix-ai-signals-score.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch RealTimeTradingViewChart
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('src/components/trading/RealTimeTradingViewChart.tsx')
+          text = path.read_text(encoding='utf-8')
+
+          anchor = '''  }, [initialCandles]);
+
+  // Recalculate indicators, prediction, and state when candle closes
+'''
+          replacement = '''  }, [initialCandles]);
+
+  // Publish an initial technical score from already-fetched completed candles.
+  // This intentionally does NOT unlock trading. Execution remains gated by the
+  // verified realtime feed/state machine below.
+  useEffect(() => {
+    if (normalizedInitialCandles.length === 0) {
+      setAiConfidence(0);
+      return;
+    }
+
+    try {
+      const indicators = IndicatorEngine.calculate(normalizedInitialCandles);
+      const structure = MarketStructureEngine.analyze(normalizedInitialCandles, indicators.vwap);
+      const confidenceScore = Math.max(
+        0,
+        Math.min(
+          100,
+          Math.round(
+            (indicators.trendStrength * 0.4 +
+              (indicators.macdHistogram > 0 ? 0.3 : 0.1) +
+              (structure.hhhlValid ? 0.3 : 0)) *
+              100,
+          ),
+        ),
+      );
+
+      setAiConfidence(confidenceScore);
+      onStateChange?.(tradingStateRef.current, confidenceScore);
+    } catch (error) {
+      console.warn('[RealTimeTradingViewChart] initial technical score failed', error);
+      setAiConfidence(0);
+      onStateChange?.(tradingStateRef.current, 0);
+    }
+  }, [normalizedInitialCandles, onStateChange]);
+
+  // Recalculate indicators, prediction, and state when candle closes
+'''
+
+          if anchor not in text:
+            raise SystemExit('initial-score anchor not found; refusing unsafe patch')
+          text = text.replace(anchor, replacement, 1)
+
+          old = '''      tradingStateRef.current = nextState;
+      setTradingState(nextState);
+      onStateChange?.(nextState, confidenceScore);
+    }
+
+    // 5. Update dynamic trailing stop via AdaptiveTrailingExitEngineV137 & ExitDecisionBridgeV138
+'''
+          new = '''      tradingStateRef.current = nextState;
+      setTradingState(nextState);
+    }
+
+    // Always publish a fresh Technical Score, even when the state remains
+    // NO_TRADE. Previously this callback only fired on state transitions, so
+    // NO_TRADE -> NO_TRADE left the parent UI stuck on \"계산 중...\" forever.
+    onStateChange?.(tradingStateRef.current, confidenceScore);
+
+    // 5. Update dynamic trailing stop via AdaptiveTrailingExitEngineV137 & ExitDecisionBridgeV138
+'''
+
+          if old not in text:
+            raise SystemExit('state-callback anchor not found; refusing unsafe patch')
+          text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No changes to commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/components/trading/RealTimeTradingViewChart.tsx
+          git commit -m 'fix: publish AI signal score without state transition'
+          git push origin HEAD:main
