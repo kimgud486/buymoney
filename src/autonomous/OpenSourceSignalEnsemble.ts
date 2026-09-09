@@ -125,13 +125,18 @@ export class OpenSourceSignalEnsemble {
     if (rsiRaw === null) riskReasons.push("RSI 실측값이 확인되지 않았습니다.");
     if (rvolRaw === null) riskReasons.push("RVOL 실측값이 확인되지 않았습니다.");
     if (atrPctRaw === null) riskReasons.push("ATR 변동성 실측값이 확인되지 않았습니다.");
+    if (entryLowRaw === null || entryHighRaw === null || entryLow <= 0 || entryHigh < entryLow) {
+      riskReasons.push("검증된 진입구간이 확인되지 않았습니다.");
+    }
     if (stop === null || stopLossPrice <= 0 || stopLossPrice >= entryLow) {
       riskReasons.push("유효한 손절가가 진입구간 아래에 확인되지 않았습니다.");
     }
     if (target1 === null || targetPrice <= entryHigh) {
       riskReasons.push("유효한 목표1 가격이 진입구간 위에 확인되지 않았습니다.");
     }
-    if (idea.wouldBuy === false) riskReasons.push("기존 Explainable Scanner의 wouldBuy 게이트가 NO입니다.");
+    if (idea.wouldBuy !== true) {
+      riskReasons.push("기존 Explainable Scanner의 wouldBuy=true 검증이 확인되지 않았습니다.");
+    }
     if (sourceScore < policy.minimumSourceScore) {
       riskReasons.push(`Opportunity Score ${sourceScore} < ${policy.minimumSourceScore}`);
     }
@@ -165,13 +170,24 @@ export class OpenSourceSignalEnsemble {
     const timingComponent = clamp(100 - timingDistance * 5) * 0.10;
     const ensembleScore = Math.round(clamp(alphaComponent + rrComponent + liquidityComponent + timingComponent));
 
-    const hardDataMissing = price === null || sourceScoreRaw === null || rsiRaw === null || rvolRaw === null || atrPctRaw === null;
+    const hardDataMissing =
+      price === null ||
+      sourceScoreRaw === null ||
+      rsiRaw === null ||
+      rvolRaw === null ||
+      atrPctRaw === null ||
+      entryLowRaw === null ||
+      entryHighRaw === null ||
+      stop === null ||
+      target1 === null;
     const hardGateFailed =
       hardDataMissing ||
-      idea.wouldBuy === false ||
+      idea.wouldBuy !== true ||
       sourceScore < policy.minimumSourceScore ||
       rrRatio < policy.minimumRiskReward ||
       rvol < policy.minimumRvol ||
+      entryLow <= 0 ||
+      entryHigh < entryLow ||
       stopLossPrice <= 0 ||
       stopLossPrice >= entryLow ||
       targetPrice <= entryHigh ||
