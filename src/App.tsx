@@ -15,6 +15,7 @@ import { AiBotCommandCenterUi } from "./components/AiBotCommandCenterUi";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { VerifiedAiOpportunityScanner } from "./components/VerifiedAiOpportunityScanner";
 import { VerifiedDecisionDetailPanel } from "./components/VerifiedDecisionDetailPanel";
+import { VerifiedIntradaySignalPanel } from "./components/VerifiedIntradaySignalPanel";
 import { VerifiedPatternStatusPanel } from "./components/VerifiedPatternStatusPanel";
 import { VerifiedPatternGuideBridge } from "./components/VerifiedPatternGuideBridge";
 import { BuyHoldSystemStatusPanel } from "./components/BuyHoldSystemStatusPanel";
@@ -151,6 +152,10 @@ function MainLayout() {
 
       <ErrorBoundary>
         <VerifiedDecisionDetailPanel />
+      </ErrorBoundary>
+
+      <ErrorBoundary>
+        <VerifiedIntradaySignalPanel />
       </ErrorBoundary>
 
       {/* Transparent registry/evaluation/match counts for the executable pattern engine. */}
