@@ -8,6 +8,10 @@ import {
   VERIFIED_STRUCTURE_PATTERN_REGISTRY,
   detectVerifiedStructurePatterns,
 } from "./verifiedStructurePatternEngine";
+import {
+  MASTER_EXECUTABLE_PATTERN_RULES,
+  detectMasterExecutablePatterns,
+} from "./masterPatternDetectionEngine";
 
 export type ScannerDecision = "BUY_APPROVED" | "BUY_WATCH" | "NO_BUY";
 
@@ -35,8 +39,10 @@ export interface VerifiedSignalResult {
     bearishMatched: number;
     candleRegistered: number;
     structureRegistered: number;
+    masterExecutableRegistered: number;
     candleMatched: number;
     structureMatched: number;
+    masterExecutableMatched: number;
   };
   reasons: string[];
   failedChecks: string[];
@@ -143,6 +149,45 @@ function detectHHHL(candles: ScannerCandle[]): boolean {
   return bHigh > aHigh && bLow > aLow;
 }
 
+function mergePatternHits(...groups: VerifiedPatternHit[][]): VerifiedPatternHit[] {
+  const merged = new Map<string, VerifiedPatternHit>();
+  for (const group of groups) {
+    for (const hit of group) {
+      const existing = merged.get(hit.id);
+      if (!existing) {
+        merged.set(hit.id, hit);
+        continue;
+      }
+      const existingRank = (existing.confidence === "STRONG" ? 100 : 0) + existing.weight;
+      const nextRank = (hit.confidence === "STRONG" ? 100 : 0) + hit.weight;
+      if (nextRank > existingRank) merged.set(hit.id, hit);
+    }
+  }
+  return Array.from(merged.values()).sort((a, b) => {
+    const strongDiff = Number(b.confidence === "STRONG") - Number(a.confidence === "STRONG");
+    if (strongDiff !== 0) return strongDiff;
+    return b.weight - a.weight;
+  });
+}
+
+function executableRegistryStats(candlesLength: number): { registered: number; evaluated: number } {
+  const defs = new Map<string, number>();
+  for (const item of VERIFIED_PATTERN_REGISTRY) defs.set(item.id, item.minBars);
+  for (const item of VERIFIED_STRUCTURE_PATTERN_REGISTRY) {
+    const existing = defs.get(item.id);
+    defs.set(item.id, existing == null ? item.minBars : Math.min(existing, item.minBars));
+  }
+  for (const item of MASTER_EXECUTABLE_PATTERN_RULES) {
+    const existing = defs.get(item.id);
+    defs.set(item.id, existing == null ? item.minBars : Math.min(existing, item.minBars));
+  }
+  const values = Array.from(defs.values());
+  return {
+    registered: values.length,
+    evaluated: values.filter((minBars) => candlesLength >= minBars).length,
+  };
+}
+
 export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalResult | null {
   const normalized = inputCandles
     .map((raw: any) => ({
@@ -186,13 +231,8 @@ export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalR
 
   const candlePatternHits = detectVerifiedPatterns(candles);
   const structurePatternHits = detectVerifiedStructurePatterns(candles);
-  const patternHits = [...candlePatternHits, ...structurePatternHits]
-    .filter((hit, index, all) => all.findIndex((candidate) => candidate.id === hit.id) === index)
-    .sort((a, b) => {
-      const strongDiff = (b.confidence === "STRONG" ? 1 : 0) - (a.confidence === "STRONG" ? 1 : 0);
-      if (strongDiff !== 0) return strongDiff;
-      return b.weight - a.weight;
-    });
+  const masterExecutableHits = detectMasterExecutablePatterns(candles);
+  const patternHits = mergePatternHits(candlePatternHits, structurePatternHits, masterExecutableHits);
 
   const patternSummary = summarizePatternHits(patternHits);
   const strongestPattern = patternSummary.strongest;
@@ -262,19 +302,16 @@ export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalR
     score += patternSummary.bullishScore;
     const bullishNames = patternHits
       .filter((hit) => hit.direction === "BULLISH")
-      .slice(0, 4)
+      .slice(0, 5)
       .map((hit) => hit.id)
       .join(", ");
-    reasons.push(`검증 패턴: ${bullishNames}`);
+    reasons.push(`검증 패턴 동시탐지: ${bullishNames}`);
   }
 
-  if (structurePatternHits.length > 0) {
-    reasons.push(`차트 구조 ${structurePatternHits.length}개 실제 탐지`);
-  }
+  if (structurePatternHits.length > 0) reasons.push(`차트 구조 ${structurePatternHits.length}개 실제 탐지`);
+  if (masterExecutableHits.length > 0) reasons.push(`마스터 규칙 ${masterExecutableHits.length}개 실제 탐지`);
 
-  if (strongBearishPattern) {
-    failedChecks.push("BEARISH_PATTERN");
-  }
+  if (strongBearishPattern) failedChecks.push("BEARISH_PATTERN");
 
   score = Math.min(100, Math.round(score));
 
@@ -308,8 +345,7 @@ export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalR
         ? "BEARISH"
         : "NEUTRAL";
 
-  const candleEvaluated = VERIFIED_PATTERN_REGISTRY.filter((item) => candles.length >= item.minBars).length;
-  const structureEvaluated = VERIFIED_STRUCTURE_PATTERN_REGISTRY.filter((item) => candles.length >= item.minBars).length;
+  const registryStats = executableRegistryStats(candles.length);
 
   return {
     decision,
@@ -318,15 +354,17 @@ export function evaluateVerifiedSignal(inputCandles: unknown[]): VerifiedSignalR
     pattern: strongestPattern?.id ?? "NONE",
     patternHits,
     patternRegistry: {
-      registered: VERIFIED_PATTERN_REGISTRY.length + VERIFIED_STRUCTURE_PATTERN_REGISTRY.length,
-      evaluated: candleEvaluated + structureEvaluated,
+      registered: registryStats.registered,
+      evaluated: registryStats.evaluated,
       matched: patternHits.length,
       bullishMatched: patternHits.filter((hit) => hit.direction === "BULLISH").length,
       bearishMatched: patternHits.filter((hit) => hit.direction === "BEARISH").length,
       candleRegistered: VERIFIED_PATTERN_REGISTRY.length,
       structureRegistered: VERIFIED_STRUCTURE_PATTERN_REGISTRY.length,
+      masterExecutableRegistered: MASTER_EXECUTABLE_PATTERN_RULES.length,
       candleMatched: candlePatternHits.length,
       structureMatched: structurePatternHits.length,
+      masterExecutableMatched: masterExecutableHits.length,
     },
     reasons,
     failedChecks,
