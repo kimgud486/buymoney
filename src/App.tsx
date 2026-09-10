@@ -8,8 +8,6 @@ import { AppProvider } from "./context/AppContext";
 import { PricePulseProvider } from "./context/PricePulseContext";
 import { ToastContainer } from "./components/ToastContainer";
 import { RealtimeMarketStreamManager } from "./components/RealtimeMarketStreamManager";
-import { RealtimeBitcoinPanel } from "./components/RealtimeBitcoinPanel";
-import { AllMarketRadar } from "./components/AllMarketRadar";
 import { KISLiveRuntimeDashboard } from "./components/KISLiveRuntimeDashboard";
 import { RealtimeLongShortRadar } from "./components/RealtimeLongShortRadar";
 import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecuritiesConsensusModal";
@@ -144,15 +142,6 @@ function MainLayout() {
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans relative">
       <MainScreenKoreanText />
       <RealtimeMarketStreamManager />
-
-      <ErrorBoundary>
-        <AllMarketRadar />
-      </ErrorBoundary>
-
-      {/* 코인 UI는 하나의 한글 통합 패널만 노출 */}
-      <ErrorBoundary>
-        <RealtimeBitcoinPanel />
-      </ErrorBoundary>
 
       <ErrorBoundary>
         <KISLiveRuntimeDashboard />
