@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------
-// ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V5 (AISTOCK V21 TRUTH-FIRST)
+// ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V6 (AISTOCK V21.2 TRUTH-FIRST)
 // ----------------------------------------------------------------------
 
 import fs from "node:fs";
@@ -52,6 +52,38 @@ function auditPresetFixture() {
   }
 }
 
+function auditServerTruthRoutes() {
+  const serverPath = path.resolve("server.ts");
+  if (!fs.existsSync(serverPath)) return;
+  const text = fs.readFileSync(serverPath, "utf8");
+
+  const requiredMarkers = [
+    "SYNTHETIC_BACKTEST_REMOVED",
+    "SIMULATED_AUTOTRADE_REMOVED",
+    "VERIFIED_THEME_DATA_REQUIRED",
+    "VERIFIED_ARBITRAGE_DATA_REQUIRED",
+    "VERIFIED_SYNC_OVERLAY_DATA_REQUIRED",
+    "VERIFIED_ALGORITHM_INPUTS_REQUIRED"
+  ];
+  for (const marker of requiredMarkers) {
+    if (!text.includes(marker)) fail(`server.ts missing fail-closed production marker: ${marker}`);
+  }
+
+  const forbiddenServerShapes = [
+    "const ALL_REAL_STOCKS_MASTER = [",
+    "baseUsd: 65400",
+    "baseKrw: 92500000",
+    "const vixIndex = 18.2 + (Math.sin(Date.now() / 10000) * 4)",
+    "const wave = Math.sin((dataPointsCount - i) / 3.5) * 1.8",
+    "const history = generateHistory(stock.price, daysCount)",
+    "price: st.price || 45000",
+    "changePct: st.changePct || 2.5"
+  ];
+  for (const shape of forbiddenServerShapes) {
+    if (text.includes(shape)) fail(`server.ts still contains synthetic production shape: ${shape}`);
+  }
+}
+
 function scanPath(p) {
   if (!fs.existsSync(p)) return;
   const stat = fs.statSync(p);
@@ -76,11 +108,12 @@ function scanFile(fullPath) {
   }
 }
 
-console.log("🔍 Running Production Zero Fake Data Audit V5...");
+console.log("🔍 Running Production Zero Fake Data Audit V6...");
 auditPresetFixture();
+auditServerTruthRoutes();
 for (const rootPath of ROOTS) scanPath(rootPath);
 if (failed) {
-  console.error("💥 Zero Fake Data Audit V5 FAILED!");
+  console.error("💥 Zero Fake Data Audit V6 FAILED!");
   process.exit(1);
 }
-console.log("✅ Production Zero Fake Data Audit V5 PASSED cleanly.");
+console.log("✅ Production Zero Fake Data Audit V6 PASSED cleanly.");
