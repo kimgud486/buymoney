@@ -10,6 +10,7 @@ import { ToastContainer } from "./components/ToastContainer";
 import { RealtimeMarketStreamManager } from "./components/RealtimeMarketStreamManager";
 import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecuritiesConsensusModal";
 import { MasterAiAutoTradingDashboard } from "./components/trading/MasterAiAutoTradingDashboard";
+import RealtimeHubStatusStrip from "./components/trading/RealtimeHubStatusStrip";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MainScreenKoreanText } from "./components/MainScreenKoreanText";
 
@@ -46,6 +47,10 @@ function MainLayout() {
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans relative">
       <MainScreenKoreanText />
       <RealtimeMarketStreamManager />
+
+      <ErrorBoundary>
+        <RealtimeHubStatusStrip />
+      </ErrorBoundary>
 
       <ErrorBoundary>
         <MasterAiAutoTradingDashboard
