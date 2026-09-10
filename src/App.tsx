@@ -33,19 +33,35 @@ function MainLayout() {
     // independent dual-lock closed, so a page refresh never authorizes an order.
     v11ExecutionEngine.setTradingMode("LIVE", false);
 
-    // Remove legacy DRY_RUN/test-mode controls from the rendered production UI.
-    // The observer also covers dashboard sections that mount after App.
-    const removeLegacyTestModeControls = () => {
+    // Production UI cleanup only. Execution/Risk Engine logic is intentionally
+    // untouched. Remove legacy test controls and the duplicated Risk Gate metrics
+    // card while keeping the upper Risk/Truth indicators and all safety checks.
+    const cleanupProductionUi = () => {
       document.querySelectorAll("button").forEach((button) => {
         const label = button.textContent?.replace(/\s+/g, " ").trim() ?? "";
         if (label.includes("시세+테스트") || label.includes("시세 + 테스트")) {
           button.remove();
         }
       });
+
+      document.querySelectorAll<HTMLElement>("div").forEach((element) => {
+        const label = element.textContent?.replace(/\s+/g, " ").trim() ?? "";
+        const isRiskMetricsCard =
+          label.includes("Risk Gate 지표 (Risk Engine)") &&
+          label.includes("오늘 거래 건수:") &&
+          label.includes("연속 손실 횟수:") &&
+          element.classList.contains("bg-zinc-50") &&
+          element.classList.contains("rounded-2xl");
+
+        if (isRiskMetricsCard) {
+          element.remove();
+        }
+      });
     };
-    removeLegacyTestModeControls();
-    const modeControlObserver = new MutationObserver(removeLegacyTestModeControls);
-    modeControlObserver.observe(document.body, { childList: true, subtree: true });
+
+    cleanupProductionUi();
+    const productionUiObserver = new MutationObserver(cleanupProductionUi);
+    productionUiObserver.observe(document.body, { childList: true, subtree: true });
 
     document.body.style.overflow = "";
     document.body.style.position = "";
@@ -59,7 +75,7 @@ function MainLayout() {
 
     window.addEventListener("open-consensus-modal", handleOpenConsensus);
     return () => {
-      modeControlObserver.disconnect();
+      productionUiObserver.disconnect();
       window.removeEventListener("open-consensus-modal", handleOpenConsensus);
     };
   }, []);
