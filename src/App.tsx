@@ -9,6 +9,7 @@ import { PricePulseProvider } from "./context/PricePulseContext";
 import { ToastContainer } from "./components/ToastContainer";
 import { RealtimeMarketStreamManager } from "./components/RealtimeMarketStreamManager";
 import { RealtimeBitcoinPanel } from "./components/RealtimeBitcoinPanel";
+import { KISLiveRuntimeDashboard } from "./components/KISLiveRuntimeDashboard";
 import { RealtimeLongShortRadar } from "./components/RealtimeLongShortRadar";
 import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecuritiesConsensusModal";
 import { MasterAiAutoTradingDashboard } from "./components/trading/MasterAiAutoTradingDashboard";
@@ -142,6 +143,10 @@ function MainLayout() {
 
       <ErrorBoundary>
         <RealtimeBitcoinPanel />
+      </ErrorBoundary>
+
+      <ErrorBoundary>
+        <KISLiveRuntimeDashboard />
       </ErrorBoundary>
 
       <ErrorBoundary>
