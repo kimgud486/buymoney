@@ -35,7 +35,7 @@ process.on("uncaughtException", (err) => {
 });
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
 
 app.use(express.json());
 
@@ -7061,11 +7061,15 @@ const safetyCheckMiddleware = async (req: express.Request, res: express.Response
       });
     }
 
-    // If this is a SIMULATED trade (isRealTrade === false or isSimulated === true), pass safety check cleanly
+    // V21.7: production order paths are REAL-ONLY. Never bypass broker truth with simulation flags.
     const isSimulatedTrade = !isRealTrade || req.body?.isSimulated === true || isRealTrade === "false" || req.body?.strictReal === false;
     if (isSimulatedTrade) {
-      console.log(`[SafetyCheck] Trade for ${symbol} is in SIMULATED mode. Bypassing real broker balance queries.`);
-      return next();
+      return res.status(410).json({
+        success: false,
+        error: "SIMULATED_TRADE_DISABLED_V217",
+        dataStatus: "NO_DATA",
+        message: "Production order validation is real-only. Simulation/paper/virtual-ledger execution is disabled."
+      });
     }
 
     // Step 4: Broker Credentials Check for REAL trades
@@ -7172,17 +7176,13 @@ const safetyCheckMiddleware = async (req: express.Request, res: express.Response
       if (market === "BTC") {
         const estimatedSellValue = numQty * (parseFloat(price) || 0);
         if (estimatedSellValue > 0 && estimatedSellValue < 5000) {
-          return res.json({
-            success: true,
-            isRealTrade: false,
-            isSimulated: true,
-            isDustCleanup: true,
-            executionType: "DUST_CLEANUP",
-            brokerName: "업비트 (소액 잔량 청산 원장)",
-            orderId: `DUST-BTC-${Date.now()}`,
-            brokerOrderId: `DUST-BTC-${Date.now()}`,
-            fee: 0,
-            message: `[소액 잔량 청산 완료] 평가금액(약 ₩${Math.round(estimatedSellValue).toLocaleString()})이 업비트 마켓 최소 매도 가능 금액(5,000원) 미만이므로, 거래소 제출 없이 포트폴리오 원장에서 정리 청산되었습니다.`
+          return res.status(409).json({
+            success: false,
+            error: "UPBIT_MIN_ORDER_NOT_MET_V217",
+            dataStatus: "REALTIME_VERIFIED",
+            estimatedSellValue: Math.round(estimatedSellValue),
+            minRequired: 5000,
+            message: "Real Upbit sell value is below the exchange minimum. No synthetic ledger close was performed."
           });
         }
       }
@@ -7270,8 +7270,23 @@ app.post("/api/trade/execute", safetyCheckMiddleware, async (req, res) => {
   const decUpbitSecret = resolved.decUpbitSecret;
 
   const isRealRequested = req.body.isRealTrade === true && req.body.isSimulated !== true;
-  const isSimulated = !isRealRequested || req.body.isSimulated === true;
-  const isBypass = req.body.bypassGuard === true || req.body.allowOffHours === true;
+  if (!isRealRequested) {
+    return res.status(410).json({
+      success: false,
+      error: "SIMULATED_TRADE_DISABLED_V217",
+      dataStatus: "NO_DATA",
+      message: "Only explicit real-order preparation is accepted on this production endpoint."
+    });
+  }
+  if (req.body.userConfirmed !== true || req.body.confirmationSource !== "USER_ACTION") {
+    return res.status(428).json({
+      success: false,
+      error: "EXPLICIT_USER_CONFIRMATION_REQUIRED_V217",
+      message: "A deliberate user action must confirm the live order. AI/autonomous submission is not accepted."
+    });
+  }
+  const isSimulated = false;
+  const isBypass = false;
 
   // 장외 시간 체크 (실체결 증권사 매수 주문에 대해서만 정규장 세션 오픈 여부를 검증하며, 청산/매도 및 모의투자/수동 바이패스는 장외체결 허용)
   if (side === "BUY" && !isSimulated && !isBypass) {
@@ -7689,17 +7704,11 @@ app.post("/api/trade/execute", safetyCheckMiddleware, async (req, res) => {
       const activeMode = resolved.upbitActiveApiKeyMode || "AUTO_FAILOVER";
 
       if (!isRealRequested || req.body.isSimulated === true || req.body.isRealTrade === false || (!decUpbitKey1 && !decUpbitKey2)) {
-        const btcOdno = `SIM-BTC-${Date.now()}`;
-        return res.json({
-          success: true,
-          isRealTrade: false,
-          isSimulated: true,
-          executionType: "SIMULATED",
-          brokerName: "업비트(Upbit) 가상 모의투자 원장",
-          orderId: btcOdno,
-          brokerOrderId: btcOdno,
-          fee: Math.round(stockQty * price * 0.0005),
-          message: `[모의투자 체결 완료] ${symbol || "BTC"} ${stockQty} ${side === "BUY" ? "매수" : "매도"} 가상 주문이 정상 체결되었습니다.`
+        return res.status(503).json({
+          success: false,
+          error: "UPBIT_REAL_CREDENTIALS_REQUIRED_V217",
+          dataStatus: "NO_DATA",
+          message: "Real Upbit credentials are required. No simulated order or virtual fill was created."
         });
       }
 
@@ -8601,64 +8610,46 @@ app.get("/api/upbit/public/candles", async (req, res) => {
   }
 });
 
-// Upbit Real-time Public Feed Ping Probe
-app.get("/api/broker/upbit/ping", async (req, res) => {
+// Upbit Real-time Public Feed Ping Probe - truth-first V21.7
+app.get("/api/broker/upbit/ping", async (_req, res) => {
   const startTime = Date.now();
   try {
-    const upbitProbe = await fetch("https://api.upbit.com/v1/ticker?markets=KRW-BTC", {
-      signal: AbortSignal.timeout(3500)
-    });
+    const upbitProbe = await fetch("https://api.upbit.com/v1/ticker?markets=KRW-BTC", { signal: AbortSignal.timeout(3500) });
     const latency = Date.now() - startTime;
-    if (upbitProbe.ok) {
-      return res.json({
-        success: true,
-        broker: "업비트(Upbit) 공개 실시간 API",
-        status: "HEALTHY",
-        latency: Math.max(12, latency),
-        serverTime: new Date().toISOString(),
-        endpoint: "https://api.upbit.com/v1",
-        mode: "PUBLIC_MARKET_FEED_ONLY",
-        activeSession: true,
-        description: "24시간 비트코인 및 암호화폐 실시간 시세/캔들/호가 스트리밍 정상 가동 중 (실거래 제외, 시뮬레이션 모드)"
-      });
+    if (!upbitProbe.ok) {
+      return res.status(503).json({ success: false, broker: "UPBIT_PUBLIC", status: "UNAVAILABLE", latency, dataStatus: "NO_DATA" });
     }
-  } catch (e) {
-    // Return gracefully
+    const rows = await upbitProbe.json() as any[];
+    const row = Array.isArray(rows) ? rows[0] : null;
+    const tradePrice = Number(row?.trade_price);
+    const timestamp = Number(row?.timestamp);
+    if (!Number.isFinite(tradePrice) || tradePrice <= 0 || !Number.isFinite(timestamp)) {
+      return res.status(503).json({ success: false, broker: "UPBIT_PUBLIC", status: "INVALID_RESPONSE", latency, dataStatus: "NO_DATA" });
+    }
+    return res.json({ success: true, broker: "UPBIT_PUBLIC", status: "HEALTHY", latency, dataStatus: "REALTIME_VERIFIED", price: tradePrice, asOf: new Date(timestamp).toISOString(), mode: "PUBLIC_MARKET_FEED_ONLY" });
+  } catch (error: any) {
+    return res.status(503).json({ success: false, broker: "UPBIT_PUBLIC", status: "UNAVAILABLE", latency: Date.now() - startTime, dataStatus: "NO_DATA", error: String(error?.message || error) });
   }
-  const latency = Date.now() - startTime;
-  return res.json({
-    success: true,
-    broker: "업비트(Upbit) 공개 실시간 API",
-    status: "HEALTHY",
-    latency: Math.max(20, latency),
-    serverTime: new Date().toISOString(),
-    endpoint: "https://api.upbit.com/v1",
-    mode: "PUBLIC_MARKET_FEED_ONLY",
-    activeSession: true,
-    description: "24시간 비트코인 및 암호화폐 실시간 시세/캔들/호가 스트리밍 정상 가동 중"
-  });
 });
 
 // ---------------------------------------------------------
-// 5-Second Real-Time KIS OpenAPI Ping / Health Probe Endpoint
+// KIS OpenAPI Read-Only Health Probe - truth-first V21.7
 // ---------------------------------------------------------
-app.get("/api/broker/korea/ping", (req, res) => {
+app.get("/api/broker/korea/ping", async (_req, res) => {
   const startTime = Date.now();
-  // Simulate slight network jitter (12ms - 35ms)
-  const simulatedJitter = Math.floor(Math.random() * 23) + 12;
-  
-  setTimeout(() => {
-    const latency = Date.now() - startTime;
-    res.json({
-      success: true,
-      broker: "한국투자증권 (KIS Open API)",
-      status: "HEALTHY",
-      latency,
-      serverTime: new Date().toISOString(),
-      endpoint: "https://openapi.koreainvestment.com:9443",
-      activeSession: true
-    });
-  }, simulatedJitter);
+  try {
+    const configured = kisBrokerGateway.isConfigured();
+    if (!configured) {
+      return res.status(503).json({ success: false, broker: "KIS", status: "NOT_CONFIGURED", dataStatus: "NO_DATA" });
+    }
+    const token = await kisBrokerGateway.getOAuthToken(false);
+    if (!token) {
+      return res.status(503).json({ success: false, broker: "KIS", status: "AUTH_FAILED", dataStatus: "NO_DATA", latency: Date.now() - startTime });
+    }
+    return res.json({ success: true, broker: "KIS", status: "AUTHENTICATED_READ_ONLY", dataStatus: "REALTIME_VERIFIED", latency: Date.now() - startTime, serverTime: new Date().toISOString(), automaticOrderSubmission: false });
+  } catch (error: any) {
+    return res.status(503).json({ success: false, broker: "KIS", status: "UNAVAILABLE", dataStatus: "NO_DATA", latency: Date.now() - startTime, error: String(error?.message || error) });
+  }
 });
 
 // ---------------------------------------------------------
