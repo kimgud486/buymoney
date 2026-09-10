@@ -13,7 +13,7 @@ export interface OrderSignal {
   signalType: SignalType;
   price: number;
   convictionScore: number;
-  timestamp: number; // Epoch ms
+  timestamp: number;
   scannerScore: number;
   unifiedShape: string;
   reason: string;
@@ -49,13 +49,13 @@ export class ExecutionStateMachine {
   private currentState: OrderState = "IDLE";
   private activePosition: PositionContext | null = null;
   private lastSignal: OrderSignal | null = null;
-  private mode: TradingMode = "DRY_RUN";
-  private liveTradingEnabled: boolean = false; // Dual-lock requirement for LIVE
+  private mode: TradingMode = "LIVE";
+  private liveTradingEnabled: boolean = false;
   private cooldownEndsAt: number | null = null;
   private lockReason: string | null = null;
   private listeners: Array<(status: StateMachineStatus) => void> = [];
 
-  constructor(initialMode: TradingMode = "DRY_RUN") {
+  constructor(initialMode: TradingMode = "LIVE") {
     this.mode = initialMode;
   }
 
@@ -85,12 +85,11 @@ export class ExecutionStateMachine {
     this.listeners.forEach(listener => listener(status));
   }
 
-  // Dual-lock setup for LIVE trading
   public setTradingMode(mode: TradingMode, enableLiveDualLock: boolean = false) {
     this.mode = mode;
-    this.liveTradingEnabled = enableLiveDualLock;
+    this.liveTradingEnabled = mode === "LIVE" && enableLiveDualLock;
     if (mode === "LIVE" && !enableLiveDualLock) {
-      console.warn("[v11 StateMachine] LIVE mode selected but liveTradingEnabled is false. Live trading remains locked.");
+      console.warn("[v11 StateMachine] LIVE mode selected but order authorization is locked.");
     }
     this.notify();
   }
@@ -99,13 +98,11 @@ export class ExecutionStateMachine {
     return this.mode === "LIVE" && this.liveTradingEnabled;
   }
 
-  // 1. Transition IDLE -> BUY_PENDING
   public transitionToBuyPending(signal: OrderSignal): { success: boolean; reason: string } {
     if (this.currentState !== "IDLE") {
       return { success: false, reason: `현재 상태가 IDLE이 아닙니다 (현재: ${this.currentState})` };
     }
 
-    // Check Signal Stale (max 10 seconds age)
     const ageSeconds = (Date.now() - signal.timestamp) / 1000;
     if (ageSeconds > 10) {
       return { success: false, reason: `시그널 지연 발생 (경과시간: ${ageSeconds.toFixed(1)}초 > 10초 초과)` };
@@ -117,7 +114,6 @@ export class ExecutionStateMachine {
     return { success: true, reason: "BUY_PENDING 상태로 승인되었습니다." };
   }
 
-  // 2. Transition BUY_PENDING -> LONG (Fill Confirmed)
   public confirmBuyFill(position: PositionContext): { success: boolean; reason: string } {
     if (this.currentState !== "BUY_PENDING") {
       return { success: false, reason: `현재 상태가 BUY_PENDING이 아닙니다 (현재: ${this.currentState})` };
@@ -129,7 +125,6 @@ export class ExecutionStateMachine {
     return { success: true, reason: "BUY 체결 확인 완료. LONG 포지션 진입." };
   }
 
-  // 3. Reject BUY_PENDING -> IDLE
   public rejectBuyPending(reason: string) {
     if (this.currentState === "BUY_PENDING") {
       this.currentState = "IDLE";
@@ -137,7 +132,6 @@ export class ExecutionStateMachine {
     }
   }
 
-  // 4. Transition LONG -> SELL_PENDING
   public transitionToSellPending(signal: OrderSignal): { success: boolean; reason: string } {
     if (this.currentState !== "LONG") {
       return { success: false, reason: `현재 상태가 LONG이 아닙니다 (현재: ${this.currentState})` };
@@ -154,7 +148,6 @@ export class ExecutionStateMachine {
     return { success: true, reason: "SELL_PENDING 상태로 승인되었습니다." };
   }
 
-  // 5. Transition SELL_PENDING -> COOLDOWN (Fill Confirmed)
   public confirmSellFill(cooldownMs: number = 30000): { success: boolean; reason: string } {
     if (this.currentState !== "SELL_PENDING") {
       return { success: false, reason: `현재 상태가 SELL_PENDING이 아닙니다 (현재: ${this.currentState})` };
@@ -165,7 +158,6 @@ export class ExecutionStateMachine {
     this.cooldownEndsAt = Date.now() + cooldownMs;
     this.notify();
 
-    // Auto clear cooldown
     setTimeout(() => {
       if (this.currentState === "COOLDOWN") {
         this.currentState = "IDLE";
@@ -177,7 +169,6 @@ export class ExecutionStateMachine {
     return { success: true, reason: "SELL 체결 확인 완료. COOLDOWN 진입." };
   }
 
-  // 6. Reject SELL_PENDING -> LONG
   public rejectSellPending(reason: string) {
     if (this.currentState === "SELL_PENDING") {
       this.currentState = "LONG";
@@ -185,14 +176,12 @@ export class ExecutionStateMachine {
     }
   }
 
-  // 7. Lock state (Emergency / Risk Limit Breach)
   public triggerLock(reason: string) {
     this.currentState = "LOCKED";
     this.lockReason = reason;
     this.notify();
   }
 
-  // 8. Unlock state manually / reset to IDLE
   public unlockAdmin() {
     this.currentState = "IDLE";
     this.lockReason = null;
@@ -205,14 +194,13 @@ export class ExecutionStateMachine {
     this.notify();
   }
 
-  // Update position price tick in real-time
   public updatePositionPrice(currentPrice: number) {
     if (this.currentState === "LONG" && this.activePosition) {
       const pos = this.activePosition;
       pos.currentPrice = currentPrice;
       if (currentPrice > pos.highPriceSinceBuy) {
         pos.highPriceSinceBuy = currentPrice;
-        pos.trailingExitPrice = Math.round(currentPrice * 0.985 * 100) / 100; // 1.5% trailing stop
+        pos.trailingExitPrice = Math.round(currentPrice * 0.985 * 100) / 100;
       }
       pos.unrealizedPnLAmt = (currentPrice - pos.buyPrice) * pos.qty;
       pos.unrealizedPnLPct = Math.round(((currentPrice - pos.buyPrice) / pos.buyPrice) * 1000) / 10;
@@ -221,4 +209,4 @@ export class ExecutionStateMachine {
   }
 }
 
-export const globalExecutionStateMachine = new ExecutionStateMachine("DRY_RUN");
+export const globalExecutionStateMachine = new ExecutionStateMachine("LIVE");
