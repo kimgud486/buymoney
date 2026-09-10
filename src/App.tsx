@@ -14,6 +14,7 @@ import RealtimeHubStatusStrip from "./components/trading/RealtimeHubStatusStrip"
 import OperationalTruthMonitorV20 from "./components/trading/OperationalTruthMonitorV20";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MainScreenKoreanText } from "./components/MainScreenKoreanText";
+import ElementaryScanExplanationPanel from "./components/ElementaryScanExplanationPanel";
 import { v11ExecutionEngine } from "./components/AistockV11ExecutionConsole";
 
 function MainLayout() {
@@ -61,6 +62,10 @@ function MainLayout() {
 
       <ErrorBoundary>
         <OperationalTruthMonitorV20 />
+      </ErrorBoundary>
+
+      <ErrorBoundary>
+        <ElementaryScanExplanationPanel />
       </ErrorBoundary>
 
       <ErrorBoundary>
