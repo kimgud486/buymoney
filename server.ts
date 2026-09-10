@@ -219,7 +219,7 @@ interface PresetStock {
   technical: {
     rsi: number;
     macd: string; // "Golden Cross" or "Dead Cross" or "Bullish Divergence" etc.
-    bollinger: 'upper' | 'middle' | 'lower';
+    bollinger: 'upper' | 'middle' | 'lower' | 'NO_DATA';
     trend: 'up' | 'down' | 'sideways';
   };
 }
