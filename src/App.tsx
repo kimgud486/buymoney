@@ -8,7 +8,6 @@ import { AppProvider } from "./context/AppContext";
 import { PricePulseProvider } from "./context/PricePulseContext";
 import { ToastContainer } from "./components/ToastContainer";
 import { RealtimeMarketStreamManager } from "./components/RealtimeMarketStreamManager";
-import { KISLiveRuntimeDashboard } from "./components/KISLiveRuntimeDashboard";
 import { RealtimeLongShortRadar } from "./components/RealtimeLongShortRadar";
 import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecuritiesConsensusModal";
 import { MasterAiAutoTradingDashboard } from "./components/trading/MasterAiAutoTradingDashboard";
@@ -142,10 +141,6 @@ function MainLayout() {
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans relative">
       <MainScreenKoreanText />
       <RealtimeMarketStreamManager />
-
-      <ErrorBoundary>
-        <KISLiveRuntimeDashboard />
-      </ErrorBoundary>
 
       <ErrorBoundary>
         <BuyHoldSystemStatusPanel />
