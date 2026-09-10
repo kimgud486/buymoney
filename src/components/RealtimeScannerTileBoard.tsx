@@ -104,7 +104,7 @@ type EntryDialogState = {
 };
 
 const BATCH_SIZE = 2;
-const FAST_PATTERN_REFRESH_MS = 1500;
+const FAST_PATTERN_REFRESH_MS = 1000;
 const FAST_PATTERN_BATCH_SIZE = 3;
 
 const TIMEFRAMES: Array<{ key: TimeframeKey; api: string; role: string }> = [
@@ -614,7 +614,7 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
               <span className="text-[10px] font-bold text-rose-400">SHORT {shortCount}</span>
             </div>
             <div className="text-[10px] text-slate-400">
-              가격 틱 즉시 · 1/3/5분 패턴 약 1.5초 재평가 · 전체 7시간봉 60초 정밀검사 / 마지막 {lastScanAt}
+              가격 틱 즉시 · 스캔종목 1/3/5분 패턴 1초 재평가 · 전체 7시간봉 60초 정밀검사 / 마지막 {lastScanAt}
             </div>
           </div>
         </div>
