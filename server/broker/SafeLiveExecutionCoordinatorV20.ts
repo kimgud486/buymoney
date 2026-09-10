@@ -29,6 +29,13 @@ export interface SafeLiveExecutionResult {
   blockers: string[];
 }
 
+export interface LiveOrderRecoveryReportV20 {
+  scanned: number;
+  mappingsRestored: number;
+  fillsRefreshed: number;
+  failed: number;
+}
+
 export class SafeLiveExecutionCoordinatorV20 {
   private gateway: KISBrokerGatewayV121;
   private journal: PersistentOrderJournalV20;
@@ -112,6 +119,7 @@ export class SafeLiveExecutionCoordinatorV20 {
       this.journal.recordOrder({
         idempotencyKey: key,
         orderId: response.orderNo,
+        positionId,
         symbol: request.intent.symbol,
         market: request.intent.market === "KOREA" ? "KR" : "US",
         side: request.intent.side,
@@ -139,6 +147,42 @@ export class SafeLiveExecutionCoordinatorV20 {
     }
   }
 
+  /**
+   * Restart recovery is read/reconcile-only. It never submits a new order.
+   * Restores durable order->position mappings first, then optionally refreshes
+   * broker fill truth so missed websocket fills can catch the runtime up.
+   */
+  public async recoverOpenOrders(options: { refreshFills?: boolean } = {}): Promise<LiveOrderRecoveryReportV20> {
+    const recoverable = this.journal.getRecoverableOrders();
+    const report: LiveOrderRecoveryReportV20 = {
+      scanned: recoverable.length,
+      mappingsRestored: 0,
+      fillsRefreshed: 0,
+      failed: 0
+    };
+
+    for (const entry of recoverable) {
+      try {
+        const positionId = String(entry.positionId || "").trim();
+        if (!positionId) {
+          report.failed++;
+          continue;
+        }
+        brokerExecutionRuntimeBridgeV20.registerOrderToPosition(entry.orderId, positionId);
+        report.mappingsRestored++;
+
+        if (options.refreshFills) {
+          await this.refreshFill(entry.orderId);
+          report.fillsRefreshed++;
+        }
+      } catch (error) {
+        report.failed++;
+        console.error(`[SafeLiveExecutionCoordinatorV20] Recovery failed for ${entry.orderId}`, error);
+      }
+    }
+    return report;
+  }
+
   public async refreshFill(orderId: string): Promise<SafeLiveExecutionResult> {
     const entry = this.journal.getOrder(orderId);
     if (!entry) {
@@ -157,14 +201,11 @@ export class SafeLiveExecutionCoordinatorV20 {
       updatedAt: Date.now()
     });
 
-    // WebSocket execution notices are primary. Polling is the recovery path.
-    // If polling discovers fill quantity that has not yet reached the runtime,
-    // apply only the positive delta so duplicate broker/websocket delivery cannot
-    // double-count position quantity.
     const fillDelta = nextFilledQuantity - previousFilledQuantity;
     if (fillDelta > 0 && fill.filledAvgPrice > 0) {
-      const positionId = brokerExecutionRuntimeBridgeV20.getMappedPositionId(orderId);
+      const positionId = brokerExecutionRuntimeBridgeV20.getMappedPositionId(orderId) || entry.positionId;
       if (positionId) {
+        brokerExecutionRuntimeBridgeV20.registerOrderToPosition(orderId, positionId);
         livePositionRuntimeService.onBrokerExecutionNotice(positionId, {
           noticeId: `POLL:${orderId}:${nextFilledQuantity}`,
           symbol: entry.symbol,

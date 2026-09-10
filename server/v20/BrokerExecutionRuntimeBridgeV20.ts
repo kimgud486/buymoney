@@ -8,6 +8,7 @@ import { brokerExecutionTruthBusV20 } from "./BrokerExecutionTruthBusV20";
 import { ParsedExecutionNotice } from "./KISExecutionNoticeParserV20";
 import { brokerFillPerformanceRecorderV20 } from "./BrokerFillPerformanceRecorderV20";
 import { livePositionRuntimeService, BrokerExecutionNotice } from "../../src/trading/LivePositionRuntimeService";
+import { PersistentOrderJournalV20 } from "../../src/execution/PersistentOrderJournalV20";
 
 export class BrokerExecutionRuntimeBridgeV20 {
   private static instance: BrokerExecutionRuntimeBridgeV20;
@@ -36,8 +37,32 @@ export class BrokerExecutionRuntimeBridgeV20 {
     return this.orderToPositionMap.get(String(orderId || "").trim());
   }
 
+  /** Restore only non-terminal durable mappings. No order submission occurs here. */
+  public restoreMappingsFromJournal(journal: PersistentOrderJournalV20 = new PersistentOrderJournalV20()): number {
+    let restored = 0;
+    for (const entry of journal.getRecoverableOrders()) {
+      const positionId = String(entry.positionId || "").trim();
+      if (!positionId) continue;
+      this.registerOrderToPosition(entry.orderId, positionId);
+      restored++;
+    }
+    return restored;
+  }
+
   public startBridge(): void {
     if (this.unsubscribe) return;
+
+    // The server already starts this bridge during bootstrap. Rehydrate durable
+    // mappings before subscribing so the first post-restart fill cannot be lost.
+    try {
+      const restored = this.restoreMappingsFromJournal();
+      if (restored > 0) {
+        console.log(`[BrokerExecutionRuntimeBridgeV20] Restored ${restored} durable order mappings.`);
+      }
+    } catch (error) {
+      // Journal corruption is fail-closed in PersistentOrderJournalV20.
+      console.error("[BrokerExecutionRuntimeBridgeV20] Failed to restore durable mappings.", error);
+    }
 
     this.unsubscribe = brokerExecutionTruthBusV20.subscribe((notice: ParsedExecutionNotice) => {
       this.routeNoticeToRuntime(notice);
@@ -64,7 +89,6 @@ export class BrokerExecutionRuntimeBridgeV20 {
         (p) => String(p.symbol || "").trim().toUpperCase() === normalizedSymbol && p.state !== "CLOSED"
       );
 
-      // Fail closed on ambiguity. A symbol-only fallback is safe only when exactly one live position exists.
       if (candidates.length === 1) {
         positionId = candidates[0].positionId;
       } else if (candidates.length > 1) {
