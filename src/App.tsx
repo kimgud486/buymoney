@@ -12,7 +12,6 @@ import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecur
 import { MasterAiAutoTradingDashboard } from "./components/trading/MasterAiAutoTradingDashboard";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MainScreenKoreanText } from "./components/MainScreenKoreanText";
-import { ProductionTruthMonitor } from "./components/ProductionTruthMonitor";
 import { v11ExecutionEngine } from "./components/AistockV11ExecutionConsole";
 
 function MainLayout() {
@@ -28,40 +27,10 @@ function MainLayout() {
       // ignore
     }
 
-    // Production-only UI policy: refresh/re-entry always returns the execution
+    // Production-only policy: refresh/re-entry always returns the execution
     // console to LIVE mode. This selects LIVE but intentionally keeps the
     // independent dual-lock closed, so a page refresh never authorizes an order.
     v11ExecutionEngine.setTradingMode("LIVE", false);
-
-    // Production UI cleanup only. Execution/Risk Engine logic is intentionally
-    // untouched. Remove legacy test controls and the duplicated Risk Gate metrics
-    // card while keeping the upper Risk/Truth indicators and all safety checks.
-    const cleanupProductionUi = () => {
-      document.querySelectorAll("button").forEach((button) => {
-        const label = button.textContent?.replace(/\s+/g, " ").trim() ?? "";
-        if (label.includes("시세+테스트") || label.includes("시세 + 테스트")) {
-          button.remove();
-        }
-      });
-
-      document.querySelectorAll<HTMLElement>("div").forEach((element) => {
-        const label = element.textContent?.replace(/\s+/g, " ").trim() ?? "";
-        const isRiskMetricsCard =
-          label.includes("Risk Gate 지표 (Risk Engine)") &&
-          label.includes("오늘 거래 건수:") &&
-          label.includes("연속 손실 횟수:") &&
-          element.classList.contains("bg-zinc-50") &&
-          element.classList.contains("rounded-2xl");
-
-        if (isRiskMetricsCard) {
-          element.remove();
-        }
-      });
-    };
-
-    cleanupProductionUi();
-    const productionUiObserver = new MutationObserver(cleanupProductionUi);
-    productionUiObserver.observe(document.body, { childList: true, subtree: true });
 
     document.body.style.overflow = "";
     document.body.style.position = "";
@@ -75,7 +44,6 @@ function MainLayout() {
 
     window.addEventListener("open-consensus-modal", handleOpenConsensus);
     return () => {
-      productionUiObserver.disconnect();
       window.removeEventListener("open-consensus-modal", handleOpenConsensus);
     };
   }, []);
@@ -84,7 +52,6 @@ function MainLayout() {
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans relative">
       <MainScreenKoreanText />
       <RealtimeMarketStreamManager />
-      <ProductionTruthMonitor />
 
       <ErrorBoundary>
         <MasterAiAutoTradingDashboard
