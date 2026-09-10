@@ -3,12 +3,15 @@ import {
   BarChart3,
   ChevronDown,
   ChevronUp,
+  Clock3,
   Radio,
   RefreshCw,
   ShieldCheck,
   Star,
+  Target,
   TrendingDown,
   TrendingUp,
+  X,
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
 import { StockCandleChartModal } from "./StockCandleChartModal";
@@ -19,11 +22,36 @@ import {
   VerifiedSignalResult,
 } from "../scanner/verifiedSignalEngine";
 
+/**
+ * BuyMoney merged scanner
+ *
+ * Existing open-source chart stack is preserved. The project already uses
+ * TradingView Lightweight Charts (Apache-2.0) in the realtime chart layer.
+ * This board focuses on verified OHLCV -> indicator/pattern -> entry flow and
+ * opens the existing chart modal instead of creating a second chart system.
+ */
+
+export type ScanMarket = "KOREA" | "US" | "BTC";
+export type TradeDirection = "LONG" | "SHORT" | "WAIT";
+
+type TimeframeKey = "1m" | "3m" | "5m" | "15m" | "30m" | "60m" | "D";
+
+type TimeframeScan = {
+  timeframe: TimeframeKey;
+  label: string;
+  role: string;
+  score: number;
+  direction: VerifiedSignalResult["direction"];
+  pattern: string;
+  reasons: string[];
+  metrics: VerifiedSignalResult["metrics"];
+};
+
 export interface ScannedStockItem {
   id: string;
   symbol: string;
   name: string;
-  market: "KOREA" | "US" | "BTC";
+  market: ScanMarket;
   currentPrice: number;
   changePct: number;
   changeAmount?: number;
@@ -32,11 +60,14 @@ export interface ScannedStockItem {
   volumeText: string;
   tradeValueText: string;
   aiScore: number;
+  longScore: number;
+  shortScore: number;
   rvol: number;
   decision: ScannerDecision;
-  direction: VerifiedSignalResult["direction"];
+  direction: TradeDirection;
   signalLabel: string;
   entryZone: string;
+  entryLow: number;
   bestEntry: number;
   stopLoss: number;
   targetPrice: number;
@@ -48,6 +79,7 @@ export interface ScannedStockItem {
   scannedAt: string;
   isRealtimeLinked: boolean;
   verifiedBars: number;
+  timeframes: TimeframeScan[];
 }
 
 interface RealtimeScannerTileBoardProps {
@@ -58,7 +90,7 @@ interface RealtimeScannerTileBoardProps {
 type UniverseItem = {
   symbol: string;
   name: string;
-  market: "KOREA" | "BTC";
+  market: ScanMarket;
   price: number;
   changePct: number;
   changeAmount?: number;
@@ -66,100 +98,285 @@ type UniverseItem = {
   tradeValueText: string;
 };
 
-const MAX_VERIFY_COUNT = 30;
-const BATCH_SIZE = 6;
+type EntryStep = "WHY" | "CONFIRM" | "RECHECKING" | "WAIT" | "READY";
 
-function formatPrice(value: number, market: ScannedStockItem["market"]): string {
-  if (!Number.isFinite(value)) return "-";
+type EntryDialogState = {
+  item: ScannedStockItem;
+  direction: "LONG" | "SHORT";
+  step: EntryStep;
+  amount: string;
+  message?: string;
+};
+
+const MAX_VERIFY_COUNT = 36;
+const BATCH_SIZE = 4;
+
+const TIMEFRAMES: Array<{ key: TimeframeKey; api: string; role: string }> = [
+  { key: "1m", api: "1m", role: "진입 직전 움직임" },
+  { key: "3m", api: "3m", role: "빠른 방향 확인" },
+  { key: "5m", api: "5m", role: "매수·매도 타이밍" },
+  { key: "15m", api: "15m", role: "패턴 모양 확인" },
+  { key: "30m", api: "30m", role: "패턴 모양 확인" },
+  { key: "60m", api: "1H", role: "큰 방향 확인" },
+  { key: "D", api: "D", role: "하루 큰 추세" },
+];
+
+function formatPrice(value: number, market: ScanMarket): string {
+  if (!Number.isFinite(value) || value <= 0) return "-";
   if (market === "US") {
     return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
   }
   return `${Math.round(value).toLocaleString()}원`;
 }
 
-function signalLabelFrom(result: VerifiedSignalResult): string {
-  if (result.pattern !== "NONE") return result.pattern;
-  if (result.metrics.hhhl) return "HH/HL 상승 구조";
-  if (result.metrics.macdHist > 0) return "MACD 상승 확인";
-  return result.direction === "BULLISH" ? "상승 구조 검증" : "조건 검증 중";
+function formatPlainPrice(value: number, market: ScanMarket): string {
+  if (!Number.isFinite(value) || value <= 0) return "-";
+  if (market === "US") return `$${value.toFixed(2)}`;
+  return `${Math.round(value).toLocaleString()}원`;
 }
 
-async function fetchVerifiedCandidate(base: UniverseItem): Promise<ScannedStockItem | null> {
+function marketFromRaw(symbol: string, rawMarket: unknown): ScanMarket {
+  const market = String(rawMarket || "").toUpperCase();
+  if (symbol.startsWith("KRW-") || market === "BTC" || market === "UPBIT" || market === "CRYPTO") return "BTC";
+  if (market === "US" || market === "NASDAQ" || market === "NYSE" || market === "AMEX") return "US";
+  return "KOREA";
+}
+
+function patternLabel(pattern: string): string {
+  if (!pattern || pattern === "NONE") return "지표 모양 확인";
+  return pattern.replaceAll("_", " ");
+}
+
+function easyReason(reason: string): string {
+  const text = reason.toUpperCase();
+  if (text.includes("EMA")) return "짧은 평균선이 긴 평균선보다 위에 있어요.";
+  if (text.includes("VWAP")) return "가격이 중요한 평균 가격선 근처에서 힘을 확인했어요.";
+  if (text.includes("MACD")) return "가격의 움직이는 힘이 한쪽으로 모이고 있어요.";
+  if (text.includes("RSI")) return "가격 힘이 너무 뜨겁지도 약하지도 않은지 확인했어요.";
+  if (text.includes("RVOL") || text.includes("거래량")) return "평소보다 거래가 많이 들어오는지 확인했어요.";
+  if (text.includes("HH/HL") || text.includes("시장구조")) return "고점과 저점의 모양이 어느 방향인지 확인했어요.";
+  if (text.includes("패턴")) return "그래프에서 반복되는 가격 모양을 찾았어요.";
+  return reason;
+}
+
+function shortScoreFrom(result: VerifiedSignalResult): number {
+  const m = result.metrics;
+  let score = 0;
+  if (m.close < m.ema9 && m.ema9 < m.ema20 && m.ema20 < m.ema50) score += 22;
+  else if (m.close < m.ema20 && m.ema20 < m.ema50) score += 15;
+  if (m.close < m.vwap) score += 15;
+  if (m.macdHist < 0 && m.macd < m.macdSignal) score += 15;
+  if (m.rsi >= 26 && m.rsi <= 48) score += 10;
+  else if (m.rsi < 55) score += 5;
+  if (m.rvol >= 2) score += 15;
+  else if (m.rvol >= 1.5) score += 11;
+  else if (m.rvol >= 1.2) score += 6;
+  if (!m.hhhl) score += 8;
+  const bearishHits = result.patternHits.filter((hit) => hit.direction === "BEARISH");
+  score += Math.min(15, bearishHits.reduce((sum, hit) => sum + Math.max(2, hit.weight), 0));
+  return Math.min(100, Math.round(score));
+}
+
+function longScoreFrom(result: VerifiedSignalResult): number {
+  return Math.max(0, Math.min(100, Math.round(result.score)));
+}
+
+function chooseDirection(frames: TimeframeScan[]): { direction: TradeDirection; longScore: number; shortScore: number } {
+  if (!frames.length) return { direction: "WAIT", longScore: 0, shortScore: 0 };
+
+  const weights: Record<TimeframeKey, number> = {
+    "1m": 0.6,
+    "3m": 0.8,
+    "5m": 1.2,
+    "15m": 1.4,
+    "30m": 1.4,
+    "60m": 1.7,
+    D: 1.9,
+  };
+
+  let bullish = 0;
+  let bearish = 0;
+  let total = 0;
+
+  frames.forEach((frame) => {
+    const weight = weights[frame.timeframe];
+    total += weight;
+    if (frame.direction === "BULLISH") bullish += weight;
+    if (frame.direction === "BEARISH") bearish += weight;
+  });
+
+  const longFrameScore = total > 0 ? (bullish / total) * 100 : 0;
+  const shortFrameScore = total > 0 ? (bearish / total) * 100 : 0;
+  const avgSignalScore = frames.reduce((sum, frame) => sum + frame.score, 0) / frames.length;
+
+  const longScore = Math.round(longFrameScore * 0.6 + avgSignalScore * 0.4);
+  const shortSignalAvg = frames.reduce((sum, frame) => {
+    const proxy: VerifiedSignalResult = {
+      decision: "NO_BUY",
+      score: frame.score,
+      direction: frame.direction,
+      pattern: frame.pattern,
+      patternHits: [],
+      patternRegistry: {
+        registered: 0, evaluated: 0, matched: 0, bullishMatched: 0, bearishMatched: 0,
+        candleRegistered: 0, structureRegistered: 0, masterExecutableRegistered: 0, expansionRegistered: 0,
+        candleMatched: 0, structureMatched: 0, masterExecutableMatched: 0, expansionMatched: 0,
+      },
+      reasons: frame.reasons,
+      failedChecks: [],
+      metrics: frame.metrics,
+      entryLow: 0, entryHigh: 0, stopLoss: 0, target1: 0, target2: 0, riskReward: 0, evaluatedBars: 0,
+    };
+    return sum + shortScoreFrom(proxy);
+  }, 0) / frames.length;
+  const shortScore = Math.round(shortFrameScore * 0.6 + shortSignalAvg * 0.4);
+
+  const bigFrames = frames.filter((f) => f.timeframe === "D" || f.timeframe === "60m" || f.timeframe === "30m");
+  const bigBull = bigFrames.filter((f) => f.direction === "BULLISH").length;
+  const bigBear = bigFrames.filter((f) => f.direction === "BEARISH").length;
+
+  if (longScore >= 67 && longScore >= shortScore + 8 && bigBull >= Math.min(2, bigFrames.length)) {
+    return { direction: "LONG", longScore, shortScore };
+  }
+  if (shortScore >= 67 && shortScore >= longScore + 8 && bigBear >= Math.min(2, bigFrames.length)) {
+    return { direction: "SHORT", longScore, shortScore };
+  }
+  return { direction: "WAIT", longScore, shortScore };
+}
+
+async function fetchOneFrame(symbol: string, tf: typeof TIMEFRAMES[number]): Promise<{ payload: any; result: VerifiedSignalResult } | null> {
   try {
     const response = await fetch(
-      `/api/market/realtime-candles?symbol=${encodeURIComponent(base.symbol)}&timeframe=D&count=70`,
+      `/api/market/realtime-candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(tf.api)}&count=70`,
       { cache: "no-store" },
     );
-
     if (!response.ok) return null;
     const payload = await response.json();
     const candles = Array.isArray(payload?.candles) ? payload.candles : [];
     const result = evaluateVerifiedSignal(candles);
-
-    // Fail closed. Insufficient/invalid candle history never becomes a candidate.
-    if (!result || result.decision === "NO_BUY") return null;
-
-    const currentPrice = Number(payload?.currentPrice) > 0
-      ? Number(payload.currentPrice)
-      : base.price;
-
-    return {
-      id: `${base.market}_${base.symbol}`,
-      symbol: base.symbol,
-      name: payload?.name || base.name,
-      market: base.market,
-      currentPrice,
-      changePct: Number.isFinite(Number(payload?.changePct))
-        ? Number(payload.changePct)
-        : base.changePct,
-      changeAmount: base.changeAmount,
-      volumeText: base.volumeText,
-      tradeValueText: base.tradeValueText,
-      aiScore: result.score,
-      rvol: Number(result.metrics.rvol.toFixed(2)),
-      decision: result.decision,
-      direction: result.direction,
-      signalLabel: signalLabelFrom(result),
-      entryZone: `${Math.round(result.entryLow).toLocaleString()} ~ ${Math.round(result.entryHigh).toLocaleString()}`,
-      bestEntry: result.entryHigh,
-      stopLoss: result.stopLoss,
-      targetPrice: result.target1,
-      targetPrice2: result.target2,
-      riskReward: `1 : ${result.riskReward.toFixed(1)}`,
-      rationale: result.reasons.slice(0, 3).join(" · ") || "필수 기술 조건 검증 완료",
-      reasons: result.reasons,
-      failedChecks: result.failedChecks,
-      scannedAt: new Date().toLocaleTimeString("ko-KR", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      }),
-      isRealtimeLinked: true,
-      verifiedBars: result.evaluatedBars,
-    };
-  } catch (error) {
-    console.warn(`[VerifiedScanner] ${base.symbol} candle verification failed`, error);
+    return result ? { payload, result } : null;
+  } catch {
     return null;
   }
+}
+
+async function fetchVerifiedCandidate(base: UniverseItem): Promise<ScannedStockItem | null> {
+  const results = await Promise.all(TIMEFRAMES.map(async (tf) => {
+    const verified = await fetchOneFrame(base.symbol, tf);
+    if (!verified) return null;
+    const { result } = verified;
+    const shortScore = shortScoreFrom(result);
+    const frameScore = result.direction === "BEARISH" ? shortScore : longScoreFrom(result);
+    return {
+      timeframe: tf.key,
+      label: tf.key === "D" ? "일봉" : `${tf.key}봉`,
+      role: tf.role,
+      score: frameScore,
+      direction: result.direction,
+      pattern: result.pattern,
+      reasons: result.reasons,
+      metrics: result.metrics,
+      payload: verified.payload,
+      result,
+    };
+  }));
+
+  const valid = results.filter((item): item is NonNullable<typeof item> => item !== null);
+  if (!valid.length) return null;
+
+  const timeframes: TimeframeScan[] = valid.map(({ payload: _payload, result: _result, ...frame }) => frame);
+  const directionScores = chooseDirection(timeframes);
+  if (directionScores.direction === "WAIT" && Math.max(directionScores.longScore, directionScores.shortScore) < 62) return null;
+
+  const anchor = valid.find((v) => v.timeframe === "5m")
+    || valid.find((v) => v.timeframe === "15m")
+    || valid.find((v) => v.timeframe === "D")
+    || valid[0];
+
+  const anchorResult = anchor.result;
+  const payload = anchor.payload;
+  const currentPrice = Number(payload?.currentPrice) > 0 ? Number(payload.currentPrice) : base.price;
+  if (!(currentPrice > 0)) return null;
+
+  const atr = Math.max(anchorResult.metrics.atr, currentPrice * 0.008);
+  const direction = directionScores.direction;
+  const isShort = direction === "SHORT";
+  const entryLow = isShort ? currentPrice : Math.min(anchorResult.entryLow, currentPrice);
+  const entryHigh = isShort ? currentPrice + atr * 0.25 : Math.max(anchorResult.entryHigh, currentPrice);
+  const stopLoss = isShort ? currentPrice + atr * 1.2 : anchorResult.stopLoss;
+  const target1 = isShort ? Math.max(0, currentPrice - atr * 2) : anchorResult.target1;
+  const target2 = isShort ? Math.max(0, currentPrice - atr * 3) : anchorResult.target2;
+  const aiScore = direction === "SHORT" ? directionScores.shortScore : directionScores.longScore;
+  const mainPattern = timeframes
+    .filter((f) => f.pattern !== "NONE")
+    .sort((a, b) => b.score - a.score)[0];
+
+  const alignedFrames = timeframes.filter((f) =>
+    direction === "LONG" ? f.direction === "BULLISH" : direction === "SHORT" ? f.direction === "BEARISH" : false,
+  );
+
+  const directionText = direction === "LONG" ? "위로 가는 힘" : direction === "SHORT" ? "아래로 가는 힘" : "방향 대기";
+  const reasons = [
+    `${alignedFrames.length}개 시간봉에서 ${directionText}을 확인했어요.`,
+    ...(anchorResult.reasons || []).slice(0, 3).map(easyReason),
+  ];
+
+  return {
+    id: `${base.market}_${base.symbol}`,
+    symbol: base.symbol,
+    name: payload?.name || base.name,
+    market: base.market,
+    currentPrice,
+    changePct: Number.isFinite(Number(payload?.changePct)) ? Number(payload.changePct) : base.changePct,
+    changeAmount: base.changeAmount,
+    volumeText: base.volumeText,
+    tradeValueText: base.tradeValueText,
+    aiScore,
+    longScore: directionScores.longScore,
+    shortScore: directionScores.shortScore,
+    rvol: Number(anchorResult.metrics.rvol.toFixed(2)),
+    decision: direction === "LONG" && aiScore >= 82 ? "BUY_APPROVED" : "BUY_WATCH",
+    direction,
+    signalLabel: mainPattern ? `${mainPattern.label} ${patternLabel(mainPattern.pattern)}` : "여러 시간봉 지표 확인",
+    entryZone: `${formatPlainPrice(entryLow, base.market)} ~ ${formatPlainPrice(entryHigh, base.market)}`,
+    entryLow,
+    bestEntry: entryHigh,
+    stopLoss,
+    targetPrice: target1,
+    targetPrice2: target2,
+    riskReward: "1 : 2 이상 확인",
+    rationale: reasons.slice(0, 2).join(" · "),
+    reasons,
+    failedChecks: anchorResult.failedChecks,
+    scannedAt: new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+    isRealtimeLinked: true,
+    verifiedBars: anchorResult.evaluatedBars,
+    timeframes,
+  };
+}
+
+function canPlaceShort(item: ScannedStockItem): boolean {
+  // Upbit spot has no native short order. Analysis remains available.
+  return item.market !== "BTC";
 }
 
 export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> = ({
   onSelectStock,
   isWhiteTheme = false,
 }) => {
-  const { addWatchlist, addToast } = useApp();
+  const app = useApp() as any;
+  const { addToast, requestTradeConfirmation } = app;
 
   const [stocks, setStocks] = useState<ScannedStockItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [scanProgress, setScanProgress] = useState({ done: 0, total: 0 });
-  const [selectedMarketFilter, setSelectedMarketFilter] = useState<"ALL" | "KOREA" | "BTC">("ALL");
-  const [selectedDecisionFilter, setSelectedDecisionFilter] = useState<"ALL" | "BUY_APPROVED" | "BUY_WATCH">("ALL");
-  const [sortBy, setSortBy] = useState<"AI_SCORE" | "RVOL" | "CHANGE_PCT" | "PRICE">("AI_SCORE");
+  const [selectedMarketFilter, setSelectedMarketFilter] = useState<"ALL" | ScanMarket>("ALL");
   const [isAutoScanActive, setIsAutoScanActive] = useState(true);
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [viewMode, setViewMode] = useState<"TILES" | "LIST">("TILES");
-  const [lastScanAt, setLastScanAt] = useState<string>("-");
+  const [lastScanAt, setLastScanAt] = useState("-");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [activeChartModalStock, setActiveChartModalStock] = useState<{ symbol: string; name: string } | null>(null);
+  const [entryDialog, setEntryDialog] = useState<EntryDialogState | null>(null);
 
   const loadUniverse = useCallback(async (): Promise<UniverseItem[]> => {
     const map = new Map<string, UniverseItem>();
@@ -186,7 +403,7 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
         }
       }
     } catch (error) {
-      console.warn("[VerifiedScanner] small/mid universe failed", error);
+      console.warn("[MergedScanner] Korea universe load failed", error);
     }
 
     try {
@@ -195,41 +412,35 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
         const rows = await response.json();
         if (Array.isArray(rows)) {
           rows.forEach((s: any) => {
+            const symbol = String(s?.symbol || "");
             const price = Number(s?.price);
-            if (!s?.symbol || !(price > 0) || s.market === "US") return;
-            const symbol = String(s.symbol);
-            const market: "KOREA" | "BTC" =
-              s.market === "BTC" || s.market === "UPBIT" || symbol.startsWith("KRW-")
-                ? "BTC"
-                : "KOREA";
-            map.set(symbol, {
+            if (!symbol || !(price > 0)) return;
+            const market = marketFromRaw(symbol, s.market);
+            map.set(`${market}:${symbol}`, {
               symbol,
               name: s.name || symbol,
               market,
               price,
               changePct: Number(s.changePct) || 0,
               changeAmount: Number(s.change) || 0,
-              volumeText: String(s.volume || s.marketCap || "실시간"),
-              tradeValueText: String(s.marketCap || "실시간"),
+              volumeText: String(s.volume || "실시간"),
+              tradeValueText: String(s.marketCap || s.tradeValue || "실시간"),
             });
           });
         }
       }
     } catch (error) {
-      console.warn("[VerifiedScanner] /api/stocks failed", error);
+      console.warn("[MergedScanner] all-market universe load failed", error);
     }
 
-    // Verification cost is bounded. Raw percentage change is used only to decide
-    // what to VERIFY first, never to manufacture a signal or score.
     return Array.from(map.values())
-      .sort((a, b) => b.changePct - a.changePct)
+      .sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct))
       .slice(0, MAX_VERIFY_COUNT);
   }, []);
 
   const runVerifiedScan = useCallback(async () => {
     setIsLoading(true);
     setScanProgress({ done: 0, total: 0 });
-
     try {
       const universe = await loadUniverse();
       setScanProgress({ done: 0, total: universe.length });
@@ -242,11 +453,7 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
         setScanProgress({ done: Math.min(offset + batch.length, universe.length), total: universe.length });
       }
 
-      verified.sort((a, b) => {
-        if (a.decision !== b.decision) return a.decision === "BUY_APPROVED" ? -1 : 1;
-        return b.aiScore - a.aiScore;
-      });
-
+      verified.sort((a, b) => b.aiScore - a.aiScore);
       setStocks(verified);
       setLastScanAt(new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
     } finally {
@@ -254,9 +461,7 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
     }
   }, [loadUniverse]);
 
-  useEffect(() => {
-    runVerifiedScan();
-  }, [runVerifiedScan]);
+  useEffect(() => { runVerifiedScan(); }, [runVerifiedScan]);
 
   useEffect(() => {
     if (!isAutoScanActive) return;
@@ -264,8 +469,6 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
     return () => window.clearInterval(timer);
   }, [isAutoScanActive, runVerifiedScan]);
 
-  // Tick data may update display price, but it never recalculates the verified score.
-  // Scores are recalculated only from completed candle history during a verified scan.
   useEffect(() => {
     const unsubscribe = realtimeMarketFeedService.subscribe((quotesMap) => {
       if (!isAutoScanActive) return;
@@ -286,273 +489,285 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
     return unsubscribe;
   }, [isAutoScanActive]);
 
-  useEffect(() => {
-    if (!stocks.some((item) => item.flashState)) return;
-    const timer = window.setTimeout(() => {
-      setStocks((previous) => previous.map((item) => item.flashState ? { ...item, flashState: null } : item));
-    }, 500);
-    return () => window.clearTimeout(timer);
-  }, [stocks]);
-
-  const filteredStocks = useMemo(() => {
-    return stocks
-      .filter((item) => selectedMarketFilter === "ALL" || item.market === selectedMarketFilter)
-      .filter((item) => selectedDecisionFilter === "ALL" || item.decision === selectedDecisionFilter)
-      .sort((a, b) => {
-        if (sortBy === "RVOL") return b.rvol - a.rvol;
-        if (sortBy === "CHANGE_PCT") return b.changePct - a.changePct;
-        if (sortBy === "PRICE") return b.currentPrice - a.currentPrice;
-        return b.aiScore - a.aiScore;
-      });
-  }, [stocks, selectedMarketFilter, selectedDecisionFilter, sortBy]);
-
-  const approvedCount = stocks.filter((item) => item.decision === "BUY_APPROVED").length;
-  const watchCount = stocks.filter((item) => item.decision === "BUY_WATCH").length;
+  const filteredStocks = useMemo(
+    () => stocks.filter((item) => selectedMarketFilter === "ALL" || item.market === selectedMarketFilter),
+    [stocks, selectedMarketFilter],
+  );
 
   const openChart = (item: ScannedStockItem) => {
     if (onSelectStock) onSelectStock(item.symbol, item.market);
     else setActiveChartModalStock({ symbol: item.symbol, name: item.name });
   };
 
+  const addFavorite = async (item: ScannedStockItem) => {
+    const fn = app.addToWatchlist || app.addWatchlist;
+    if (typeof fn === "function") {
+      await fn({ symbol: item.symbol, name: item.name, market: item.market });
+      addToast?.({ type: "INFO", title: "관심종목 등록", message: `${item.name}을 관심종목에 넣었어요.` });
+    }
+  };
+
+  const startDirectionReview = (item: ScannedStockItem, direction: "LONG" | "SHORT") => {
+    setEntryDialog({ item, direction, step: "WHY", amount: "1000000" });
+  };
+
+  const recheckAndRequestOrder = async () => {
+    if (!entryDialog) return;
+    const { item, direction } = entryDialog;
+    const amount = Number(entryDialog.amount.replaceAll(",", ""));
+    if (!(amount > 0)) {
+      setEntryDialog({ ...entryDialog, step: "WAIT", message: "살 금액을 먼저 입력해 주세요." });
+      return;
+    }
+
+    if (direction === "SHORT" && !canPlaceShort(item)) {
+      setEntryDialog({ ...entryDialog, step: "WAIT", message: "업비트 현물은 SHORT 실제 주문을 바로 할 수 없어요. SHORT 분석만 보여드려요." });
+      return;
+    }
+
+    setEntryDialog({ ...entryDialog, step: "RECHECKING" });
+
+    const fresh = await fetchOneFrame(item.symbol, TIMEFRAMES.find((tf) => tf.key === "5m")!);
+    if (!fresh) {
+      setEntryDialog({ ...entryDialog, step: "WAIT", message: "지금 가격을 다시 확인하지 못했어요. 주문하지 않고 기다립니다." });
+      return;
+    }
+
+    const freshPrice = Number(fresh.payload?.currentPrice) || fresh.result.metrics.close;
+    const freshDirection = fresh.result.direction;
+    const longOk = direction === "LONG" && freshDirection === "BULLISH" && freshPrice >= item.entryLow && freshPrice <= item.bestEntry * 1.003;
+    const shortOk = direction === "SHORT" && freshDirection === "BEARISH" && freshPrice >= item.entryLow * 0.997 && freshPrice <= item.bestEntry;
+
+    if (!longOk && !shortOk) {
+      setEntryDialog({
+        ...entryDialog,
+        item: { ...item, currentPrice: freshPrice },
+        step: "WAIT",
+        message: "좋은 가격 자리에서 벗어났거나 방향이 달라졌어요. 쫓아가지 않고 기다립니다.",
+      });
+      return;
+    }
+
+    const qty = item.market === "BTC"
+      ? Number((amount / freshPrice).toFixed(8))
+      : Math.max(1, Math.floor(amount / freshPrice));
+
+    setEntryDialog({ ...entryDialog, item: { ...item, currentPrice: freshPrice }, step: "READY" });
+
+    if (typeof requestTradeConfirmation === "function") {
+      await requestTradeConfirmation({
+        symbol: item.symbol,
+        name: item.name,
+        market: item.market,
+        side: direction === "LONG" ? "BUY" : "SELL",
+        qty,
+        price: freshPrice,
+        strategyName: `Merged Scan ${direction}`,
+        aiRationale: `${item.signalLabel} · 멀티시간봉 ${item.aiScore}점 · 사용자가 ${direction} 진입 확인`,
+      });
+    }
+  };
+
+  const longCount = stocks.filter((s) => s.direction === "LONG").length;
+  const shortCount = stocks.filter((s) => s.direction === "SHORT").length;
+
   return (
-    <div className={`rounded-xl border transition-all ${
-      isWhiteTheme
-        ? "bg-white border-slate-200 text-slate-800 shadow-sm"
-        : "bg-[#091424] border-[#162942] text-slate-100 shadow-sm"
-    }`}>
-      <div className={`px-3 py-2 flex flex-wrap items-center justify-between gap-2 border-b ${
-        isWhiteTheme ? "border-slate-200 bg-slate-50/80" : "border-[#162942] bg-[#070f1c]/90"
-      }`}>
-        <div className="flex items-center gap-2.5">
-          <div className="p-1.5 bg-cyan-500/10 border border-cyan-500/30 rounded-lg text-cyan-400">
-            <Radio className="h-4 w-4 animate-pulse" />
-          </div>
+    <div className={`rounded-xl border transition-all ${isWhiteTheme ? "bg-white border-slate-200 text-slate-800" : "bg-[#091424] border-[#162942] text-slate-100"}`}>
+      <div className={`px-3 py-2 flex flex-wrap items-center justify-between gap-2 border-b ${isWhiteTheme ? "border-slate-200 bg-slate-50" : "border-[#162942] bg-[#070f1c]"}`}>
+        <div className="flex items-center gap-2">
+          <Radio className="h-4 w-4 text-cyan-400 animate-pulse" />
           <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className={`text-xs sm:text-sm font-black ${isWhiteTheme ? "text-slate-900" : "text-white"}`}>
-                검증형 AI 포착 종목
-              </h3>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-500 border border-emerald-500/30">
-                BUY {approvedCount}
-              </span>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-500 border border-amber-500/30">
-                WATCH {watchCount}
-              </span>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-black">AI 스캔 포착 리스트</h3>
+              <span className="text-[10px] font-bold text-emerald-400">LONG {longCount}</span>
+              <span className="text-[10px] font-bold text-rose-400">SHORT {shortCount}</span>
             </div>
-            <div className="text-[10px] text-slate-400 mt-0.5">
-              완료봉 기반 · NO BUY 숨김 · 마지막 검증 {lastScanAt}
-            </div>
+            <div className="text-[10px] text-slate-400">국내 · 미국 · 업비트 / 1·3·5·15·30·60분·일봉 / 마지막 {lastScanAt}</div>
           </div>
         </div>
 
-        <div className="flex items-center flex-wrap gap-1.5 text-xs">
-          <div className={`flex items-center p-0.5 rounded-lg border ${isWhiteTheme ? "bg-slate-200/70 border-slate-300" : "bg-slate-900 border-slate-700"}`}>
-            {(["TILES", "LIST"] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => setViewMode(mode)}
-                className={`px-2 py-0.5 rounded-md text-[11px] font-bold ${viewMode === mode ? "bg-cyan-600 text-white" : "text-slate-400"}`}
-              >
-                {mode === "TILES" ? "미니타일" : "슬림목록"}
-              </button>
-            ))}
-          </div>
-
-          <select value={selectedMarketFilter} onChange={(e) => setSelectedMarketFilter(e.target.value as any)} className="px-1.5 py-1 rounded-md text-[10px] border bg-transparent">
-            <option value="ALL">전체시장</option>
-            <option value="KOREA">국내</option>
-            <option value="BTC">업비트</option>
-          </select>
-
-          <select value={selectedDecisionFilter} onChange={(e) => setSelectedDecisionFilter(e.target.value as any)} className="px-1.5 py-1 rounded-md text-[10px] border bg-transparent">
-            <option value="ALL">BUY + WATCH</option>
-            <option value="BUY_APPROVED">BUY APPROVED</option>
-            <option value="BUY_WATCH">BUY WATCH</option>
-          </select>
-
-          <select value={sortBy} onChange={(e) => setSortBy(e.target.value as any)} className="px-1.5 py-1 rounded-md text-[10px] border bg-transparent">
-            <option value="AI_SCORE">검증점수순</option>
-            <option value="RVOL">RVOL순</option>
-            <option value="CHANGE_PCT">등락률순</option>
-            <option value="PRICE">가격순</option>
-          </select>
-
-          <button
-            type="button"
-            onClick={() => setIsAutoScanActive((value) => !value)}
-            className={`px-2 py-1 rounded-md text-[10px] font-bold border flex items-center gap-1 ${isAutoScanActive ? "text-emerald-400 border-emerald-500/40" : "text-slate-400 border-slate-600"}`}
-          >
-            <RefreshCw className={`h-3 w-3 ${isLoading ? "animate-spin" : ""}`} />
-            {isAutoScanActive ? "자동검증 ON" : "자동검증 OFF"}
+        <div className="flex items-center gap-1.5">
+          {(["ALL", "KOREA", "US", "BTC"] as const).map((market) => (
+            <button key={market} type="button" onClick={() => setSelectedMarketFilter(market)} className={`px-2 py-1 rounded text-[10px] font-bold ${selectedMarketFilter === market ? "bg-cyan-600 text-white" : "bg-slate-500/10 text-slate-400"}`}>
+              {market === "BTC" ? "UPBIT" : market}
+            </button>
+          ))}
+          <button type="button" onClick={() => setIsAutoScanActive((v) => !v)} className={`px-2 py-1 rounded text-[10px] font-bold ${isAutoScanActive ? "bg-emerald-500/15 text-emerald-400" : "bg-slate-500/10 text-slate-400"}`}>
+            {isAutoScanActive ? "자동스캔 ON" : "자동스캔 OFF"}
           </button>
-
-          <button type="button" onClick={runVerifiedScan} disabled={isLoading} className="px-2 py-1 rounded-md text-[10px] font-black bg-cyan-600 text-white disabled:opacity-50">
-            지금 스캔
+          <button type="button" onClick={runVerifiedScan} disabled={isLoading} className="p-1.5 rounded bg-cyan-500/10 text-cyan-400" title="지금 다시 스캔">
+            <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? "animate-spin" : ""}`} />
           </button>
-
-          <button type="button" onClick={() => setIsCollapsed((value) => !value)} className="p-1 rounded-md border border-slate-600">
-            {isCollapsed ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
+          <button type="button" onClick={() => setIsCollapsed((v) => !v)} className="p-1.5 text-slate-400">
+            {isCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
           </button>
         </div>
       </div>
 
       {!isCollapsed && (
-        <div className="p-2">
+        <div className="p-2.5">
           {isLoading && (
-            <div className="mb-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-2">
-              <div className="flex items-center justify-between text-[10px] text-cyan-400 font-bold">
-                <span>실제 캔들 검증 중</span>
-                <span>{scanProgress.done} / {scanProgress.total}</span>
-              </div>
-              <div className="mt-1 h-1.5 rounded-full bg-slate-800 overflow-hidden">
-                <div
-                  className="h-full bg-cyan-500 transition-all"
-                  style={{ width: `${scanProgress.total ? (scanProgress.done / scanProgress.total) * 100 : 0}%` }}
-                />
-              </div>
+            <div className="mb-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-[11px] text-cyan-400">
+              AI가 그래프 모양을 보고 있어요. {scanProgress.total ? `${scanProgress.done}/${scanProgress.total}` : "종목을 불러오는 중"}
             </div>
           )}
 
           {!isLoading && filteredStocks.length === 0 ? (
-            <div className="py-5 text-center text-xs text-slate-400">
-              현재 완료봉 기준으로 BUY/WATCH 조건을 통과한 종목이 없습니다.
-            </div>
-          ) : viewMode === "TILES" ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-2 max-h-[300px] overflow-y-auto">
+            <div className="py-8 text-center text-xs text-slate-400">지금 조건에 맞는 종목이 없어요. 억지로 추천하지 않습니다.</div>
+          ) : (
+            <div className="space-y-1.5 max-h-[430px] overflow-y-auto">
               {filteredStocks.map((item) => {
-                const isUp = item.changePct >= 0;
+                const expanded = expandedId === item.id;
+                const directionClass = item.direction === "LONG" ? "text-emerald-400" : item.direction === "SHORT" ? "text-rose-400" : "text-amber-400";
                 return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => openChart(item)}
-                    className={`text-left p-2.5 rounded-xl border transition ${
-                      item.decision === "BUY_APPROVED"
-                        ? "border-emerald-500/50 bg-emerald-500/5"
-                        : "border-amber-500/40 bg-amber-500/5"
-                    }`}
-                  >
-                    <div className="flex justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className={`text-xs font-black truncate ${isWhiteTheme ? "text-slate-900" : "text-white"}`}>{item.name}</div>
-                        <div className="text-[9px] text-slate-400 font-mono">{item.symbol} · {item.market}</div>
+                  <div key={item.id} className={`rounded-xl border ${expanded ? "border-cyan-500/40" : isWhiteTheme ? "border-slate-200" : "border-slate-700/50"}`}>
+                    <button type="button" onClick={() => setExpandedId(expanded ? null : item.id)} className="w-full p-2.5 text-left flex items-center justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-black text-xs truncate">{item.name}</span>
+                          <span className={`text-[10px] font-black ${directionClass}`}>{item.direction}</span>
+                          <span className="text-[10px] font-black text-cyan-400">AI {item.aiScore}</span>
+                        </div>
+                        <div className="mt-0.5 text-[10px] text-slate-400 truncate">📈 {item.signalLabel}</div>
                       </div>
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-black ${item.decision === "BUY_APPROVED" ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"}`}>
-                        {item.decision === "BUY_APPROVED" ? "BUY" : "WATCH"}
-                      </span>
-                    </div>
-
-                    <div className="mt-2 flex items-end justify-between">
-                      <div>
-                        <div className="text-[9px] text-slate-400">VERIFIED SCORE</div>
-                        <div className="text-2xl leading-none font-black text-cyan-400">{item.aiScore}</div>
+                      <div className="text-right shrink-0">
+                        <div className="font-mono text-xs font-black">{formatPrice(item.currentPrice, item.market)}</div>
+                        <div className={`text-[10px] font-bold ${item.changePct >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{item.changePct >= 0 ? "+" : ""}{item.changePct.toFixed(2)}%</div>
                       </div>
-                      <div className="text-right">
-                        <div className="font-mono font-black text-xs">{formatPrice(item.currentPrice, item.market)}</div>
-                        <div className={`text-[10px] font-bold ${isUp ? "text-emerald-400" : "text-rose-400"}`}>{isUp ? "+" : ""}{item.changePct.toFixed(2)}%</div>
+                      {expanded ? <ChevronUp className="h-4 w-4 text-cyan-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}
+                    </button>
+
+                    {expanded && (
+                      <div className={`border-t p-3 ${isWhiteTheme ? "border-slate-200 bg-slate-50/70" : "border-slate-700/40 bg-black/10"}`}>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <div className="rounded-lg bg-slate-500/10 p-2.5">
+                            <div className="text-xs font-black">🤖 왜 포착했나요?</div>
+                            <div className="mt-2 space-y-1 text-[11px]">
+                              {item.reasons.slice(0, 4).map((reason, index) => <div key={index}>✓ {reason}</div>)}
+                            </div>
+                          </div>
+                          <div className="rounded-lg bg-slate-500/10 p-2.5">
+                            <div className="text-xs font-black">🎯 AI가 보고 있는 가격</div>
+                            <div className="mt-2 grid grid-cols-2 gap-y-1 text-[11px]">
+                              <span className="text-slate-400">좋은 진입 자리</span><b>{item.entryZone}</b>
+                              <span className="text-slate-400">위험 기준</span><b className="text-rose-400">{formatPlainPrice(item.stopLoss, item.market)}</b>
+                              <span className="text-slate-400">1차 목표</span><b>{formatPlainPrice(item.targetPrice, item.market)}</b>
+                              <span className="text-slate-400">2차 목표</span><b>{formatPlainPrice(item.targetPrice2, item.market)}</b>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-2 rounded-lg border border-slate-500/20 overflow-hidden">
+                          <div className="px-2 py-1.5 text-[11px] font-black">📊 시간별 그래프 모양</div>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7">
+                            {TIMEFRAMES.map((tf) => {
+                              const frame = item.timeframes.find((f) => f.timeframe === tf.key);
+                              return (
+                                <div key={tf.key} className="border-t border-r border-slate-500/10 p-2 text-[10px]">
+                                  <div className="font-black">{tf.key === "D" ? "일봉" : tf.key}</div>
+                                  <div className={frame?.direction === "BULLISH" ? "text-emerald-400" : frame?.direction === "BEARISH" ? "text-rose-400" : "text-slate-400"}>
+                                    {frame?.direction === "BULLISH" ? "↗ 위쪽" : frame?.direction === "BEARISH" ? "↘ 아래쪽" : "- 대기"}
+                                  </div>
+                                  <div className="mt-0.5 truncate text-slate-400" title={frame ? patternLabel(frame.pattern) : "데이터 없음"}>{frame ? patternLabel(frame.pattern) : "데이터 없음"}</div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <button type="button" onClick={() => startDirectionReview(item, "LONG")} className="px-3 py-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-black">
+                            🟢 LONG 분석
+                          </button>
+                          <button type="button" onClick={() => startDirectionReview(item, "SHORT")} className="px-3 py-2 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-400 text-xs font-black">
+                            🔴 SHORT 분석
+                          </button>
+                          <button type="button" onClick={() => openChart(item)} className="px-3 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-black">
+                            <BarChart3 className="inline h-3.5 w-3.5 mr-1" />그래프 보기
+                          </button>
+                          <button type="button" onClick={() => addFavorite(item)} className="px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-black">
+                            <Star className="inline h-3.5 w-3.5 mr-1" />관심종목
+                          </button>
+                        </div>
                       </div>
-                    </div>
-
-                    <div className="mt-2 grid grid-cols-2 gap-1 text-[9px]">
-                      <span className="rounded bg-slate-500/10 px-1.5 py-1">RVOL <b>{item.rvol}x</b></span>
-                      <span className="rounded bg-slate-500/10 px-1.5 py-1">R:R <b>{item.riskReward}</b></span>
-                    </div>
-
-                    <div className="mt-2 text-[9px] text-slate-400 line-clamp-2">{item.rationale}</div>
-                    <div className="mt-2 text-[9px] font-mono">
-                      <span className="text-emerald-400">TP {Math.round(item.targetPrice).toLocaleString()}</span>
-                      <span className="text-slate-500 mx-1">/</span>
-                      <span className="text-rose-400">SL {Math.round(item.stopLoss).toLocaleString()}</span>
-                    </div>
-                  </button>
+                    )}
+                  </div>
                 );
               })}
-            </div>
-          ) : (
-            <div className="overflow-x-auto max-h-[300px] overflow-y-auto">
-              <table className="w-full text-left text-[10px]">
-                <thead className={isWhiteTheme ? "bg-slate-100" : "bg-[#0c1a2d]"}>
-                  <tr>
-                    <th className="p-2">종목</th>
-                    <th className="p-2">판정</th>
-                    <th className="p-2 text-right">검증점수</th>
-                    <th className="p-2 text-right">현재가</th>
-                    <th className="p-2 text-right">RVOL</th>
-                    <th className="p-2">근거</th>
-                    <th className="p-2 text-center">관리</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredStocks.map((item) => (
-                    <tr key={item.id} className="border-t border-slate-700/20 hover:bg-cyan-500/5">
-                      <td className="p-2 cursor-pointer" onClick={() => openChart(item)}>
-                        <div className="font-black">{item.name}</div>
-                        <div className="text-slate-400 font-mono">{item.symbol}</div>
-                      </td>
-                      <td className="p-2">
-                        <span className={item.decision === "BUY_APPROVED" ? "text-emerald-400 font-black" : "text-amber-400 font-black"}>
-                          {item.decision}
-                        </span>
-                      </td>
-                      <td className="p-2 text-right text-cyan-400 font-black">{item.aiScore}</td>
-                      <td className="p-2 text-right font-mono">
-                        <div>{formatPrice(item.currentPrice, item.market)}</div>
-                        <div className={item.changePct >= 0 ? "text-emerald-400" : "text-rose-400"}>
-                          {item.changePct >= 0 ? <TrendingUp className="inline h-3 w-3" /> : <TrendingDown className="inline h-3 w-3" />} {item.changePct.toFixed(2)}%
-                        </div>
-                      </td>
-                      <td className="p-2 text-right text-amber-400 font-bold">{item.rvol}x</td>
-                      <td className="p-2 max-w-[340px]">
-                        <div className="font-bold">{item.signalLabel}</div>
-                        <div className="text-slate-400 truncate">{item.rationale}</div>
-                      </td>
-                      <td className="p-2">
-                        <div className="flex items-center justify-center gap-1">
-                          <button type="button" onClick={() => openChart(item)} className="px-1.5 py-1 rounded border border-cyan-500/30 text-cyan-400" title="상세 차트">
-                            <BarChart3 className="h-3 w-3" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              addWatchlist({
-                                id: `wl_${Date.now()}`,
-                                symbol: item.symbol,
-                                name: item.name,
-                                market: item.market,
-                                addedAt: new Date().toISOString(),
-                              });
-                              addToast({
-                                type: "INFO",
-                                title: "관심종목 등록",
-                                message: `${item.name} (${item.symbol})이 관심종목에 추가되었습니다.`,
-                              });
-                            }}
-                            className="px-1.5 py-1 rounded border border-amber-500/30 text-amber-400"
-                            title="관심종목 추가"
-                          >
-                            <Star className="h-3 w-3" />
-                          </button>
-                          <span className="px-1.5 py-1 rounded border border-emerald-500/20 text-emerald-400" title="자동주문 없음">
-                            <ShieldCheck className="h-3 w-3" />
-                          </span>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
           )}
         </div>
       )}
 
+      {entryDialog && (
+        <div className="fixed inset-0 z-[120] bg-black/65 flex items-center justify-center p-4" onMouseDown={() => setEntryDialog(null)}>
+          <div className={`w-full max-w-md rounded-2xl border p-4 shadow-2xl ${isWhiteTheme ? "bg-white border-slate-200 text-slate-900" : "bg-[#081525] border-slate-700 text-white"}`} onMouseDown={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-black">{entryDialog.direction === "LONG" ? "🟢 LONG" : "🔴 SHORT"} · {entryDialog.item.name}</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">현재가 {formatPrice(entryDialog.item.currentPrice, entryDialog.item.market)}</div>
+              </div>
+              <button type="button" onClick={() => setEntryDialog(null)} className="p-1 text-slate-400"><X className="h-4 w-4" /></button>
+            </div>
+
+            {entryDialog.step === "WHY" && (
+              <>
+                <div className="mt-4 rounded-xl bg-slate-500/10 p-3">
+                  <div className="font-black text-sm">왜 {entryDialog.direction}을 살펴보나요?</div>
+                  <div className="mt-2 space-y-1.5 text-xs">
+                    {entryDialog.item.reasons.slice(0, 4).map((reason, index) => <div key={index}>✓ {reason}</div>)}
+                    <div>✓ 그래프 한 개만 보지 않고 여러 시간봉을 함께 봤어요.</div>
+                  </div>
+                </div>
+                <div className="mt-3 text-[11px] text-slate-400">이 버튼은 아직 주문하지 않습니다. 설명을 읽고 다음 버튼을 눌러야 진입 확인 단계로 갑니다.</div>
+                <button type="button" onClick={() => setEntryDialog({ ...entryDialog, step: "CONFIRM" })} className={`mt-4 w-full py-3 rounded-xl font-black text-sm ${entryDialog.direction === "LONG" ? "bg-emerald-600 text-white" : "bg-rose-600 text-white"}`}>
+                  {entryDialog.direction} 진입 살펴보기
+                </button>
+              </>
+            )}
+
+            {entryDialog.step === "CONFIRM" && (
+              <>
+                <div className="mt-4 text-center text-lg font-black">{entryDialog.direction} 진입하시겠습니까?</div>
+                <div className="mt-3 rounded-xl bg-slate-500/10 p-3 grid grid-cols-2 gap-y-2 text-xs">
+                  <span className="text-slate-400">AI 진입구간</span><b>{entryDialog.item.entryZone}</b>
+                  <span className="text-slate-400">위험 기준</span><b className="text-rose-400">{formatPlainPrice(entryDialog.item.stopLoss, entryDialog.item.market)}</b>
+                  <span className="text-slate-400">1차 목표</span><b>{formatPlainPrice(entryDialog.item.targetPrice, entryDialog.item.market)}</b>
+                  <span className="text-slate-400">2차 목표</span><b>{formatPlainPrice(entryDialog.item.targetPrice2, entryDialog.item.market)}</b>
+                </div>
+                <label className="block mt-3 text-xs font-bold">거래할 금액</label>
+                <input value={entryDialog.amount} onChange={(e) => setEntryDialog({ ...entryDialog, amount: e.target.value.replace(/[^0-9.]/g, "") })} inputMode="decimal" className={`mt-1 w-full rounded-lg border px-3 py-2 text-sm font-mono ${isWhiteTheme ? "bg-white border-slate-300" : "bg-slate-950 border-slate-700"}`} />
+                <div className="mt-2 text-[11px] text-slate-400">확인을 눌러도 옛 가격으로 바로 주문하지 않아요. 5분봉과 현재가격을 다시 확인하고 좋은 자리일 때만 기존 주문 확인창으로 넘깁니다.</div>
+                {entryDialog.direction === "SHORT" && entryDialog.item.market === "BTC" && <div className="mt-2 text-[11px] text-amber-400">업비트 현물은 SHORT 분석은 가능하지만 실제 SHORT 주문은 지원 상품이 따로 필요해요.</div>}
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => setEntryDialog(null)} className="py-2.5 rounded-xl bg-slate-500/10 font-bold">취소</button>
+                  <button type="button" onClick={recheckAndRequestOrder} className={`py-2.5 rounded-xl font-black text-white ${entryDialog.direction === "LONG" ? "bg-emerald-600" : "bg-rose-600"}`}>✅ 확인</button>
+                </div>
+              </>
+            )}
+
+            {entryDialog.step === "RECHECKING" && (
+              <div className="py-10 text-center">
+                <RefreshCw className="h-7 w-7 mx-auto animate-spin text-cyan-400" />
+                <div className="mt-3 font-black">지금 가격을 다시 보고 있어요</div>
+                <div className="mt-1 text-xs text-slate-400">가격을 쫓아가서 사지 않도록 마지막으로 확인합니다.</div>
+              </div>
+            )}
+
+            {(entryDialog.step === "WAIT" || entryDialog.step === "READY") && (
+              <div className="py-6 text-center">
+                {entryDialog.step === "WAIT" ? <Clock3 className="h-8 w-8 mx-auto text-amber-400" /> : <ShieldCheck className="h-8 w-8 mx-auto text-emerald-400" />}
+                <div className="mt-3 font-black">{entryDialog.step === "WAIT" ? "🟡 지금은 기다려요" : "🟢 조건 확인 완료"}</div>
+                <div className="mt-2 text-xs text-slate-400">{entryDialog.message || "기존 BuyMoney 주문 안전 확인 단계로 넘겼어요."}</div>
+                <button type="button" onClick={() => setEntryDialog(null)} className="mt-4 px-5 py-2 rounded-lg bg-slate-500/10 text-xs font-bold">닫기</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {activeChartModalStock && (
-        <StockCandleChartModal
-          symbol={activeChartModalStock.symbol}
-          name={activeChartModalStock.name}
-          onClose={() => setActiveChartModalStock(null)}
-        />
+        <StockCandleChartModal symbol={activeChartModalStock.symbol} name={activeChartModalStock.name} onClose={() => setActiveChartModalStock(null)} />
       )}
     </div>
   );

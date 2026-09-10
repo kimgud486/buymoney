@@ -29,8 +29,9 @@ const requiredFiles = [
   "server/v20/FinalBuyHoldDecisionServiceV20.ts",
   "server/v20/FinalBuyHoldHttpHandlerV20.ts",
   "src/scanner/patternExecutionAudit.ts",
-  "src/components/BuyHoldSystemStatusPanel.tsx",
   "src/components/VerifiedAiOpportunityScanner.tsx",
+  "src/components/RealtimeScannerTileBoard.tsx",
+  "src/components/trading/MasterAiAutoTradingDashboard.tsx",
   "src/components/VerifiedIntradaySignalPanel.tsx",
   "src/services/KISRealtimeFieldSchema.ts",
   "src/trading/PositionStateMachine.ts",
@@ -119,9 +120,17 @@ if (scannerUi.includes("evaluateVerifiedSignal(")) errors.push("VerifiedAiOpport
 if (scannerUi.includes('verified && score >= 76 ? "BUY"')) errors.push("Browser must never promote PRECHECK score directly to BUY");
 if (!scannerUi.includes("PRECHECK는 후보 압축만 합니다")) errors.push("UI must visibly distinguish PRECHECK from FINAL BUY authority");
 
-const appContent = read("src/App.tsx");
-if (!appContent.includes("<BuyHoldSystemStatusPanel")) errors.push("App must keep BUY/HOLD system status UI");
-if (!appContent.includes("<VerifiedIntradaySignalPanel")) errors.push("Latest main intraday signal panel must survive final integration");
+const dashboardContent = read("src/components/trading/MasterAiAutoTradingDashboard.tsx");
+if (!dashboardContent.includes("<RealtimeScannerTileBoard")) errors.push("Main dashboard must keep the merged realtime scanner UI");
+if (!dashboardContent.includes("<RealTimeTradingViewChart")) errors.push("Main dashboard must keep the live intraday chart panel");
+if (!dashboardContent.includes("<SafeAiAutotradeLauncher")) errors.push("Main dashboard must keep the explicit Safe AI review launcher path");
+
+const mergedScanner = read("src/components/RealtimeScannerTileBoard.tsx");
+for (const token of ["KOREA", "US", "BTC", "1m", "3m", "5m", "15m", "30m", "60m", "LONG", "SHORT", "requestTradeConfirmation"]) {
+  if (!mergedScanner.includes(token)) errors.push(`Merged scanner missing required integration marker: ${token}`);
+}
+if (mergedScanner.includes("Math.random(")) errors.push("Merged scanner must not fabricate scores with Math.random");
+if (!mergedScanner.includes("/api/market/realtime-candles")) errors.push("Merged scanner must use realtime candle verification");
 
 const finalHttp = read("server/v20/FinalBuyHoldHttpHandlerV20.ts");
 if (!finalHttp.includes("FinalBuyHoldDecisionServiceV20.evaluate")) errors.push("Final HTTP handler must delegate to FinalBuyHoldDecisionServiceV20");
