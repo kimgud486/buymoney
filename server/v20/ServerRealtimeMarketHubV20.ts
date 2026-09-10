@@ -6,6 +6,7 @@
 import { DataGradeV20 } from "./KISOverseasParserV20";
 import { Candle } from "../../src/services/StructureBrain";
 import { UnifiedPatternSignalEngineV20, UnifiedPatternSignalResultV20 } from "./UnifiedPatternSignalEngineV20";
+import { publishServerQuoteToScannerV20 } from "./ServerRealtimeFeedBridgeV20";
 
 export interface ServerMarketQuoteV20 {
   symbol: string;
@@ -78,6 +79,7 @@ export class ServerRealtimeMarketHubV20 {
     };
 
     this.quotes.set(key, quote);
+    publishServerQuoteToScannerV20(quote);
 
     // Truth-first volume rule:
     // `volume` is cumulative/session volume. Never add it to every 1m candle tick.
@@ -252,9 +254,7 @@ export class ServerRealtimeMarketHubV20 {
           close: price,
           volume
         });
-        if (candles.length > 500) {
-          candles.shift();
-        }
+        if (candles.length > 500) candles.shift();
       }
     }
 
