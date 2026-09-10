@@ -11,6 +11,7 @@ import { RealtimeMarketStreamManager } from "./components/RealtimeMarketStreamMa
 import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecuritiesConsensusModal";
 import { MasterAiAutoTradingDashboard } from "./components/trading/MasterAiAutoTradingDashboard";
 import RealtimeHubStatusStrip from "./components/trading/RealtimeHubStatusStrip";
+import OperationsStatusMonitor from "./components/trading/OperationsStatusMonitor";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MainScreenKoreanText } from "./components/MainScreenKoreanText";
 
@@ -50,6 +51,10 @@ function MainLayout() {
 
       <ErrorBoundary>
         <RealtimeHubStatusStrip />
+      </ErrorBoundary>
+
+      <ErrorBoundary>
+        <OperationsStatusMonitor />
       </ErrorBoundary>
 
       <ErrorBoundary>
