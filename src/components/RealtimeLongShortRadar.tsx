@@ -28,12 +28,30 @@ interface RadarSignal extends LongShortSignal {
   detectedAt: number;
 }
 
+type AnalysisStatus = "SIGNAL" | "WAIT" | "INSUFFICIENT_BARS" | "NO_DATA" | "API_ERROR" | "NO_PLAN";
+
+type AnalysisResult = {
+  status: AnalysisStatus;
+  signal: RadarSignal | null;
+};
+
+type Diagnostics = Record<AnalysisStatus, number>;
+
 const INITIAL_CONCURRENCY = 6;
 const TICK_RECHECK_COOLDOWN_MS = 45_000;
 const MIN_TICK_ACTIVITY_PCT = 0.25;
 const MAX_VISIBLE_HISTORY = 12;
 const LIVE_TIMEFRAME = "5m" as const;
 const LIVE_CANDLE_COUNT = 90;
+
+const EMPTY_DIAGNOSTICS: Diagnostics = {
+  SIGNAL: 0,
+  WAIT: 0,
+  INSUFFICIENT_BARS: 0,
+  NO_DATA: 0,
+  API_ERROR: 0,
+  NO_PLAN: 0,
+};
 
 function num(value: unknown): number {
   const n = Number(value);
@@ -55,7 +73,8 @@ async function fetchFullStockUniverse(): Promise<UniverseItem[]> {
       const rows = Array.isArray(json?.data) ? json.data : [];
       for (const row of rows) {
         const symbol = String(row?.symbol || "").trim();
-        if (!symbol || num(row?.price) <= 0) continue;
+        // Universe membership must not depend on whether a quote has arrived yet.
+        if (!symbol) continue;
         merged.set(symbol, {
           symbol,
           name: String(row?.name || row?.realStockName || symbol),
@@ -75,7 +94,7 @@ async function fetchFullStockUniverse(): Promise<UniverseItem[]> {
         for (const row of rows) {
           const symbol = String(row?.symbol || "").trim();
           const marketRaw = String(row?.market || "KOREA").toUpperCase();
-          if (!symbol || num(row?.price) <= 0 || symbol.startsWith("KRW-") || marketRaw === "BTC") continue;
+          if (!symbol || symbol.startsWith("KRW-") || marketRaw === "BTC") continue;
           merged.set(symbol, {
             symbol,
             name: String(row?.name || symbol),
@@ -91,25 +110,44 @@ async function fetchFullStockUniverse(): Promise<UniverseItem[]> {
   return Array.from(merged.values());
 }
 
-async function analyzeSymbol(item: UniverseItem): Promise<RadarSignal | null> {
-  const response = await fetch(
-    `/api/market/realtime-candles?symbol=${encodeURIComponent(item.symbol)}&timeframe=${LIVE_TIMEFRAME}&count=${LIVE_CANDLE_COUNT}`,
-    { cache: "no-store" },
-  );
-  if (!response.ok) return null;
-  const json = await response.json();
-  if (!Array.isArray(json?.candles) || json.candles.length < 56) return null;
+async function analyzeSymbol(item: UniverseItem): Promise<AnalysisResult> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `/api/market/realtime-candles?symbol=${encodeURIComponent(item.symbol)}&timeframe=${LIVE_TIMEFRAME}&count=${LIVE_CANDLE_COUNT}`,
+      { cache: "no-store" },
+    );
+  } catch {
+    return { status: "API_ERROR", signal: null };
+  }
+
+  if (!response.ok) return { status: "API_ERROR", signal: null };
+
+  let json: any;
+  try {
+    json = await response.json();
+  } catch {
+    return { status: "NO_DATA", signal: null };
+  }
+
+  if (!Array.isArray(json?.candles)) return { status: "NO_DATA", signal: null };
+  if (json.candles.length < 56) return { status: "INSUFFICIENT_BARS", signal: null };
 
   const signal = evaluateLongShortSignal(json.candles);
-  if (!signal || signal.direction === "WAIT" || signal.plan.source !== "ATR_VWAP_VERIFIED") return null;
+  if (!signal) return { status: "NO_DATA", signal: null };
+  if (signal.direction === "WAIT") return { status: "WAIT", signal: null };
+  if (signal.plan.source !== "ATR_VWAP_VERIFIED") return { status: "NO_PLAN", signal: null };
 
   return {
-    ...signal,
-    symbol: item.symbol,
-    name: String(json?.name || item.name || item.symbol),
-    market: item.market,
-    timeframe: LIVE_TIMEFRAME,
-    detectedAt: Date.now(),
+    status: "SIGNAL",
+    signal: {
+      ...signal,
+      symbol: item.symbol,
+      name: String(json?.name || item.name || item.symbol),
+      market: item.market,
+      timeframe: LIVE_TIMEFRAME,
+      detectedAt: Date.now(),
+    },
   };
 }
 
@@ -123,6 +161,7 @@ export const RealtimeLongShortRadar: React.FC = () => {
   const [history, setHistory] = useState<RadarSignal[]>([]);
   const [scanned, setScanned] = useState(0);
   const [universeSize, setUniverseSize] = useState(0);
+  const [diagnostics, setDiagnostics] = useState<Diagnostics>(EMPTY_DIAGNOSTICS);
   const [running, setRunning] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const audioRef = useRef<AudioContext | null>(null);
@@ -174,24 +213,26 @@ export const RealtimeLongShortRadar: React.FC = () => {
         .slice(0, MAX_VISIBLE_HISTORY);
     });
     playDing(signal.direction);
-
     window.dispatchEvent(new CustomEvent("ai-long-short-signal", { detail: signal }));
   }, [playDing]);
 
-  const inspect = useCallback(async (item: UniverseItem) => {
+  const inspect = useCallback(async (item: UniverseItem, countDiagnostic = true) => {
     if (!running || inFlightRef.current.has(item.symbol)) return;
     inFlightRef.current.add(item.symbol);
     try {
-      const signal = await analyzeSymbol(item);
-      if (signal) publish(signal);
+      const result = await analyzeSymbol(item);
+      if (countDiagnostic) {
+        setDiagnostics((previous) => ({ ...previous, [result.status]: previous[result.status] + 1 }));
+      }
+      if (result.signal) publish(result.signal);
     } catch (error) {
+      if (countDiagnostic) setDiagnostics((previous) => ({ ...previous, API_ERROR: previous.API_ERROR + 1 }));
       console.warn(`[LongShortRadar] analysis failed ${item.symbol}`, error);
     } finally {
       inFlightRef.current.delete(item.symbol);
     }
   }, [publish, running]);
 
-  // Initial full-universe sweep. It is intentionally batched, not truncated to a small shortlist.
   useEffect(() => {
     if (!running) return;
     let cancelled = false;
@@ -202,10 +243,11 @@ export const RealtimeLongShortRadar: React.FC = () => {
       setUniverseSize(universe.length);
       universeRef.current = new Map(universe.map((item) => [item.symbol, item]));
       setScanned(0);
+      setDiagnostics({ ...EMPTY_DIAGNOSTICS });
 
       for (let i = 0; i < universe.length && !cancelled; i += INITIAL_CONCURRENCY) {
         const batch = universe.slice(i, i + INITIAL_CONCURRENCY);
-        await Promise.allSettled(batch.map((item) => inspect(item)));
+        await Promise.allSettled(batch.map((item) => inspect(item, true)));
         if (!cancelled) setScanned(Math.min(i + batch.length, universe.length));
       }
     };
@@ -216,7 +258,6 @@ export const RealtimeLongShortRadar: React.FC = () => {
     };
   }, [inspect, running]);
 
-  // After the sweep, KIS/market ticks become the trigger. Each symbol is rate-limited.
   useEffect(() => {
     if (!running) return undefined;
     return realtimeMarketStreamManager.subscribeTick((tick: NormalizedMarketTick) => {
@@ -232,7 +273,7 @@ export const RealtimeLongShortRadar: React.FC = () => {
         name: tick.name || tick.symbol,
         market: String(tick.market).toUpperCase() === "US" ? "US" : "KOREA",
       };
-      void inspect(item);
+      void inspect(item, false);
     });
   }, [inspect, running]);
 
@@ -242,6 +283,14 @@ export const RealtimeLongShortRadar: React.FC = () => {
 
   const progress = universeSize > 0 ? Math.round((scanned / universeSize) * 100) : 0;
   const strongest = useMemo(() => history.slice(0, 5), [history]);
+  const zeroMatchReason = useMemo(() => {
+    if (universeSize === 0) return "NO_UNIVERSE";
+    if (scanned < universeSize) return "SCANNING";
+    if (diagnostics.SIGNAL > 0) return "SIGNAL_FOUND";
+    if (diagnostics.API_ERROR > 0 && diagnostics.API_ERROR === scanned) return "API_ERROR";
+    if (diagnostics.INSUFFICIENT_BARS > 0 && diagnostics.INSUFFICIENT_BARS === scanned) return "INSUFFICIENT_BARS";
+    return "ZERO_MATCH";
+  }, [diagnostics, scanned, universeSize]);
 
   return (
     <>
@@ -252,10 +301,10 @@ export const RealtimeLongShortRadar: React.FC = () => {
             LONG / SHORT AI RADAR
           </span>
           <span className="text-slate-400">
-            전체 종목 {universeSize || "-"} · 초기대조 {scanned}/{universeSize || "-"} ({progress}%)
+            전체 {universeSize || 0} · 분석 {scanned}/{universeSize || 0} ({progress}%)
           </span>
           <span className="rounded-md bg-indigo-400/10 px-2 py-0.5 font-black text-indigo-300">LIVE {LIVE_TIMEFRAME}</span>
-          <span className="text-slate-500">실시간 틱 감지 → 5분봉 재분석 → 패턴 확인 → ATR/VWAP 실행계획 검증</span>
+          <span className="text-slate-500">전체 유니버스 → 5분봉 → 패턴 → ATR/VWAP 검증</span>
           <button
             type="button"
             onClick={() => setRunning((value) => !value)}
@@ -271,6 +320,16 @@ export const RealtimeLongShortRadar: React.FC = () => {
             신호 {history.length}
             {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
           </button>
+        </div>
+
+        <div className="mx-auto mt-2 flex max-w-[1920px] flex-wrap gap-1.5 text-[10px] font-bold">
+          <Diag label="SIGNAL" value={diagnostics.SIGNAL} />
+          <Diag label="WAIT" value={diagnostics.WAIT} />
+          <Diag label="NO PLAN" value={diagnostics.NO_PLAN} />
+          <Diag label="56봉 미만" value={diagnostics.INSUFFICIENT_BARS} />
+          <Diag label="NO DATA" value={diagnostics.NO_DATA} />
+          <Diag label="API ERROR" value={diagnostics.API_ERROR} />
+          <span className="rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-slate-400">상태 {zeroMatchReason}</span>
         </div>
 
         {expanded && strongest.length > 0 && (
@@ -347,6 +406,10 @@ export const RealtimeLongShortRadar: React.FC = () => {
     </>
   );
 };
+
+const Diag: React.FC<{ label: string; value: number }> = ({ label, value }) => (
+  <span className="rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-slate-300">{label} {value}</span>
+);
 
 const Strength: React.FC<{ label: string; value: number; active: boolean }> = ({ label, value, active }) => (
   <div className={`rounded-2xl border p-3 ${active ? "border-indigo-400/50 bg-indigo-400/10" : "border-slate-800 bg-slate-900"}`}>
