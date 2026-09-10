@@ -9,9 +9,6 @@ import { PricePulseProvider } from "./context/PricePulseContext";
 import { ToastContainer } from "./components/ToastContainer";
 import { RealtimeMarketStreamManager } from "./components/RealtimeMarketStreamManager";
 import { RealtimeBitcoinPanel } from "./components/RealtimeBitcoinPanel";
-import { BitcoinLiveChartAnalysis } from "./components/BitcoinLiveChartAnalysis";
-import { BitcoinMultiTimeframeRiskPanel } from "./components/BitcoinMultiTimeframeRiskPanel";
-import { CryptoMultiTimeframeSetupScanner } from "./components/CryptoMultiTimeframeSetupScanner";
 import { AllMarketRadar } from "./components/AllMarketRadar";
 import { KISLiveRuntimeDashboard } from "./components/KISLiveRuntimeDashboard";
 import { RealtimeLongShortRadar } from "./components/RealtimeLongShortRadar";
@@ -150,20 +147,9 @@ function MainLayout() {
         <AllMarketRadar />
       </ErrorBoundary>
 
+      {/* 코인 UI는 하나의 한글 통합 패널만 노출 */}
       <ErrorBoundary>
         <RealtimeBitcoinPanel />
-      </ErrorBoundary>
-
-      <ErrorBoundary>
-        <BitcoinLiveChartAnalysis />
-      </ErrorBoundary>
-
-      <ErrorBoundary>
-        <BitcoinMultiTimeframeRiskPanel />
-      </ErrorBoundary>
-
-      <ErrorBoundary>
-        <CryptoMultiTimeframeSetupScanner />
       </ErrorBoundary>
 
       <ErrorBoundary>
