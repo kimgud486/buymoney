@@ -12,6 +12,9 @@ on:
       - scripts/cleanup-public-stock-routes.mjs
       - scripts/patch-preset-no-data-type.mjs
       - .github/workflows/apply-v20-final-server-integration.yml
+  pull_request:
+    branches: [main]
+    types: [reopened, synchronize]
 
 permissions:
   contents: write
