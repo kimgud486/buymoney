@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
 import { AIScanner, MarketScanInput } from "./AIScanner";
 import { CandidateRanker } from "./CandidateRanker";
 
@@ -26,10 +27,10 @@ const strongInput: MarketScanInput = {
 describe("AIScanner BUY candidate truth gate", () => {
   it("promotes a fully verified setup to BUY_CANDIDATE", () => {
     const decision = AIScanner.evaluateMarket(strongInput);
-    expect(decision.action).toBe("BUY_CANDIDATE");
-    expect(decision.dataStatus).toBe("REALTIME_VERIFIED");
-    expect(decision.setupScore).toBeGreaterThanOrEqual(78);
-    expect(CandidateRanker.isExecutableBuyCandidate(decision)).toBe(true);
+    assert.equal(decision.action, "BUY_CANDIDATE");
+    assert.equal(decision.dataStatus, "REALTIME_VERIFIED");
+    assert.ok(decision.setupScore >= 78);
+    assert.equal(CandidateRanker.isExecutableBuyCandidate(decision), true);
   });
 
   it("blocks BUY when realtime data is not verified", () => {
@@ -37,15 +38,15 @@ describe("AIScanner BUY candidate truth gate", () => {
       ...strongInput,
       dataStatus: "REALTIME_DERIVED",
     });
-    expect(decision.action).toBe("REJECT");
-    expect(CandidateRanker.isExecutableBuyCandidate(decision)).toBe(false);
+    assert.equal(decision.action, "REJECT");
+    assert.equal(CandidateRanker.isExecutableBuyCandidate(decision), false);
   });
 
   it("blocks BUY when critical VWAP evidence is missing", () => {
     const { vwap: _vwap, ...withoutVwap } = strongInput;
     const decision = AIScanner.evaluateMarket(withoutVwap);
-    expect(decision.action).not.toBe("BUY_CANDIDATE");
-    expect(CandidateRanker.isExecutableBuyCandidate(decision)).toBe(false);
+    assert.notEqual(decision.action, "BUY_CANDIDATE");
+    assert.equal(CandidateRanker.isExecutableBuyCandidate(decision), false);
   });
 
   it("blocks chase entries above the 5 percent limit", () => {
@@ -55,7 +56,7 @@ describe("AIScanner BUY candidate truth gate", () => {
       openPrice: 71000,
       vwap: 73000,
     });
-    expect(decision.action).not.toBe("BUY_CANDIDATE");
+    assert.notEqual(decision.action, "BUY_CANDIDATE");
   });
 
   it("returns only verified BUY candidates in TOP results", () => {
@@ -72,8 +73,8 @@ describe("AIScanner BUY candidate truth gate", () => {
     });
 
     const top = CandidateRanker.top([watch, rejected, buy], 5);
-    expect(top).toHaveLength(1);
-    expect(top[0].symbol).toBe("005930");
-    expect(top[0].action).toBe("BUY_CANDIDATE");
+    assert.equal(top.length, 1);
+    assert.equal(top[0]?.symbol, "005930");
+    assert.equal(top[0]?.action, "BUY_CANDIDATE");
   });
 });
