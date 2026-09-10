@@ -11,6 +11,7 @@ import { RealtimeMarketStreamManager } from "./components/RealtimeMarketStreamMa
 import { RealtimeBitcoinPanel } from "./components/RealtimeBitcoinPanel";
 import { BitcoinLiveChartAnalysis } from "./components/BitcoinLiveChartAnalysis";
 import { BitcoinMultiTimeframeRiskPanel } from "./components/BitcoinMultiTimeframeRiskPanel";
+import { CryptoMultiTimeframeSetupScanner } from "./components/CryptoMultiTimeframeSetupScanner";
 import { KISLiveRuntimeDashboard } from "./components/KISLiveRuntimeDashboard";
 import { RealtimeLongShortRadar } from "./components/RealtimeLongShortRadar";
 import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecuritiesConsensusModal";
@@ -154,6 +155,10 @@ function MainLayout() {
 
       <ErrorBoundary>
         <BitcoinMultiTimeframeRiskPanel />
+      </ErrorBoundary>
+
+      <ErrorBoundary>
+        <CryptoMultiTimeframeSetupScanner />
       </ErrorBoundary>
 
       <ErrorBoundary>
