@@ -10,6 +10,7 @@ import { ToastContainer } from "./components/ToastContainer";
 import { RealtimeMarketStreamManager } from "./components/RealtimeMarketStreamManager";
 import { RealtimeBitcoinPanel } from "./components/RealtimeBitcoinPanel";
 import { BitcoinLiveChartAnalysis } from "./components/BitcoinLiveChartAnalysis";
+import { BitcoinMultiTimeframeRiskPanel } from "./components/BitcoinMultiTimeframeRiskPanel";
 import { KISLiveRuntimeDashboard } from "./components/KISLiveRuntimeDashboard";
 import { RealtimeLongShortRadar } from "./components/RealtimeLongShortRadar";
 import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecuritiesConsensusModal";
@@ -148,6 +149,10 @@ function MainLayout() {
 
       <ErrorBoundary>
         <BitcoinLiveChartAnalysis />
+      </ErrorBoundary>
+
+      <ErrorBoundary>
+        <BitcoinMultiTimeframeRiskPanel />
       </ErrorBoundary>
 
       <ErrorBoundary>
