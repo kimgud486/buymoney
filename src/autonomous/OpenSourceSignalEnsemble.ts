@@ -63,6 +63,7 @@ export const DEFAULT_ENSEMBLE_POLICY: EnsemblePolicy = {
 };
 
 const finiteOrNull = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 };
@@ -170,31 +171,33 @@ export class OpenSourceSignalEnsemble {
     const timingComponent = clamp(100 - timingDistance * 5) * 0.10;
     const ensembleScore = Math.round(clamp(alphaComponent + rrComponent + liquidityComponent + timingComponent));
 
-    const hardDataMissing =
-      price === null ||
-      sourceScoreRaw === null ||
-      rsiRaw === null ||
-      rvolRaw === null ||
-      atrPctRaw === null ||
-      entryLowRaw === null ||
-      entryHighRaw === null ||
-      stop === null ||
-      target1 === null;
-    const hardGateFailed =
-      hardDataMissing ||
-      idea.wouldBuy !== true ||
-      sourceScore < policy.minimumSourceScore ||
-      rrRatio < policy.minimumRiskReward ||
-      rvol < policy.minimumRvol ||
-      entryLow <= 0 ||
-      entryHigh < entryLow ||
-      stopLossPrice <= 0 ||
-      stopLossPrice >= entryLow ||
-      targetPrice <= entryHigh ||
-      atrPct > policy.maximumAtrPct;
+    const hardDataMissing = [
+      price,
+      sourceScoreRaw,
+      rsiRaw,
+      rvolRaw,
+      atrPctRaw,
+      entryLowRaw,
+      entryHighRaw,
+      stop,
+      target1,
+    ].some((value) => value === null);
+
+    const reviewGatePassed =
+      !hardDataMissing &&
+      idea.wouldBuy === true &&
+      sourceScore >= policy.minimumSourceScore &&
+      rrRatio >= policy.minimumRiskReward &&
+      rvol >= policy.minimumRvol &&
+      entryLow > 0 &&
+      entryHigh >= entryLow &&
+      stopLossPrice > 0 &&
+      stopLossPrice < entryLow &&
+      targetPrice > entryHigh &&
+      atrPct <= policy.maximumAtrPct;
 
     let decision: EnsembleDecision = "NO";
-    if (!hardGateFailed && ensembleScore >= policy.minimumReviewScore) {
+    if (reviewGatePassed && ensembleScore >= policy.minimumReviewScore) {
       decision = "REVIEW_READY";
     } else if (!hardDataMissing && sourceScore >= 60 && ensembleScore >= 55) {
       decision = "WATCH";

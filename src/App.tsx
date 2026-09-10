@@ -12,6 +12,7 @@ import { RealtimeLongShortRadar } from "./components/RealtimeLongShortRadar";
 import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecuritiesConsensusModal";
 import { MasterAiAutoTradingDashboard } from "./components/trading/MasterAiAutoTradingDashboard";
 import { SafeAiAutotradeLauncher } from "./components/trading/SafeAiAutotradeLauncher";
+import { InstagramStyleTradeMap } from "./components/trading/InstagramStyleTradeMap";
 import { AiBotCommandCenterUi } from "./components/AiBotCommandCenterUi";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { VerifiedAiOpportunityScanner } from "./components/VerifiedAiOpportunityScanner";
@@ -148,6 +149,10 @@ function MainLayout() {
 
       <ErrorBoundary>
         <VerifiedAiOpportunityScanner />
+      </ErrorBoundary>
+
+      <ErrorBoundary>
+        <InstagramStyleTradeMap />
       </ErrorBoundary>
 
       <ErrorBoundary>
