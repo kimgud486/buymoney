@@ -20,6 +20,25 @@ export interface KISRuntimePanelInput {
   nowMs?: number;
 }
 
+export interface KISLiveEnvironmentProof {
+  status: "ESTABLISHED" | "PROOF_NOT_ESTABLISHED";
+  checkedAt: string;
+  symbol: string | null;
+  evidence: {
+    brokerConfigured: boolean;
+    oauthAuthenticated: boolean;
+    accountQuerySucceeded: boolean;
+    quoteQuerySucceeded: boolean;
+    marketOpen: boolean;
+    realtimeQuoteVerified: boolean;
+    accountFresh: boolean;
+    exactOrderabilityVerified: boolean;
+  };
+  quoteAsOf: string | null;
+  accountAsOf: string | null;
+  blockers: string[];
+}
+
 export interface KISRuntimePanel {
   provider: "KIS";
   mode: "LIVE_ONLY";
@@ -39,6 +58,7 @@ export interface KISRuntimePanel {
   orderableCash: number | null;
   orderableQty: number | null;
   accountTruth: KISLiveAccountTruth;
+  liveEnvironmentProof: KISLiveEnvironmentProof;
   orderReadiness: LiveOrderReadiness | null;
   requiresUserConfirmation: boolean;
   canSubmitOrder: false;
@@ -59,6 +79,7 @@ export function buildKISRuntimePanel(input: KISRuntimePanelInput): KISRuntimePan
   const totalEvalAmt = finiteOrNull(input.totalEvalAmt);
   const orderableCash = finiteOrNull(input.orderableCash);
   const orderableQty = Number.isInteger(input.orderableQty) && Number(input.orderableQty) >= 0 ? Number(input.orderableQty) : null;
+  const symbol = input.symbol ? String(input.symbol).trim().toUpperCase() : null;
 
   const dataStatus: "REALTIME_VERIFIED" | "STALE" | "NO_DATA" =
     input.quoteSuccess && lastPrice !== null && quoteAsOf
@@ -83,6 +104,43 @@ export function buildKISRuntimePanel(input: KISRuntimePanelInput): KISRuntimePan
     orderableQty,
   }, { nowMs });
 
+  const exactOrderabilityVerified = orderableCash !== null && orderableQty !== null;
+  const realtimeQuoteVerified = input.quoteSuccess && dataStatus === "REALTIME_VERIFIED" && lastPrice !== null && accountTruth.quoteAgeMs !== null && accountTruth.quoteAgeMs <= 30_000;
+  const accountFresh = input.accountSuccess && accountTruth.accountAgeMs !== null && accountTruth.accountAgeMs <= 30_000;
+
+  const proofBlockers = Array.from(new Set([
+    ...accountTruth.blockers,
+    ...(input.accountSuccess ? [] : ["KIS 실계좌 조회 성공 증거가 없습니다."]),
+    ...(input.quoteSuccess && lastPrice !== null ? [] : ["KIS 실시간 현재가 조회 성공 증거가 없습니다."]),
+    ...(exactOrderabilityVerified ? [] : ["KIS 주문가능금액/수량의 실제 조회 증거가 없습니다."]),
+  ]));
+
+  const liveEnvironmentProof: KISLiveEnvironmentProof = {
+    status:
+      accountTruth.verified &&
+      input.accountSuccess &&
+      realtimeQuoteVerified &&
+      accountFresh &&
+      exactOrderabilityVerified
+        ? "ESTABLISHED"
+        : "PROOF_NOT_ESTABLISHED",
+    checkedAt: new Date(nowMs).toISOString(),
+    symbol,
+    evidence: {
+      brokerConfigured: input.brokerConfigured,
+      oauthAuthenticated: input.oauthAuthenticated,
+      accountQuerySucceeded: input.accountSuccess,
+      quoteQuerySucceeded: input.quoteSuccess && lastPrice !== null,
+      marketOpen: input.marketSession === "OPEN",
+      realtimeQuoteVerified,
+      accountFresh,
+      exactOrderabilityVerified,
+    },
+    quoteAsOf,
+    accountAsOf,
+    blockers: proofBlockers,
+  };
+
   const orderReadiness = input.intent
     ? validateLiveOrderReadiness({
         intent: input.intent,
@@ -106,7 +164,7 @@ export function buildKISRuntimePanel(input: KISRuntimePanelInput): KISRuntimePan
     oauth: authStatus,
     marketSession: input.marketSession,
     dataStatus,
-    symbol: input.symbol ? String(input.symbol).trim().toUpperCase() : null,
+    symbol,
     lastPrice,
     quoteAsOf,
     quoteAgeMs: accountTruth.quoteAgeMs,
@@ -118,6 +176,7 @@ export function buildKISRuntimePanel(input: KISRuntimePanelInput): KISRuntimePan
     orderableCash,
     orderableQty,
     accountTruth,
+    liveEnvironmentProof,
     orderReadiness,
     requiresUserConfirmation: Boolean(orderReadiness?.ready),
     canSubmitOrder: false,
