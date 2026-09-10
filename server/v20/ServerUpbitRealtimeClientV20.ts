@@ -4,6 +4,7 @@
 // ----------------------------------------------------------------------
 
 import { WebSocket } from "ws";
+import { realtimeSubscriptionRegistryV20 } from "./RealtimeSubscriptionRegistryV20";
 
 export interface UpbitRealtimeTickV20 {
   type: "ticker" | "trade" | "orderbook";
@@ -29,6 +30,12 @@ export class ServerUpbitRealtimeClientV20 {
   private listeners: Set<UpbitTickCallbackV20> = new Set();
   private reconnectTimer: NodeJS.Timeout | null = null;
   private isClosedIntentionally = false;
+
+  constructor() {
+    for (const market of this.subscribedMarkets) {
+      realtimeSubscriptionRegistryV20.register({ symbol: market, market: "CRYPTO" });
+    }
+  }
 
   public connect(): void {
     if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
@@ -68,33 +75,46 @@ export class ServerUpbitRealtimeClientV20 {
               callback(tick);
             }
           }
-        } catch (e) {
+        } catch {
           // Ignore malformed packet
         }
       });
 
-      this.ws.on("error", (err) => {
-        // Socket error handling
+      this.ws.on("error", () => {
+        // Socket error handling is delegated to close/reconnect.
       });
 
       this.ws.on("close", () => {
+        this.ws = null;
         if (!this.isClosedIntentionally) {
           this.scheduleReconnect();
         }
       });
-    } catch (e) {
+    } catch {
       this.scheduleReconnect();
     }
   }
 
   public subscribeMarket(symbol: string): void {
-    const market = symbol.startsWith("KRW-") ? symbol : `KRW-${symbol}`;
+    const clean = String(symbol || "").trim().toUpperCase();
+    if (!clean) return;
+    const item = realtimeSubscriptionRegistryV20.register({ symbol: clean, market: "CRYPTO" });
+    if (!item) return;
+    const market = item.providerSymbol;
     if (!this.subscribedMarkets.has(market)) {
       this.subscribedMarkets.add(market);
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.sendSubscription();
       }
     }
+  }
+
+  public getSubscriptionSnapshot(): string[] {
+    return Array.from(this.subscribedMarkets.values());
+  }
+
+  public isSocketConnected(): boolean {
+    return Boolean(this.ws && this.ws.readyState === WebSocket.OPEN);
   }
 
   public onTick(callback: UpbitTickCallbackV20): () => void {
@@ -124,6 +144,7 @@ export class ServerUpbitRealtimeClientV20 {
   public close(): void {
     this.isClosedIntentionally = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
     if (this.ws) {
       this.ws.close();
       this.ws = null;
