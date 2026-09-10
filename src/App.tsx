@@ -8,6 +8,7 @@ import { AppProvider } from "./context/AppContext";
 import { PricePulseProvider } from "./context/PricePulseContext";
 import { ToastContainer } from "./components/ToastContainer";
 import { RealtimeMarketStreamManager } from "./components/RealtimeMarketStreamManager";
+import { RealtimeLongShortRadar } from "./components/RealtimeLongShortRadar";
 import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecuritiesConsensusModal";
 import { MasterAiAutoTradingDashboard } from "./components/trading/MasterAiAutoTradingDashboard";
 import { SafeAiAutotradeLauncher } from "./components/trading/SafeAiAutotradeLauncher";
@@ -140,6 +141,10 @@ function MainLayout() {
 
       <ErrorBoundary>
         <BuyHoldSystemStatusPanel />
+      </ErrorBoundary>
+
+      <ErrorBoundary>
+        <RealtimeLongShortRadar />
       </ErrorBoundary>
 
       <ErrorBoundary>
