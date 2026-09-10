@@ -26,6 +26,77 @@ type KISAccountBalance = {
 };
 
 /**
+ * Legacy server.ts still contains a direct overseas-balance parser that reads
+ * `ovrs_cqty`. Current KIS overseas balance responses expose the actual held
+ * quantity primarily as `ovrs_cblc_qty`.
+ *
+ * Keep one narrow compatibility bridge at the HTTP response boundary so both
+ * the legacy sync route and the V12 gateway see the same quantity. It only
+ * touches KIS overseas inquire-balance JSON and leaves every other fetch
+ * response unchanged.
+ */
+let overseasBalanceFetchShimInstalled = false;
+
+function installOverseasBalanceFetchCompatibilityShim(): void {
+  if (overseasBalanceFetchShimInstalled || typeof globalThis.fetch !== "function") return;
+  overseasBalanceFetchShimInstalled = true;
+
+  const nativeFetch = globalThis.fetch.bind(globalThis);
+
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const response = await nativeFetch(input, init);
+
+    try {
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : String(input?.url || "");
+
+      if (!url.includes("/uapi/overseas-stock/v1/trading/inquire-balance")) {
+        return response;
+      }
+
+      const payload = await response.clone().json().catch(() => null);
+      if (!payload || !Array.isArray(payload.output1)) return response;
+
+      let patched = false;
+      const output1 = payload.output1.map((item: any) => {
+        if (!item || typeof item !== "object") return item;
+
+        const heldQty =
+          item.ovrs_cblc_qty ??
+          item.OVRS_CBLC_QTY ??
+          item.ovrs_ccls_qty ??
+          item.ccls_qty;
+
+        if ((item.ovrs_cqty === undefined || item.ovrs_cqty === null || item.ovrs_cqty === "") && heldQty !== undefined && heldQty !== null && heldQty !== "") {
+          patched = true;
+          return { ...item, ovrs_cqty: heldQty };
+        }
+        return item;
+      });
+
+      if (!patched) return response;
+
+      const headers = new Headers(response.headers);
+      headers.delete("content-length");
+      headers.delete("content-encoding");
+
+      return new Response(JSON.stringify({ ...payload, output1 }), {
+        status: response.status,
+        statusText: response.statusText,
+        headers
+      });
+    } catch {
+      // Fail open to the untouched KIS response. Read-only balance sync must
+      // never become unavailable because a compatibility mapper failed.
+      return response;
+    }
+  }) as typeof globalThis.fetch;
+}
+
+/**
  * Compatibility gateway used by server.ts.
  *
  * Why this override exists:
@@ -34,6 +105,11 @@ type KISAccountBalance = {
  * valid overseas position could be converted to qty=0 and then filtered out.
  */
 export class KISBrokerGatewayV121 extends KISBrokerGatewayV123 {
+  constructor() {
+    super();
+    installOverseasBalanceFetchCompatibilityShim();
+  }
+
   public async getAccountBalance(
     market: "KOREA" | "US" = "KOREA",
     isPaper: boolean = false
@@ -166,6 +242,7 @@ export class KISBrokerGatewayV121 extends KISBrokerGatewayV123 {
             item.ovrs_cblc_qty ??
             item.OVRS_CBLC_QTY ??
             item.ovrs_ccls_qty ??
+            item.ovrs_cqty ??
             item.ccls_qty ??
             0
           ),
