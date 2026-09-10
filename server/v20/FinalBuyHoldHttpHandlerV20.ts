@@ -5,6 +5,7 @@ import {
 } from "./FinalBuyHoldDecisionServiceV20";
 import { ServerTrueMTFEvidenceProviderV20 } from "./ServerTrueMTFEvidenceProviderV20";
 import type { TrueMTFEvidenceV20 } from "./TrueMTFSignalGateV20";
+import { buildRealtimeTruthTelemetryV20 } from "./RealtimeTruthTelemetryV20";
 
 const VALID_MARKETS = new Set(["KR", "US", "CRYPTO"]);
 const VALID_EXCHANGES = new Set([
@@ -94,6 +95,7 @@ const DEFAULT_DEPENDENCIES: FinalBuyHoldHttpDependenciesV20 = {
  * - client-supplied trueMtf is NEVER trusted;
  * - the server rebuilds 1m/3m/5m/D evidence from its verified candle route;
  * - missing server evidence remains missing and therefore WATCH/NO, never BUY;
+ * - realtimeTruth is read only from the server market hub for source/latency audit;
  * - this endpoint only returns a decision and cannot submit/simulate orders.
  */
 export function createFinalBuyHoldHttpHandlerV20(
@@ -110,8 +112,9 @@ export function createFinalBuyHoldHttpHandlerV20(
 
     try {
       const baseUrl = requestBaseUrl(req);
+      const symbol = req.body.candidate.symbol;
       const serverTrueMtf = baseUrl
-        ? await dependencies.buildTrueMtf({ symbol: req.body.candidate.symbol, baseUrl })
+        ? await dependencies.buildTrueMtf({ symbol, baseUrl })
         : {};
 
       const serverOwnedRequest: FinalBuyHoldRequestV20 = {
@@ -124,11 +127,15 @@ export function createFinalBuyHoldHttpHandlerV20(
       };
 
       const decision = FinalBuyHoldDecisionServiceV20.evaluate(serverOwnedRequest);
+      const realtimeTruth = buildRealtimeTruthTelemetryV20(symbol);
+
       return res.json({
         success: true,
         authority: "SERVER_V20_FINAL",
         execution: "DECISION_ONLY",
         mtfAuthority: "SERVER_OWNED",
+        realtimeAuthority: "SERVER_MARKET_HUB",
+        realtimeTruth,
         decision
       });
     } catch (error) {
