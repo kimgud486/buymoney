@@ -1,10 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, AlertTriangle, BellRing, Bitcoin, Layers3, Radio, RefreshCw, ShieldCheck } from "lucide-react";
+import { AlertTriangle, BellRing, Bitcoin, ChevronDown, ChevronUp, RefreshCw, ShieldCheck, TrendingDown, TrendingUp } from "lucide-react";
 import { evaluateVerifiedSignal, type ScannerCandle, type VerifiedSignalResult } from "../scanner/verifiedSignalEngine";
 import { realtimeMarketStreamManager, type NormalizedMarketTick } from "../services/RealtimeMarketStreamManager";
 
 type Coin = "BTC" | "ETH" | "SOL" | "XRP";
+type Side = "LONG" | "SHORT";
 type AlertRow = { at: number; coin: Coin; from: string; to: string; score: number };
+
+type OrderIntent = {
+  side: Side;
+  coin: Coin;
+  price: number;
+  stop: number | null;
+  target: number | null;
+};
 
 const COINS: Array<{ symbol: Coin; label: string }> = [
   { symbol: "BTC", label: "비트코인" },
@@ -66,16 +75,16 @@ function cumulativeVwapSeries(candles: ScannerCandle[]): number[] {
 
 function formatPrice(coin: Coin, value?: number | null): string {
   if (!value || !Number.isFinite(value)) return "-";
-  const digits = coin === "XRP" ? 1 : coin === "SOL" ? 0 : 0;
+  const digits = coin === "XRP" ? 1 : 0;
   return `${value.toLocaleString("ko-KR", { maximumFractionDigits: digits })}원`;
 }
 
 function signalLabel(result: VerifiedSignalResult | null): string {
-  if (!result) return "NO DATA";
-  if (result.decision === "BUY_APPROVED") return "BUY";
-  if (result.decision === "BUY_WATCH") return "WATCH";
-  if (result.direction === "BEARISH") return "SELL RISK";
-  return "NO BUY";
+  if (!result) return "데이터 없음";
+  if (result.decision === "BUY_APPROVED") return "매수 우세";
+  if (result.decision === "BUY_WATCH") return "관심 구간";
+  if (result.direction === "BEARISH") return "하락 주의";
+  return "대기";
 }
 
 export const CryptoLiveWorkbench: React.FC = () => {
@@ -86,6 +95,8 @@ export const CryptoLiveWorkbench: React.FC = () => {
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [orderIntent, setOrderIntent] = useState<OrderIntent | null>(null);
   const previousSignalRef = useRef<string | null>(null);
 
   const loadSeed = async (target: Coin = coin) => {
@@ -110,6 +121,7 @@ export const CryptoLiveWorkbench: React.FC = () => {
   useEffect(() => {
     previousSignalRef.current = null;
     setLastTick(null);
+    setOrderIntent(null);
     void loadSeed(coin);
   }, [coin]);
 
@@ -118,47 +130,43 @@ export const CryptoLiveWorkbench: React.FC = () => {
     return () => window.clearInterval(timer);
   }, [coin]);
 
-  useEffect(() => {
-    const unsubscribe = realtimeMarketStreamManager.subscribeTick((tick) => {
-      if (tick.market !== "UPBIT" || tick.symbol !== coin || !Number.isFinite(tick.price) || tick.price <= 0) return;
-      setLastTick(tick);
-      const bucket = minuteBucket(tick.timestamp || Date.now());
-      setCandles((prev) => {
-        if (!prev.length) return prev;
-        const next = [...prev];
-        const last = next[next.length - 1];
-        const lastBucket = candleBucket(last);
-        if (lastBucket === bucket) {
-          next[next.length - 1] = { ...last, close: tick.price, high: Math.max(last.high, tick.price), low: Math.min(last.low, tick.price) };
-          return next;
-        }
-        if (bucket > lastBucket) {
-          next.push({ time: bucket, timestamp: bucket, open: tick.price, high: tick.price, low: tick.price, close: tick.price, volume: 0 });
-          return next.slice(-121);
-        }
-        return prev;
-      });
+  useEffect(() => realtimeMarketStreamManager.subscribeTick((tick) => {
+    if (tick.market !== "UPBIT" || tick.symbol !== coin || !Number.isFinite(tick.price) || tick.price <= 0) return;
+    setLastTick(tick);
+    const bucket = minuteBucket(tick.timestamp || Date.now());
+    setCandles((prev) => {
+      if (!prev.length) return prev;
+      const next = [...prev];
+      const last = next[next.length - 1];
+      const lastBucket = candleBucket(last);
+      if (lastBucket === bucket) {
+        next[next.length - 1] = { ...last, close: tick.price, high: Math.max(last.high, tick.price), low: Math.min(last.low, tick.price) };
+        return next;
+      }
+      if (bucket > lastBucket) {
+        next.push({ time: bucket, timestamp: bucket, open: tick.price, high: tick.price, low: tick.price, close: tick.price, volume: 0 });
+        return next.slice(-121);
+      }
+      return prev;
     });
-    return unsubscribe;
-  }, [coin]);
+  }), [coin]);
 
   useEffect(() => {
-    if (candles.length < 56) return;
-    setResult(evaluateVerifiedSignal(candles));
+    if (candles.length >= 56) setResult(evaluateVerifiedSignal(candles));
   }, [candles]);
 
   useEffect(() => {
     const current = signalLabel(result);
-    if (!result || current === "NO DATA") return;
+    if (!result || current === "데이터 없음") return;
     const previous = previousSignalRef.current;
     if (previous && previous !== current) {
-      setAlerts((rows) => [{ at: Date.now(), coin, from: previous, to: current, score: result.score }, ...rows].slice(0, 5));
+      setAlerts((rows) => [{ at: Date.now(), coin, from: previous, to: current, score: result.score }, ...rows].slice(0, 4));
       window.dispatchEvent(new CustomEvent("crypto_verified_signal_change", { detail: { coin, from: previous, to: current, score: result.score, timestamp: Date.now() } }));
     }
     previousSignalRef.current = current;
   }, [coin, result?.decision, result?.direction, result?.score]);
 
-  const visible = useMemo(() => candles.slice(-60), [candles]);
+  const visible = useMemo(() => candles.slice(-48), [candles]);
   const overlays = useMemo(() => {
     const closes = visible.map((c) => c.close);
     return { ema20: emaSeries(closes, 20), ema50: emaSeries(closes, 50), vwap: cumulativeVwapSeries(visible) };
@@ -168,76 +176,93 @@ export const CryptoLiveWorkbench: React.FC = () => {
     return values.length ? { min: Math.min(...values), max: Math.max(...values) } : { min: 0, max: 1 };
   }, [visible, overlays]);
   const maxVol = Math.max(1, ...visible.map((c) => c.volume));
-  const y = (price: number) => 10 + ((range.max - price) / Math.max(1, range.max - range.min)) * 128;
-  const linePoints = (series: number[]) => series.map((value, i) => `${14 + i * (970 / Math.max(1, visible.length - 1))},${y(value)}`).join(" ");
-
-  const liveAgeMs = lastTick ? Math.max(0, Date.now() - lastTick.timestamp) : null;
+  const y = (price: number) => 8 + ((range.max - price) / Math.max(1, range.max - range.min)) * 94;
+  const linePoints = (series: number[]) => series.map((value, i) => `${12 + i * (970 / Math.max(1, visible.length - 1))},${y(value)}`).join(" ");
+  const currentPrice = lastTick?.price ?? result?.metrics.close ?? 0;
   const signal = signalLabel(result);
 
+  const prepareOrder = (side: Side) => {
+    if (!currentPrice || !result) return;
+    const atr = Math.max(1, result.metrics.atr || currentPrice * 0.005);
+    setOrderIntent({
+      side,
+      coin,
+      price: currentPrice,
+      stop: side === "LONG" ? currentPrice - atr : currentPrice + atr,
+      target: side === "LONG" ? currentPrice + atr * 2 : currentPrice - atr * 2,
+    });
+  };
+
+  const confirmIntent = () => {
+    if (!orderIntent) return;
+    window.dispatchEvent(new CustomEvent("crypto_manual_order_intent_confirmed", { detail: { ...orderIntent, timestamp: Date.now() } }));
+    setOrderIntent(null);
+  };
+
   return (
-    <section className="w-full border-b border-slate-200 bg-slate-50 px-3 py-3 sm:px-4">
-      <div className="mx-auto max-w-[1920px] rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2"><Bitcoin className="h-5 w-5 text-amber-600" /><h2 className="font-black text-slate-900">Crypto Live Workbench</h2></div>
-            <p className="mt-1 text-[11px] text-slate-500">실제 Upbit 1분봉 seed + WebSocket 진행봉 생성 · EMA20/EMA50/VWAP · 검증 신호 변화 감지</p>
+    <section className="w-full border-b border-slate-200 bg-white px-2 py-2 sm:px-3">
+      <div className="mx-auto max-w-[1500px] rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <Bitcoin className="h-4 w-4 shrink-0 text-amber-600" />
+            <div className="min-w-0">
+              <h2 className="text-sm font-black text-slate-900">코인 실시간 분석</h2>
+              <p className="text-[10px] text-slate-500">업비트 실시간 · 1분봉 · 매수/하락 위험 확인</p>
+            </div>
           </div>
-          <div className="flex flex-wrap gap-1.5">
-            {COINS.map((item) => <button key={item.symbol} onClick={() => setCoin(item.symbol)} className={`rounded-lg px-3 py-1.5 text-xs font-black ${coin === item.symbol ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600"}`}>{item.symbol}</button>)}
-            <button onClick={() => void loadSeed()} disabled={loading} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /> 갱신</button>
+          <div className="flex flex-wrap gap-1">
+            {COINS.map((item) => <button key={item.symbol} onClick={() => setCoin(item.symbol)} className={`rounded-md px-2 py-1 text-[10px] font-black ${coin === item.symbol ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600"}`}>{item.label}</button>)}
+            <button onClick={() => void loadSeed()} disabled={loading} className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-bold text-slate-600"><RefreshCw className={`inline h-3 w-3 ${loading ? "animate-spin" : ""}`} /></button>
           </div>
         </div>
 
-        {error ? <div className="mt-4 flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-bold text-rose-700"><AlertTriangle className="h-4 w-4" /> {error}</div> : (
-          <div className="mt-4 grid gap-4 xl:grid-cols-[1.7fr_1fr]">
-            <div className="rounded-xl border border-slate-200 bg-slate-950 p-3">
-              <svg viewBox="0 0 1000 190" className="h-[300px] w-full" preserveAspectRatio="none" aria-label={`${coin} 실시간 1분봉 차트`}>
-                {visible.map((c, i) => {
-                  const x = 14 + i * (970 / Math.max(1, visible.length - 1));
-                  const width = Math.max(3, 650 / Math.max(1, visible.length));
-                  const openY = y(c.open); const closeY = y(c.close); const highY = y(c.high); const lowY = y(c.low);
-                  const up = c.close >= c.open;
-                  const volH = Math.max(1, (c.volume / maxVol) * 30);
-                  return <g key={`${c.timestamp ?? c.time}-${i}`}>
-                    <line x1={x} x2={x} y1={highY} y2={lowY} stroke={up ? "#fb7185" : "#60a5fa"} strokeWidth="1.2" />
-                    <rect x={x - width / 2} y={Math.min(openY, closeY)} width={width} height={Math.max(1.2, Math.abs(openY - closeY))} fill={up ? "#fb7185" : "#60a5fa"} rx="0.7" />
-                    <rect x={x - width / 2} y={186 - volH} width={width} height={volH} fill={up ? "#4c1d2f" : "#172554"} opacity="0.85" />
-                  </g>;
-                })}
-                {visible.length > 1 && <><polyline points={linePoints(overlays.ema20)} fill="none" stroke="#fbbf24" strokeWidth="1.6" /><polyline points={linePoints(overlays.ema50)} fill="none" stroke="#a78bfa" strokeWidth="1.5" /><polyline points={linePoints(overlays.vwap)} fill="none" stroke="#34d399" strokeWidth="1.5" strokeDasharray="4 3" /></>}
-              </svg>
-              <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] font-bold text-slate-400"><span>최근 {visible.length}개 1분봉 · 거래량</span><span>EMA20 <b className="text-amber-300">━</b> · EMA50 <b className="text-violet-300">━</b> · VWAP <b className="text-emerald-300">┄</b></span></div>
-            </div>
-
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-2">
-                <Metric label="코인" value={`${coin} · ${COINS.find((c) => c.symbol === coin)?.label ?? coin}`} />
-                <Metric label="검증 신호" value={signal} />
-                <Metric label="Setup Score" value={result ? `${result.score}/100` : "-"} />
-                <Metric label="현재가" value={formatPrice(coin, lastTick?.price ?? result?.metrics.close)} />
-              </div>
-              <div className="rounded-xl border border-slate-200 p-3 text-[11px] text-slate-600">
-                <div className="mb-2 flex items-center gap-1 font-black text-slate-800"><Layers3 className="h-4 w-4" /> 실시간 검증 상태</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <Small label="EMA20" value={formatPrice(coin, result?.metrics.ema20)} />
-                  <Small label="EMA50" value={formatPrice(coin, result?.metrics.ema50)} />
-                  <Small label="VWAP" value={formatPrice(coin, result?.metrics.vwap)} />
-                  <Small label="RSI / RVOL" value={result ? `${result.metrics.rsi.toFixed(1)} / ${result.metrics.rvol.toFixed(2)}` : "-"} />
-                </div>
-                <div className="mt-2 flex items-center gap-1 font-bold text-slate-500"><Radio className="h-3.5 w-3.5" /> {lastTick ? `${lastTick.feedSource} · ${lastTick.latencyMs}ms` : "WebSocket tick 대기"} {liveAgeMs !== null ? `· ${Math.round(liveAgeMs / 1000)}초 전` : ""}</div>
-              </div>
-              <div className="rounded-xl border border-slate-200 p-3">
-                <div className="mb-2 flex items-center gap-1 text-xs font-black text-slate-800"><BellRing className="h-4 w-4" /> 신호 변화 로그</div>
-                {alerts.length ? alerts.map((a) => <div key={a.at} className="mb-1 rounded-lg bg-slate-50 px-2 py-1.5 text-[10px] text-slate-600"><b>{a.coin}</b> {a.from} → <b>{a.to}</b> · Score {a.score} · {new Date(a.at).toLocaleTimeString("ko-KR")}</div>) : <div className="text-[11px] text-slate-400">검증 신호가 바뀌면 여기에 기록됩니다.</div>}
-              </div>
-              <div className="flex items-center gap-1 text-[10px] font-bold text-slate-500"><ShieldCheck className="h-3.5 w-3.5" /> 진행 중 1분봉은 기존 엔진 규칙상 BUY 확정 근거에서 제외 · 자동 주문 없음</div>
-            </div>
+        {error ? <div className="mt-2 flex items-center gap-1 rounded-lg bg-rose-50 px-2 py-1.5 text-xs font-bold text-rose-700"><AlertTriangle className="h-3.5 w-3.5" /> {error}</div> : <>
+          <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+            <Metric label="현재가" value={formatPrice(coin, currentPrice)} />
+            <Metric label="상태" value={signal} />
+            <Metric label="점수" value={result ? `${Math.round(result.score)}점` : "-"} />
+            <Metric label="RSI / 거래강도" value={result ? `${result.metrics.rsi.toFixed(0)} / ${result.metrics.rvol.toFixed(1)}` : "-"} />
           </div>
-        )}
+
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <button onClick={() => prepareOrder("LONG")} className="flex items-center justify-center gap-1 rounded-lg bg-rose-600 px-3 py-2 text-sm font-black text-white"><TrendingUp className="h-4 w-4" /> 롱 준비</button>
+            <button onClick={() => prepareOrder("SHORT")} className="flex items-center justify-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-sm font-black text-white"><TrendingDown className="h-4 w-4" /> 숏 준비</button>
+          </div>
+
+          {orderIntent && <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-slate-700">
+            <div className="font-black">{orderIntent.coin} {orderIntent.side === "LONG" ? "롱" : "숏"} 주문 준비</div>
+            <div className="mt-1 grid grid-cols-3 gap-1"><Small label="기준가" value={formatPrice(coin, orderIntent.price)} /><Small label="손절 기준" value={formatPrice(coin, orderIntent.stop)} /><Small label="목표 기준" value={formatPrice(coin, orderIntent.target)} /></div>
+            <div className="mt-2 flex gap-1.5"><button onClick={confirmIntent} className="flex-1 rounded-md bg-slate-900 px-2 py-1.5 font-black text-white">주문 내용 확인</button><button onClick={() => setOrderIntent(null)} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 font-bold">취소</button></div>
+            <div className="mt-1 flex items-center gap-1 text-[9px] text-slate-500"><ShieldCheck className="h-3 w-3" /> 이 화면은 주문 의도 확인까지만 하며 실제 자동 체결은 실행하지 않습니다.</div>
+          </div>}
+
+          <button onClick={() => setExpanded((v) => !v)} className="mt-2 flex w-full items-center justify-center gap-1 rounded-md bg-slate-50 py-1.5 text-[10px] font-bold text-slate-600">{expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}{expanded ? "상세 차트 접기" : "상세 차트 보기"}</button>
+
+          {expanded && <div className="mt-2 grid gap-2 lg:grid-cols-[1.7fr_1fr]">
+            <div className="rounded-lg bg-slate-950 p-2">
+              <svg viewBox="0 0 1000 132" className="h-[180px] w-full" preserveAspectRatio="none" aria-label={`${coin} 실시간 1분봉 차트`}>
+                {visible.map((c, i) => {
+                  const x = 12 + i * (970 / Math.max(1, visible.length - 1));
+                  const width = Math.max(3, 620 / Math.max(1, visible.length));
+                  const openY = y(c.open); const closeY = y(c.close); const highY = y(c.high); const lowY = y(c.low);
+                  const up = c.close >= c.open; const volH = Math.max(1, (c.volume / maxVol) * 22);
+                  return <g key={`${c.timestamp ?? c.time}-${i}`}><line x1={x} x2={x} y1={highY} y2={lowY} stroke={up ? "#fb7185" : "#60a5fa"} strokeWidth="1" /><rect x={x - width / 2} y={Math.min(openY, closeY)} width={width} height={Math.max(1, Math.abs(openY - closeY))} fill={up ? "#fb7185" : "#60a5fa"} /><rect x={x - width / 2} y={128 - volH} width={width} height={volH} fill={up ? "#4c1d2f" : "#172554"} /></g>;
+                })}
+                {visible.length > 1 && <><polyline points={linePoints(overlays.ema20)} fill="none" stroke="#fbbf24" strokeWidth="1.4" /><polyline points={linePoints(overlays.ema50)} fill="none" stroke="#a78bfa" strokeWidth="1.3" /><polyline points={linePoints(overlays.vwap)} fill="none" stroke="#34d399" strokeWidth="1.3" strokeDasharray="4 3" /></>}
+              </svg>
+              <div className="text-[9px] text-slate-400">노랑 EMA20 · 보라 EMA50 · 초록 VWAP · 최근 {visible.length}개 1분봉</div>
+            </div>
+            <div className="rounded-lg border border-slate-200 p-2 text-[10px]">
+              <div className="grid grid-cols-2 gap-1"><Small label="EMA20" value={formatPrice(coin, result?.metrics.ema20)} /><Small label="EMA50" value={formatPrice(coin, result?.metrics.ema50)} /><Small label="VWAP" value={formatPrice(coin, result?.metrics.vwap)} /><Small label="실시간 지연" value={lastTick ? `${lastTick.latencyMs}ms` : "대기"} /></div>
+              <div className="mt-2 font-black text-slate-700"><BellRing className="mr-1 inline h-3.5 w-3.5" />신호 변화</div>
+              <div className="mt-1 space-y-1 text-slate-500">{alerts.length ? alerts.map((a) => <div key={a.at}>{a.from} → <b>{a.to}</b> · {Math.round(a.score)}점</div>) : <div>변화 없음</div>}</div>
+            </div>
+          </div>}
+        </>}
       </div>
     </section>
   );
 };
 
-const Metric: React.FC<{ label: string; value: string }> = ({ label, value }) => <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"><div className="text-[10px] font-bold text-slate-400">{label}</div><div className="mt-0.5 truncate text-sm font-black text-slate-800">{value}</div></div>;
-const Small: React.FC<{ label: string; value: string }> = ({ label, value }) => <div className="rounded-lg bg-slate-50 px-2 py-2"><div className="text-[9px] font-bold text-slate-400">{label}</div><div className="mt-0.5 truncate font-black text-slate-700">{value}</div></div>;
+const Metric: React.FC<{ label: string; value: string }> = ({ label, value }) => <div className="rounded-lg bg-slate-50 px-2 py-1.5"><div className="text-[9px] font-bold text-slate-400">{label}</div><div className="truncate text-xs font-black text-slate-800">{value}</div></div>;
+const Small: React.FC<{ label: string; value: string }> = ({ label, value }) => <div className="rounded-md bg-white px-2 py-1.5"><div className="text-[8px] font-bold text-slate-400">{label}</div><div className="truncate text-[10px] font-black text-slate-700">{value}</div></div>;
