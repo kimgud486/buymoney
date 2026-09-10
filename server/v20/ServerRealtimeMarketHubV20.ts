@@ -76,7 +76,13 @@ export class ServerRealtimeMarketHubV20 {
     };
 
     this.quotes.set(key, quote);
-    this.updateCandleStore(key, price, Math.max(0, candleTradeVolume ?? volume));
+
+    // Truth-first volume rule:
+    // `volume` is cumulative/session volume. Never add it to every 1m candle tick.
+    // Only an explicit per-execution volume may advance the realtime candle store.
+    if (typeof candleTradeVolume === "number" && Number.isFinite(candleTradeVolume) && candleTradeVolume >= 0) {
+      this.updateCandleStore(key, price, candleTradeVolume);
+    }
 
     return quote;
   }
