@@ -4,6 +4,8 @@ import path from "path";
 export interface JournalOrderEntry {
   idempotencyKey: string;
   orderId: string;
+  /** Runtime position identity used to safely restore broker-fill routing after restart. */
+  positionId?: string;
   symbol: string;
   market: "KR" | "US" | "CRYPTO";
   side: "BUY" | "SELL";
@@ -108,6 +110,13 @@ export class PersistentOrderJournalV20 {
 
   public getAllOrders(): JournalOrderEntry[] {
     return Array.from(this.entries.values()).map((entry) => ({ ...entry }));
+  }
+
+  public getRecoverableOrders(): JournalOrderEntry[] {
+    return this.getAllOrders().filter((o) =>
+      (o.status === "ACKNOWLEDGED" || o.status === "PENDING" || o.status === "PARTIAL") &&
+      Boolean(String(o.positionId || "").trim())
+    );
   }
 
   public hasIdempotencyKey(key: string): boolean {
