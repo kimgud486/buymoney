@@ -631,7 +631,46 @@ export const RealtimeStockMarketScanner: React.FC = () => {
     { id: "s25", rank: 21, symbol: "440830", name: "엔젤로보틱스", market: "KOREA", capType: "SMALL", price: 58200, changePct: 14.1, tradingValue: 490, volumeStatus: "급증", rvol: 4.8, executionPower: 177, aiScore: 92, aiScoreChange: +17, hasBos: true, hasChoch: true, hasVwapBreak: true, hasNews: true }
   ];
 
-  const [stocks, setStocks] = useState<ScannerStock[]>(INITIAL_UNIVERSE);
+  // Include US candidates from the existing global scanner pipeline.
+  const mapGlobalScannedStock = (item: GlobalScannedStock, index: number): ScannerStock => ({
+    id: `global-${item.market}-${item.symbol}`,
+    rank: index + 1,
+    symbol: item.symbol,
+    name: item.name,
+    market: item.market,
+    capType: getCapType({ symbol: item.symbol, tradingValue: item.tradingValue }),
+    price: Number(item.price) || 0,
+    changePct: Number(item.changePct) || 0,
+    tradingValue: Number(item.tradingValue) || 0,
+    volumeStatus: item.rvol >= 3 ? "급증" : item.rvol >= 1.5 ? "증가" : "보통",
+    rvol: Number(item.rvol) || 0,
+    executionPower: Math.max(0, Math.round(100 + (Number(item.changePct) || 0) * 2 + (Number(item.rvol) || 0) * 5)),
+    aiScore: Number(item.scores?.totalScore) || 0,
+    aiScoreChange: Math.max(0, Math.round((Number(item.changePct) || 0) + (Number(item.rvol) || 0))),
+    hasBos: ["Breakout", "Breakout+Retest", "52W High", "Volume Breakout", "Gap & Go", "ORB", "Base Breakout", "Momentum Continuation", "Relative Strength Leader"].includes(item.setup),
+    hasChoch: item.setup === "VCP",
+    hasVwapBreak: item.setup === "EMA Pullback" || Number(item.scores?.emaAlignment || 0) >= 8,
+    hasNews: Array.isArray(item.catalysts) && item.catalysts.length > 0
+  });
+
+  const getUsScannerUniverse = (): ScannerStock[] =>
+    GlobalStockDiscoveryScannerService.runPipeline({
+      market: "US",
+      minScore: 0,
+      gradeFilter: "ALL",
+      setupFilter: "ALL",
+      searchQuery: ""
+    }).map(mapGlobalScannedStock);
+
+  const INITIAL_US_UNIVERSE = getUsScannerUniverse();
+  const ALL_INITIAL_UNIVERSE = [
+    ...INITIAL_UNIVERSE,
+    ...INITIAL_US_UNIVERSE.filter(
+      (us) => !INITIAL_UNIVERSE.some((base) => base.symbol.toUpperCase() === us.symbol.toUpperCase())
+    )
+  ];
+
+  const [stocks, setStocks] = useState<ScannerStock[]>(ALL_INITIAL_UNIVERSE);
 
   // Pool of potential fresh surging stocks entering scanner dynamically
   const FRESH_SURGING_POOL: Omit<ScannerStock, "id" | "rank">[] = [
@@ -700,7 +739,26 @@ export const RealtimeStockMarketScanner: React.FC = () => {
   // Real-Time Live API Fetcher for Key Scanner Stocks from KIS / Naver / Upbit / Yahoo
   const fetchLivePrices = useCallback(async () => {
     try {
-      const symbolList = INITIAL_UNIVERSE.map(s => s.symbol).join(",");
+      const usScannerUniverse = getUsScannerUniverse();
+      setStocks((prev) => {
+        const merged = [...prev];
+        usScannerUniverse.forEach((candidate) => {
+          const idx = merged.findIndex(
+            (item) => item.symbol.toUpperCase() === candidate.symbol.toUpperCase()
+          );
+          if (idx >= 0) {
+            merged[idx] = { ...merged[idx], ...candidate, flash: merged[idx].flash };
+          } else {
+            merged.push(candidate);
+          }
+        });
+        return merged;
+      });
+
+      const symbolList = [...INITIAL_UNIVERSE, ...usScannerUniverse]
+        .map((item) => item.symbol)
+        .filter((symbol, index, all) => all.indexOf(symbol) === index)
+        .join(",");
       const res = await fetch(`/api/stocks/search?symbols=${encodeURIComponent(symbolList)}`);
       if (res.ok) {
         const liveList = await res.json();
