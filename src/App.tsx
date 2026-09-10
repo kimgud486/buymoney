@@ -8,6 +8,7 @@ import { AppProvider } from "./context/AppContext";
 import { PricePulseProvider } from "./context/PricePulseContext";
 import { ToastContainer } from "./components/ToastContainer";
 import { RealtimeMarketStreamManager } from "./components/RealtimeMarketStreamManager";
+import { RealtimeBitcoinPanel } from "./components/RealtimeBitcoinPanel";
 import { RealtimeLongShortRadar } from "./components/RealtimeLongShortRadar";
 import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecuritiesConsensusModal";
 import { MasterAiAutoTradingDashboard } from "./components/trading/MasterAiAutoTradingDashboard";
@@ -138,6 +139,10 @@ function MainLayout() {
   return (
     <div className="min-h-screen bg-white text-slate-800 flex flex-col font-sans relative">
       <RealtimeMarketStreamManager />
+
+      <ErrorBoundary>
+        <RealtimeBitcoinPanel />
+      </ErrorBoundary>
 
       <ErrorBoundary>
         <BuyHoldSystemStatusPanel />
