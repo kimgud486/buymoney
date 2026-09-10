@@ -1,0 +1,200 @@
+name: Temporary Fix US Market Scanner
+
+on:
+  push:
+    branches:
+      - fix/us-market-scanner
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-us-scanner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/us-market-scanner
+
+      - name: Patch existing scanner to include US market universe
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/components/RealtimeStockMarketScanner.tsx')
+          text = path.read_text(encoding='utf-8')
+
+          old_init = '''  const [stocks, setStocks] = useState<ScannerStock[]>(INITIAL_UNIVERSE);
+
+  // Pool of potential fresh surging stocks entering scanner dynamically'''
+
+          new_init = '''  // Build the foreign-stock scan universe from the existing global scanner pipeline.
+  // This keeps US symbols in the same scanner path as Korea/Upbit instead of a separate mock list.
+  const mapGlobalScannedStock = (item: GlobalScannedStock, index: number): ScannerStock => ({
+    id: `global-${item.market}-${item.symbol}`,
+    rank: index + 1,
+    symbol: item.symbol,
+    name: item.name,
+    market: item.market,
+    capType: getCapType({ symbol: item.symbol, tradingValue: item.tradingValue }),
+    price: Number(item.price) || 0,
+    changePct: Number(item.changePct) || 0,
+    tradingValue: Number(item.tradingValue) || 0,
+    volumeStatus: item.rvol >= 3 ? "급증" : item.rvol >= 1.5 ? "증가" : "보통",
+    rvol: Number(item.rvol) || 0,
+    executionPower: Math.max(0, Math.round(100 + (Number(item.changePct) || 0) * 2 + (Number(item.rvol) || 0) * 5)),
+    aiScore: Number(item.scores?.totalScore) || 0,
+    aiScoreChange: Math.max(0, Math.round((Number(item.changePct) || 0) + (Number(item.rvol) || 0))),
+    hasBos: ["Breakout", "Breakout+Retest", "52W High", "Volume Breakout", "Gap & Go", "ORB", "Base Breakout", "Momentum Continuation", "Relative Strength Leader"].includes(item.setup),
+    hasChoch: item.setup === "VCP",
+    hasVwapBreak: item.setup === "EMA Pullback" || Number(item.scores?.emaAlignment || 0) >= 8,
+    hasNews: Array.isArray(item.catalysts) && item.catalysts.length > 0
+  });
+
+  const getUsScannerUniverse = (): ScannerStock[] =>
+    GlobalStockDiscoveryScannerService.runPipeline({
+      market: "US",
+      minScore: 0,
+      gradeFilter: "ALL",
+      setupFilter: "ALL",
+      searchQuery: ""
+    }).map(mapGlobalScannedStock);
+
+  const INITIAL_US_UNIVERSE = getUsScannerUniverse();
+  const ALL_INITIAL_UNIVERSE = [
+    ...INITIAL_UNIVERSE,
+    ...INITIAL_US_UNIVERSE.filter(
+      (us) => !INITIAL_UNIVERSE.some((base) => base.symbol.toUpperCase() === us.symbol.toUpperCase())
+    )
+  ];
+
+  const [stocks, setStocks] = useState<ScannerStock[]>(ALL_INITIAL_UNIVERSE);
+
+  // Pool of potential fresh surging stocks entering scanner dynamically'''
+
+          if old_init not in text:
+              raise SystemExit('INITIAL_UNIVERSE state marker not found')
+          text = text.replace(old_init, new_init, 1)
+
+          old_fetch = '''  const fetchLivePrices = useCallback(async () => {
+    try {
+      const symbolList = INITIAL_UNIVERSE.map(s => s.symbol).join(",");
+      const res = await fetch(`/api/stocks/search?symbols=${encodeURIComponent(symbolList)}`);
+      if (res.ok) {
+        const liveList = await res.json();
+        if (Array.isArray(liveList) && liveList.length > 0) {
+          setStocks((prev) =>
+            prev.map((s) => {
+              const match = liveList.find(
+                (item: any) => item.symbol?.toUpperCase() === s.symbol?.toUpperCase() || item.name === s.name
+              );
+              if (match && match.price && match.price > 0) {
+                const newPrice = match.price;
+                const isUp = newPrice >= s.price;
+                return {
+                  ...s,
+                  price: newPrice,
+                  changePct: match.changePct ?? match.changePercent ?? s.changePct,
+                  flash: newPrice !== s.price ? (isUp ? "UP" : "DOWN") : s.flash
+                };
+              }
+              return s;
+            })
+          );
+        }
+      }
+    } catch (err) {
+      // Ignore transient fetch errors
+    }
+  }, []);'''
+
+          new_fetch = '''  const fetchLivePrices = useCallback(async () => {
+    try {
+      // Re-run the existing global US pipeline on every rescan so foreign candidates are
+      // refreshed instead of filtering an empty domestic/crypto-only array.
+      const usScannerUniverse = getUsScannerUniverse();
+      const scanUniverse = [
+        ...INITIAL_UNIVERSE,
+        ...usScannerUniverse.filter(
+          (us) => !INITIAL_UNIVERSE.some((base) => base.symbol.toUpperCase() === us.symbol.toUpperCase())
+        )
+      ];
+      const symbolList = scanUniverse.map((s) => s.symbol).join(",");
+      const res = await fetch(`/api/stocks/search?symbols=${encodeURIComponent(symbolList)}`);
+
+      const liveList = res.ok ? await res.json() : [];
+
+      setStocks((prev) => {
+        const merged = [...prev];
+
+        // Merge/re-rank US scan candidates first so the US market tab can never be empty
+        // merely because INITIAL_UNIVERSE contained only Korea/Upbit symbols.
+        usScannerUniverse.forEach((candidate) => {
+          const idx = merged.findIndex(
+            (item) => item.symbol.toUpperCase() === candidate.symbol.toUpperCase()
+          );
+          if (idx >= 0) {
+            merged[idx] = { ...merged[idx], ...candidate, flash: merged[idx].flash };
+          } else {
+            merged.push(candidate);
+          }
+        });
+
+        if (!Array.isArray(liveList) || liveList.length === 0) return merged;
+
+        return merged.map((s) => {
+          const match = liveList.find(
+            (item: any) => item.symbol?.toUpperCase() === s.symbol?.toUpperCase() || item.name === s.name
+          );
+          if (match && match.price && match.price > 0) {
+            const newPrice = match.price;
+            const isUp = newPrice >= s.price;
+            return {
+              ...s,
+              price: newPrice,
+              changePct: match.changePct ?? match.changePercent ?? s.changePct,
+              flash: newPrice !== s.price ? (isUp ? "UP" : "DOWN") : s.flash
+            };
+          }
+          return s;
+        });
+      });
+    } catch (err) {
+      console.warn("Global scanner live refresh failed:", err);
+    }
+  }, []);'''
+
+          if old_fetch not in text:
+              raise SystemExit('fetchLivePrices marker not found')
+          text = text.replace(old_fetch, new_fetch, 1)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Verify US scanner wiring
+        shell: bash
+        run: |
+          grep -q 'const getUsScannerUniverse' src/components/RealtimeStockMarketScanner.tsx
+          grep -q 'market: "US"' src/components/RealtimeStockMarketScanner.tsx
+          grep -q 'usScannerUniverse.forEach' src/components/RealtimeStockMarketScanner.tsx
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Commit scanner fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/components/RealtimeStockMarketScanner.tsx
+          if git diff --cached --quiet; then
+            echo "No scanner changes to commit"
+            exit 0
+          fi
+          git commit -m "fix: wire US market into realtime scanner"
+          git push origin HEAD:fix/us-market-scanner
