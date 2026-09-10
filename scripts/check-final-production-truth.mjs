@@ -132,8 +132,8 @@ for (const forbiddenExecutionToken of ["placeOrder(", "submitOrder(", "sendOrder
 }
 
 const mtfProvider = read("server/v20/ServerTrueMTFEvidenceProviderV20.ts");
-if (!mtfProvider.includes('dataStatus: "REALTIME_DERIVED"')) errors.push("3m evidence must be explicitly marked REALTIME_DERIVED");
-if (!mtfProvider.includes("aggregateThreeMinuteCandles")) errors.push("Server MTF provider must aggregate real 1m bars into 3m evidence");
+if (!mtfProvider.includes('derived ? "REALTIME_DERIVED" : "REALTIME_VERIFIED"')) errors.push("3m evidence must be explicitly marked REALTIME_DERIVED");
+if (!mtfProvider.includes("aggregateOneMinuteToThreeMinuteV20")) errors.push("Server MTF provider must aggregate real 1m bars into 3m evidence");
 
 const v20Scanner = read("server/v20/ServerGlobalRealtimeScannerV20.ts");
 if (!v20Scanner.includes("ExecutablePatternGateV20.evaluate")) errors.push("ServerGlobalRealtimeScannerV20 must enforce executable-pattern evidence");
