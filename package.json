@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
+    "btc:live": "tsx scripts/btc-live.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && node -e \"const fs = require('fs'); fs.cpSync('dist', 'build', { recursive: true });\"",
     "start": "node dist/server.cjs",
     "test": "VITE_FIREBASE_API_KEY=test-only-not-a-secret node --import tsx --test tests/*.test.ts tests/**/*.test.ts",
