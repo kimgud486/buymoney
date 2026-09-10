@@ -1,0 +1,41 @@
+name: Apply V21.3 KIS Runtime Panel
+
+on:
+  push:
+    branches:
+      - feat/v21-3-kis-runtime-panel-20260910
+    paths:
+      - scripts/apply-v213-kis-runtime-panel.mjs
+      - server/broker/KISRuntimePanelV213.ts
+      - server/broker/KISRuntimeProbeV213.ts
+      - tests/broker/kis-runtime-panel-v213.test.ts
+      - tests/broker/kis-runtime-probe-v213.test.ts
+      - .github/workflows/apply-v213-kis-runtime-panel.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/v21-3-kis-runtime-panel-20260910
+          fetch-depth: 0
+      - name: Apply server route
+        run: node scripts/apply-v213-kis-runtime-panel.mjs
+      - name: Verify patch
+        run: |
+          git diff --check
+          grep -Fq '/api/broker/v21/runtime' server.ts
+          grep -Fq 'automaticOrderSubmission: false' server.ts
+      - name: Commit route wiring
+        run: |
+          if git diff --quiet -- server.ts; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server.ts
+          git commit -m "feat(v21.3): wire read-only KIS runtime diagnostics"
+          git push origin HEAD:feat/v21-3-kis-runtime-panel-20260910
