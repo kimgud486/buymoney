@@ -5,6 +5,7 @@
 
 import { DataGradeV20 } from "./KISOverseasParserV20";
 import { Candle } from "../../src/services/StructureBrain";
+import { UnifiedPatternSignalEngineV20, UnifiedPatternSignalResultV20 } from "./UnifiedPatternSignalEngineV20";
 
 export interface ServerMarketQuoteV20 {
   symbol: string;
@@ -27,6 +28,7 @@ export class ServerRealtimeMarketHubV20 {
   private static instance: ServerRealtimeMarketHubV20;
   private quotes: Map<string, ServerMarketQuoteV20> = new Map();
   private candleHistory: Map<string, Candle[]> = new Map();
+  private latestSignals: Map<string, UnifiedPatternSignalResultV20> = new Map();
   private sequenceCounter = 0;
 
   private constructor() {
@@ -84,6 +86,10 @@ export class ServerRealtimeMarketHubV20 {
       this.updateCandleStore(key, price, candleTradeVolume);
     }
 
+    // Every market is analyzed by the exact same OHLCV pattern/signal engine.
+    // The engine fails closed while the candle store is warming up (<55 candles).
+    this.refreshUnifiedSignal(key);
+
     return quote;
   }
 
@@ -103,9 +109,25 @@ export class ServerRealtimeMarketHubV20 {
     return q;
   }
 
+  public getQuotesByMarket(market?: "KOREA" | "US" | "UPBIT"): ServerMarketQuoteV20[] {
+    const values = Array.from(this.quotes.values());
+    return market ? values.filter(q => q.market === market) : values;
+  }
+
   public getCandles(symbol: string): Candle[] {
     const key = symbol.toUpperCase();
-    return this.candleHistory.get(key) || [];
+    return this.candleHistory.get(key) || this.candleHistory.get(key.replace("KRW-", "")) || [];
+  }
+
+  public getLatestSignal(symbol: string): UnifiedPatternSignalResultV20 | null {
+    const key = symbol.toUpperCase();
+    return this.latestSignals.get(key) || this.latestSignals.get(key.replace("KRW-", "")) || null;
+  }
+
+  public getLatestSignals(market?: "KOREA" | "US" | "UPBIT"): UnifiedPatternSignalResultV20[] {
+    const values = Array.from(this.latestSignals.values());
+    const filtered = market ? values.filter(s => s.market === market) : values;
+    return filtered.sort((a, b) => b.score - a.score || b.updatedAt - a.updatedAt);
   }
 
   /**
@@ -140,7 +162,28 @@ export class ServerRealtimeMarketHubV20 {
 
   public setCandles(symbol: string, candles: Candle[]): void {
     const key = symbol.toUpperCase();
-    this.candleHistory.set(key, candles);
+    const clean = Array.isArray(candles)
+      ? candles.filter(c => Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close) && Number.isFinite(c.volume)).slice(-500)
+      : [];
+    this.candleHistory.set(key, clean);
+    this.refreshUnifiedSignal(key);
+  }
+
+  private refreshUnifiedSignal(symbol: string): void {
+    const quote = this.quotes.get(symbol);
+    if (!quote) return;
+    const candles = this.candleHistory.get(symbol) || [];
+    const signal = UnifiedPatternSignalEngineV20.analyze({
+      symbol: quote.symbol,
+      name: quote.name,
+      market: quote.market,
+      candles,
+      lastPrice: quote.price,
+      bidPrice: quote.bidPrice,
+      askPrice: quote.askPrice,
+      dataGrade: quote.grade,
+    });
+    this.latestSignals.set(symbol, signal);
   }
 
   private aggregateCandles(candles: Candle[], timeframeMinutes: number): Candle[] {
