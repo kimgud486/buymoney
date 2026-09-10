@@ -63,6 +63,17 @@ function formatPrice(value: number | null): string {
   return new Intl.NumberFormat("ko-KR", { maximumFractionDigits: value < 1000 ? 2 : 0 }).format(value);
 }
 
+function marketText(value: "KOREA" | "US"): string {
+  return value === "US" ? "미국 주식" : "국내 주식";
+}
+
+function confidenceText(value: unknown): string {
+  const raw = String(value || "").toUpperCase();
+  if (raw.includes("HIGH") || raw.includes("STRONG")) return "신호가 비교적 강해요";
+  if (raw.includes("LOW") || raw.includes("WEAK")) return "신호가 약해요";
+  return "조금 더 확인해요";
+}
+
 async function fetchFullStockUniverse(): Promise<UniverseItem[]> {
   const merged = new Map<string, UniverseItem>();
 
@@ -73,7 +84,6 @@ async function fetchFullStockUniverse(): Promise<UniverseItem[]> {
       const rows = Array.isArray(json?.data) ? json.data : [];
       for (const row of rows) {
         const symbol = String(row?.symbol || "").trim();
-        // Universe membership must not depend on whether a quote has arrived yet.
         if (!symbol) continue;
         merged.set(symbol, {
           symbol,
@@ -283,13 +293,13 @@ export const RealtimeLongShortRadar: React.FC = () => {
 
   const progress = universeSize > 0 ? Math.round((scanned / universeSize) * 100) : 0;
   const strongest = useMemo(() => history.slice(0, 5), [history]);
-  const zeroMatchReason = useMemo(() => {
-    if (universeSize === 0) return "NO_UNIVERSE";
-    if (scanned < universeSize) return "SCANNING";
-    if (diagnostics.SIGNAL > 0) return "SIGNAL_FOUND";
-    if (diagnostics.API_ERROR > 0 && diagnostics.API_ERROR === scanned) return "API_ERROR";
-    if (diagnostics.INSUFFICIENT_BARS > 0 && diagnostics.INSUFFICIENT_BARS === scanned) return "INSUFFICIENT_BARS";
-    return "ZERO_MATCH";
+  const statusText = useMemo(() => {
+    if (universeSize === 0) return "종목 목록을 아직 못 받았어요";
+    if (scanned < universeSize) return "종목을 하나씩 확인하고 있어요";
+    if (diagnostics.SIGNAL > 0) return "조건에 맞는 종목을 찾았어요";
+    if (diagnostics.API_ERROR > 0 && diagnostics.API_ERROR === scanned) return "가격 자료 연결에 문제가 있어요";
+    if (diagnostics.INSUFFICIENT_BARS > 0 && diagnostics.INSUFFICIENT_BARS === scanned) return "가격 자료가 아직 부족해요";
+    return "지금은 조건에 맞는 종목이 없어요";
   }, [diagnostics, scanned, universeSize]);
 
   return (
@@ -298,38 +308,38 @@ export const RealtimeLongShortRadar: React.FC = () => {
         <div className="mx-auto flex max-w-[1920px] flex-wrap items-center gap-3 text-xs">
           <span className="inline-flex items-center gap-1.5 font-black text-indigo-300">
             <Radar size={14} className={running ? "animate-pulse" : ""} />
-            LONG / SHORT AI RADAR
+            오를 힘과 내릴 힘 찾기
           </span>
           <span className="text-slate-400">
-            전체 {universeSize || 0} · 분석 {scanned}/{universeSize || 0} ({progress}%)
+            전체 {universeSize || 0}개 · 확인 {scanned}/{universeSize || 0} ({progress}%)
           </span>
-          <span className="rounded-md bg-indigo-400/10 px-2 py-0.5 font-black text-indigo-300">LIVE {LIVE_TIMEFRAME}</span>
-          <span className="text-slate-500">전체 유니버스 → 5분봉 → 패턴 → ATR/VWAP 검증</span>
+          <span className="rounded-md bg-indigo-400/10 px-2 py-0.5 font-black text-indigo-300">5분 가격으로 확인 중</span>
+          <span className="text-slate-500">전체 종목 → 최근 가격 → 가격 모양 → 위험 확인</span>
           <button
             type="button"
             onClick={() => setRunning((value) => !value)}
             className={`ml-auto rounded-lg px-2.5 py-1 font-black ${running ? "bg-emerald-400 text-emerald-950" : "bg-slate-800 text-slate-300"}`}
           >
-            {running ? "RADAR ON" : "RADAR OFF"}
+            {running ? "찾기 켜짐" : "찾기 꺼짐"}
           </button>
           <button
             type="button"
             onClick={() => setExpanded((value) => !value)}
             className="inline-flex items-center gap-1 rounded-lg bg-slate-800 px-2.5 py-1 font-bold text-slate-300"
           >
-            신호 {history.length}
+            찾은 종목 {history.length}개
             {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
           </button>
         </div>
 
         <div className="mx-auto mt-2 flex max-w-[1920px] flex-wrap gap-1.5 text-[10px] font-bold">
-          <Diag label="SIGNAL" value={diagnostics.SIGNAL} />
-          <Diag label="WAIT" value={diagnostics.WAIT} />
-          <Diag label="NO PLAN" value={diagnostics.NO_PLAN} />
-          <Diag label="56봉 미만" value={diagnostics.INSUFFICIENT_BARS} />
-          <Diag label="NO DATA" value={diagnostics.NO_DATA} />
-          <Diag label="API ERROR" value={diagnostics.API_ERROR} />
-          <span className="rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-slate-400">상태 {zeroMatchReason}</span>
+          <Diag label="조건 맞음" value={diagnostics.SIGNAL} />
+          <Diag label="더 기다림" value={diagnostics.WAIT} />
+          <Diag label="가격 계획 없음" value={diagnostics.NO_PLAN} />
+          <Diag label="자료 부족" value={diagnostics.INSUFFICIENT_BARS} />
+          <Diag label="자료 없음" value={diagnostics.NO_DATA} />
+          <Diag label="연결 문제" value={diagnostics.API_ERROR} />
+          <span className="rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-slate-400">{statusText}</span>
         </div>
 
         {expanded && strongest.length > 0 && (
@@ -345,61 +355,59 @@ export const RealtimeLongShortRadar: React.FC = () => {
         <div className="fixed right-3 top-20 z-[120] w-[min(94vw,470px)] rounded-3xl border border-slate-700 bg-slate-950/95 p-5 text-white shadow-2xl backdrop-blur-xl">
           <button
             type="button"
-            aria-label="신호 닫기"
+            aria-label="알림 닫기"
             onClick={() => setLatest(null)}
             className="absolute right-3 top-3 rounded-full bg-slate-800 p-1.5 text-slate-400 hover:text-white"
           >
             <X size={15} />
           </button>
 
-          <div className="flex items-center gap-2 text-xs font-black tracking-[0.16em] text-indigo-300">
-            <BellRing size={15} /> V21 LIVE SIGNAL · {latest.timeframe}
+          <div className="flex items-center gap-2 text-xs font-black text-indigo-300">
+            <BellRing size={15} /> 새로 찾은 종목 · 5분 가격 기준
           </div>
           <div className="mt-2 flex items-end justify-between gap-3">
             <div>
               <div className="text-xl font-black">{latest.name}</div>
-              <div className="text-xs text-slate-400">{latest.symbol} · {latest.market}</div>
+              <div className="text-xs text-slate-400">{latest.symbol} · {marketText(latest.market)}</div>
             </div>
-            <div className={`rounded-2xl px-4 py-2 text-xl font-black ${latest.direction === "LONG" ? "bg-emerald-400 text-emerald-950" : "bg-rose-400 text-rose-950"}`}>
-              {latest.direction}
+            <div className={`rounded-2xl px-4 py-2 text-sm font-black ${latest.direction === "LONG" ? "bg-emerald-400 text-emerald-950" : "bg-rose-400 text-rose-950"}`}>
+              {latest.direction === "LONG" ? "오를 힘이 더 커요" : "내릴 힘이 더 커요"}
             </div>
           </div>
 
           <div className="mt-5 grid grid-cols-2 gap-3">
-            <Strength label="LONG 우세도" value={latest.longStrength} active={latest.direction === "LONG"} />
-            <Strength label="SHORT 우세도" value={latest.shortStrength} active={latest.direction === "SHORT"} />
+            <Strength label="오를 힘" value={latest.longStrength} active={latest.direction === "LONG"} />
+            <Strength label="내릴 힘" value={latest.shortStrength} active={latest.direction === "SHORT"} />
           </div>
 
           <div className="mt-4 flex items-center justify-between rounded-2xl bg-slate-900 px-3 py-2 text-xs">
-            <span className="inline-flex items-center gap-1.5 text-slate-300"><Activity size={13} /> 우세도 격차 {latest.edge.toFixed(1)}pt</span>
-            <span className="font-black text-indigo-300">{latest.confidenceLabel}</span>
+            <span className="inline-flex items-center gap-1.5 text-slate-300"><Activity size={13} /> 두 힘의 차이 {latest.edge.toFixed(1)}점</span>
+            <span className="font-black text-indigo-300">{confidenceText(latest.confidenceLabel)}</span>
           </div>
 
           <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-            <PlanLevel label="ENTRY" value={latest.plan.entry} />
-            <PlanLevel label="STOP" value={latest.plan.stop} />
-            <PlanLevel label="TP1" value={latest.plan.tp1} />
-            <PlanLevel label="TP2" value={latest.plan.tp2} />
+            <PlanLevel label="살펴볼 가격" value={latest.plan.entry} />
+            <PlanLevel label="이 아래면 그만 보기" value={latest.plan.stop} />
+            <PlanLevel label="첫 번째로 팔 가격" value={latest.plan.tp1} />
+            <PlanLevel label="두 번째로 팔 가격" value={latest.plan.tp2} />
           </div>
           <div className="mt-2 flex items-center justify-between rounded-xl border border-emerald-400/20 bg-emerald-400/5 px-3 py-2 text-[11px]">
-            <span className="font-bold text-emerald-300">TP3 {formatPrice(latest.plan.tp3)}</span>
-            <span className="text-slate-400">R:R TP1 {latest.plan.riskRewardTp1?.toFixed(1) || "-"}:1 · ATR/VWAP VERIFIED</span>
+            <span className="font-bold text-emerald-300">세 번째로 팔 가격 {formatPrice(latest.plan.tp3)}</span>
+            <span className="text-slate-400">첫 목표 기대값 {latest.plan.riskRewardTp1?.toFixed(1) || "-"}배</span>
           </div>
 
           <div className="mt-3 text-[11px] text-slate-400">
-            패턴 등록 {latest.registeredPatterns} · 평가 {latest.evaluatedPatterns} · 현재 일치 {latest.matchedPatterns}
-            <span className="ml-2">상승 {latest.bullishPatterns} / 하락 {latest.bearishPatterns}</span>
+            살펴본 가격 모양 {latest.evaluatedPatterns}개 · 지금 맞는 모양 {latest.matchedPatterns}개
+            <span className="ml-2">상승 모양 {latest.bullishPatterns} / 하락 모양 {latest.bearishPatterns}</span>
           </div>
 
-          <div className="mt-4 space-y-1.5">
-            {latest.reasons.slice(0, 4).map((reason) => (
-              <div key={reason} className="text-xs text-slate-200">• {reason}</div>
-            ))}
+          <div className="mt-4 rounded-xl bg-slate-900 px-3 py-2 text-xs leading-5 text-slate-300">
+            여러 가격 모양과 거래 흐름을 함께 보고 만든 참고 신호입니다. 한 가지 숫자만 보고 결정하지 마세요.
           </div>
 
           <div className="mt-4 flex gap-2 rounded-xl border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-[10px] leading-relaxed text-amber-200/80">
             <ShieldAlert size={14} className="mt-0.5 shrink-0" />
-            LONG/SHORT는 5분봉 기술 신호의 상대 우세도입니다. SHORT는 기술적 하락 신호이며 실제 공매도 가능 여부를 뜻하지 않습니다. 주문은 자동 전송하지 않습니다.
+            “오를 힘”은 가격이 위로 갈 가능성을 보는 신호이고, “내릴 힘”은 가격이 아래로 갈 가능성을 보는 신호입니다. 이 화면이 자동으로 주식을 사고팔지는 않습니다.
           </div>
         </div>
       )}
@@ -433,13 +441,13 @@ const SignalMiniCard: React.FC<{ signal: RadarSignal }> = ({ signal }) => (
     <div className="flex items-center justify-between gap-2">
       <span className="truncate font-black">{signal.name}</span>
       <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-black ${signal.direction === "LONG" ? "bg-emerald-400 text-emerald-950" : "bg-rose-400 text-rose-950"}`}>
-        {signal.direction}
+        {signal.direction === "LONG" ? "오를 힘" : "내릴 힘"}
       </span>
     </div>
-    <div className="mt-1 text-[10px] text-slate-500">{signal.symbol} · {signal.timeframe}</div>
+    <div className="mt-1 text-[10px] text-slate-500">{signal.symbol} · 5분 가격</div>
     <div className="mt-1 text-[11px] text-slate-300">
-      L {signal.longStrength.toFixed(0)}% / S {signal.shortStrength.toFixed(0)}% · 패턴 {signal.matchedPatterns}
+      오를 힘 {signal.longStrength.toFixed(0)}% / 내릴 힘 {signal.shortStrength.toFixed(0)}% · 맞는 모양 {signal.matchedPatterns}개
     </div>
-    <div className="mt-1 text-[10px] text-slate-500">진입 {formatPrice(signal.plan.entry)} · 손절 {formatPrice(signal.plan.stop)}</div>
+    <div className="mt-1 text-[10px] text-slate-500">살펴볼 가격 {formatPrice(signal.plan.entry)} · 그만 볼 가격 {formatPrice(signal.plan.stop)}</div>
   </div>
 );
