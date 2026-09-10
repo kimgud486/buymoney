@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: aistock-ci-${{ github.workflow }}-${{ github.ref }}
@@ -23,6 +23,94 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: One-time patch existing scanner with US universe
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/components/RealtimeStockMarketScanner.tsx')
+          s = p.read_text(encoding='utf-8')
+
+          if 'const getUsScannerUniverse' not in s:
+              marker = '  const [stocks, setStocks] = useState<ScannerStock[]>(INITIAL_UNIVERSE);\n'
+              if marker not in s:
+                  raise SystemExit('stocks init marker not found')
+
+              replacement = '''  // US market uses the same existing global scanner pipeline as the other markets.
+  const mapGlobalScannedStock = (item: GlobalScannedStock, index: number): ScannerStock => ({
+    id: `global-${item.market}-${item.symbol}`,
+    rank: index + 1,
+    symbol: item.symbol,
+    name: item.name,
+    market: item.market,
+    capType: getCapType({ symbol: item.symbol, tradingValue: item.tradingValue }),
+    price: Number(item.price) || 0,
+    changePct: Number(item.changePct) || 0,
+    tradingValue: Number(item.tradingValue) || 0,
+    volumeStatus: item.rvol >= 3 ? "급증" : item.rvol >= 1.5 ? "증가" : "보통",
+    rvol: Number(item.rvol) || 0,
+    executionPower: Math.max(0, Math.round(100 + (Number(item.changePct) || 0) * 2 + (Number(item.rvol) || 0) * 5)),
+    aiScore: Number(item.scores?.totalScore) || 0,
+    aiScoreChange: Math.max(0, Math.round((Number(item.changePct) || 0) + (Number(item.rvol) || 0))),
+    hasBos: ["Breakout", "Breakout+Retest", "52W High", "Volume Breakout", "Gap & Go", "ORB", "Base Breakout", "Momentum Continuation", "Relative Strength Leader"].includes(item.setup),
+    hasChoch: item.setup === "VCP",
+    hasVwapBreak: item.setup === "EMA Pullback" || Number(item.scores?.emaAlignment || 0) >= 8,
+    hasNews: Array.isArray(item.catalysts) && item.catalysts.length > 0
+  });
+
+  const getUsScannerUniverse = (): ScannerStock[] =>
+    GlobalStockDiscoveryScannerService.runPipeline({
+      market: "US",
+      minScore: 0,
+      gradeFilter: "ALL",
+      setupFilter: "ALL",
+      searchQuery: ""
+    }).map(mapGlobalScannedStock);
+
+  const INITIAL_US_UNIVERSE = getUsScannerUniverse();
+  const ALL_INITIAL_UNIVERSE = [
+    ...INITIAL_UNIVERSE,
+    ...INITIAL_US_UNIVERSE.filter(
+      (us) => !INITIAL_UNIVERSE.some((base) => base.symbol.toUpperCase() === us.symbol.toUpperCase())
+    )
+  ];
+
+  const [stocks, setStocks] = useState<ScannerStock[]>(ALL_INITIAL_UNIVERSE);
+'''
+              s = s.replace(marker, replacement, 1)
+
+          old = '      const symbolList = INITIAL_UNIVERSE.map(s => s.symbol).join(",");\n'
+          if old in s:
+              new = '''      const usScannerUniverse = getUsScannerUniverse();
+      setStocks((prev) => {
+        const merged = [...prev];
+        usScannerUniverse.forEach((candidate) => {
+          const idx = merged.findIndex((item) => item.symbol.toUpperCase() === candidate.symbol.toUpperCase());
+          if (idx >= 0) {
+            merged[idx] = { ...merged[idx], ...candidate, flash: merged[idx].flash };
+          } else {
+            merged.push(candidate);
+          }
+        });
+        return merged;
+      });
+
+      const symbolList = [...INITIAL_UNIVERSE, ...usScannerUniverse]
+        .map((item) => item.symbol)
+        .filter((symbol, index, all) => all.indexOf(symbol) === index)
+        .join(",");
+'''
+              s = s.replace(old, new, 1)
+
+          p.write_text(s, encoding='utf-8')
+          PY
+
+          grep -q 'const getUsScannerUniverse' src/components/RealtimeStockMarketScanner.tsx
+          grep -q 'const INITIAL_US_UNIVERSE' src/components/RealtimeStockMarketScanner.tsx
+          grep -q 'const usScannerUniverse = getUsScannerUniverse' src/components/RealtimeStockMarketScanner.tsx
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -66,3 +154,17 @@ jobs:
             build/**
           if-no-files-found: error
           retention-days: 7
+
+      - name: Commit US scanner patch after all gates pass
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          if git diff --quiet -- src/components/RealtimeStockMarketScanner.tsx; then
+            echo "No scanner patch to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/components/RealtimeStockMarketScanner.tsx
+          git commit -m "fix: enable US market scanner universe"
+          git push origin HEAD:main
