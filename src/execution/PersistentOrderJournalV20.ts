@@ -26,11 +26,6 @@ export class PersistentOrderJournalV20 {
     this.loadJournalSync();
   }
 
-  /**
-   * Load Journal File Sync.
-   * CRITICAL FAIL-CLOSED CONTRACT: If the journal file exists but contains invalid or corrupted JSON,
-   * it MUST throw an explicit JOURNAL_CORRUPTED error rather than starting with an empty journal.
-   */
   public loadJournalSync(): void {
     if (!fs.existsSync(this.filePath)) {
       this.entries.clear();
@@ -40,14 +35,10 @@ export class PersistentOrderJournalV20 {
 
     try {
       const rawContent = fs.readFileSync(this.filePath, "utf8");
-      if (!rawContent.trim()) {
-        throw new Error("JOURNAL_EMPTY_FILE");
-      }
+      if (!rawContent.trim()) throw new Error("JOURNAL_EMPTY_FILE");
 
       const data = JSON.parse(rawContent);
-      if (!Array.isArray(data)) {
-        throw new Error("JOURNAL_INVALID_FORMAT");
-      }
+      if (!Array.isArray(data)) throw new Error("JOURNAL_INVALID_FORMAT");
 
       this.entries.clear();
       this.idempotencyKeys.clear();
@@ -56,8 +47,8 @@ export class PersistentOrderJournalV20 {
         if (!item.idempotencyKey || !item.orderId || !item.symbol || !item.status) {
           throw new Error("JOURNAL_ITEM_MALFORMED");
         }
-        this.entries.set(item.orderId, item);
-        this.idempotencyKeys.add(item.idempotencyKey);
+        this.entries.set(String(item.orderId), item as JournalOrderEntry);
+        this.idempotencyKeys.add(String(item.idempotencyKey));
       }
     } catch (err: any) {
       if (err.message?.startsWith("JOURNAL_")) {
@@ -70,34 +61,53 @@ export class PersistentOrderJournalV20 {
     }
   }
 
-  /**
-   * Persist Journal Entries to Disk Sync
-   */
   public saveJournalSync(): void {
     const list = Array.from(this.entries.values());
     const dir = path.dirname(this.filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(this.filePath, JSON.stringify(list, null, 2), "utf8");
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    const tempPath = `${this.filePath}.tmp`;
+    fs.writeFileSync(tempPath, JSON.stringify(list, null, 2), "utf8");
+    fs.renameSync(tempPath, this.filePath);
   }
 
   public recordOrder(entry: JournalOrderEntry): void {
-    this.entries.set(entry.orderId, entry);
+    if (!entry.orderId || !entry.idempotencyKey) {
+      throw new Error("JOURNAL_INVALID_ORDER_IDENTITY");
+    }
+    this.entries.set(entry.orderId, { ...entry });
     this.idempotencyKeys.add(entry.idempotencyKey);
     this.saveJournalSync();
   }
 
+  public updateOrder(orderId: string, patch: Partial<Omit<JournalOrderEntry, "orderId" | "idempotencyKey">>): JournalOrderEntry {
+    const current = this.entries.get(orderId);
+    if (!current) throw new Error(`JOURNAL_ORDER_NOT_FOUND: ${orderId}`);
+
+    const next: JournalOrderEntry = {
+      ...current,
+      ...patch,
+      orderId: current.orderId,
+      idempotencyKey: current.idempotencyKey,
+      updatedAt: patch.updatedAt ?? Date.now()
+    };
+    this.entries.set(orderId, next);
+    this.saveJournalSync();
+    return { ...next };
+  }
+
   public getOrder(orderIdOrKey: string): JournalOrderEntry | undefined {
-    if (this.entries.has(orderIdOrKey)) {
-      return this.entries.get(orderIdOrKey);
-    }
+    const direct = this.entries.get(orderIdOrKey);
+    if (direct) return { ...direct };
+
     for (const entry of this.entries.values()) {
-      if (entry.idempotencyKey === orderIdOrKey) {
-        return entry;
-      }
+      if (entry.idempotencyKey === orderIdOrKey) return { ...entry };
     }
     return undefined;
+  }
+
+  public getAllOrders(): JournalOrderEntry[] {
+    return Array.from(this.entries.values()).map((entry) => ({ ...entry }));
   }
 
   public hasIdempotencyKey(key: string): boolean {
@@ -105,16 +115,13 @@ export class PersistentOrderJournalV20 {
   }
 
   public getPartialOrders(): JournalOrderEntry[] {
-    return Array.from(this.entries.values()).filter(o => o.status === "PARTIAL");
+    return this.getAllOrders().filter(o => o.status === "PARTIAL");
   }
 
   public getPendingOrAcknowledgedOrders(): JournalOrderEntry[] {
-    return Array.from(this.entries.values()).filter(o => o.status === "ACKNOWLEDGED" || o.status === "PENDING");
+    return this.getAllOrders().filter(o => o.status === "ACKNOWLEDGED" || o.status === "PENDING");
   }
 
-  /**
-   * Returns true if there is any order with PARTIAL status (unresolved partial fill exposure)
-   */
   public hasActivePartialExposure(): boolean {
     return this.getPartialOrders().length > 0;
   }
@@ -122,8 +129,8 @@ export class PersistentOrderJournalV20 {
   public clear(): void {
     this.entries.clear();
     this.idempotencyKeys.clear();
-    if (fs.existsSync(this.filePath)) {
-      fs.unlinkSync(this.filePath);
-    }
+    if (fs.existsSync(this.filePath)) fs.unlinkSync(this.filePath);
+    const tempPath = `${this.filePath}.tmp`;
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
   }
 }
