@@ -2,439 +2,318 @@ import React, { useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
-  CheckCircle2,
   ChevronRight,
-  Clock3,
   Loader2,
   Play,
   Radar,
   ShieldCheck,
-  Sparkles,
   Target,
-  TrendingUp,
+  TrendingUp
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
-import {
-  evaluateVerifiedSignal,
-  type VerifiedSignalResult,
-} from "../scanner/verifiedSignalEngine";
-import {
-  evaluateVerifiedIntradayPatterns,
-  type VerifiedIntradayPatternResult,
-} from "../scanner/verifiedIntradayPatternEngine";
 
-interface UniverseItem {
+interface FinalTradePlan {
+  entry: number | null;
+  stop: number | null;
+  tp1: number | null;
+  tp2: number | null;
+  tp3: number | null;
+  source: "ATR_STRUCTURE" | "NO_VERIFIED_PLAN";
+}
+
+interface ServerFinalDecision {
   symbol: string;
   name: string;
-  price: number;
-  changePct: number;
-  market: "KOREA" | "US" | "BTC";
-  volume?: number;
-  tradingValue?: number;
+  action: "STRONG_BUY" | "BUY" | "WATCH" | "NO" | "KEEP_HOLD" | "REDUCE" | "EXIT";
+  aiScore: number;
+  grade: string;
+  recommendation: "BUY_CANDIDATE" | "WATCH" | "REJECT";
+  verifiedWinRatePct: number | null;
+  sampleSize: number;
+  profitFactor: number | null;
+  expectancyPct: number | null;
+  holdScore: number;
+  trueMtfPassed: boolean;
+  blockers: string[];
+  confirmations: string[];
+  reasons: string[];
+  plan: FinalTradePlan;
+  dataCoveragePct: number;
+  dataStatus: string;
 }
 
-interface ScannedCandidate extends UniverseItem {
-  result: VerifiedSignalResult;
-  intraday?: VerifiedIntradayPatternResult | null;
+interface PrecheckCandidate {
+  symbol: string;
+  name: string;
+  market: "KR" | "US" | "CRYPTO";
+  exchange: "KOSPI" | "KOSDAQ" | "NASDAQ" | "NYSE" | "AMEX" | "UPBIT" | "UNKNOWN";
+  currentPrice: number;
+  priceChange24hPct: number;
+  volume: number;
+  tradeValue: number;
+  volumeIncreaseRatio: number;
+  patternType?: string;
+  patternName?: string;
+  setupScore?: number;
+  grade?: string;
+  reasoning?: string;
+  metrics?: {
+    rs5m?: number;
+    rs15m?: number;
+    rs1h?: number;
+    rs1d?: number;
+    vwap?: number;
+    ema9?: number;
+    ema20?: number;
+    ema50?: number;
+    atr14?: number;
+    rsi14?: number;
+    spreadBps?: number;
+    orderbookImbalance?: number;
+    signedFlow?: number;
+  };
+  trueMtf?: unknown;
+  dataStatus: string;
+  finalDecision?: ServerFinalDecision;
+  finalError?: string;
 }
 
-function num(v: unknown): number {
+function num(v: unknown): number | null {
   const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
+  return Number.isFinite(n) ? n : null;
 }
 
-function normalizeMarket(raw: unknown, symbol: string): "KOREA" | "US" | "BTC" {
-  const m = String(raw || "").toUpperCase();
-  if (m === "BTC" || m === "UPBIT" || symbol.startsWith("KRW-")) return "BTC";
-  if (m === "US") return "US";
-  return "KOREA";
+function compactPrice(value: unknown): string {
+  const n = num(value);
+  return n == null ? "-" : Math.round(n).toLocaleString("ko-KR");
 }
 
-function compactPrice(value: number): string {
-  if (!Number.isFinite(value)) return "-";
-  return Math.round(value).toLocaleString("ko-KR");
+function finalLabel(candidate: PrecheckCandidate): ServerFinalDecision["action"] | "VERIFYING" {
+  return candidate.finalDecision?.action ?? "VERIFYING";
 }
 
-const INTRADAY_LABELS: Record<string, string> = {
-  ORB_BREAKOUT: "ORB",
-  OPENING_DRIVE: "DRIVE",
-  VWAP_RETEST_HOLD: "VWAP RETEST",
-  FIRST_PULLBACK_HOLD_INTRADAY: "1ST PULLBACK",
-};
+function isFinalBuy(candidate: PrecheckCandidate): boolean {
+  const action = candidate.finalDecision?.action;
+  return action === "BUY" || action === "STRONG_BUY";
+}
 
-async function fetchUniverse(): Promise<UniverseItem[]> {
-  const merged = new Map<string, UniverseItem>();
-
-  try {
-    const res = await fetch("/api/realtime/small-mid-cap-universe");
-    if (res.ok) {
-      const json = await res.json();
-      const rows = Array.isArray(json?.data) ? json.data : [];
-      for (const row of rows) {
-        const symbol = String(row?.symbol || "").trim();
-        const price = num(row?.price);
-        if (!symbol || price <= 0) continue;
-        merged.set(symbol, {
-          symbol,
-          name: String(row?.name || row?.realStockName || symbol),
-          price,
-          changePct: num(row?.changePct),
-          market: "KOREA",
-          volume: num(row?.volume),
-          tradingValue: num(row?.tradingValue),
-        });
+async function requestFinalDecision(candidate: PrecheckCandidate): Promise<PrecheckCandidate> {
+  const m = candidate.metrics || {};
+  const response = await fetch("/api/v20/final-buy-hold", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify({
+      candidate: {
+        symbol: candidate.symbol,
+        name: candidate.name,
+        market: candidate.market,
+        exchange: candidate.exchange,
+        price: candidate.currentPrice,
+        changePct: candidate.priceChange24hPct,
+        volume: candidate.volume,
+        tradeValue: candidate.tradeValue,
+        rvol: candidate.volumeIncreaseRatio,
+        rs5m: m.rs5m,
+        rs15m: m.rs15m,
+        rs1h: m.rs1h,
+        rs1d: m.rs1d,
+        vwap: m.vwap,
+        ema9: m.ema9,
+        ema20: m.ema20,
+        ema50: m.ema50,
+        atr14: m.atr14,
+        rsi14: m.rsi14,
+        spreadBps: m.spreadBps,
+        orderbookImbalance: m.orderbookImbalance,
+        signedFlow: m.signedFlow,
+        patterns: candidate.patternType ? [candidate.patternType] : [],
+        trueMtf: candidate.trueMtf,
+        dataStatus: candidate.dataStatus
+      },
+      performanceKey: {
+        setup: candidate.patternType || "NO_EXECUTABLE_SETUP",
+        symbol: candidate.symbol,
+        market: candidate.market
       }
-    }
-  } catch (error) {
-    console.warn("[VerifiedScanner] small-mid universe unavailable", error);
+    })
+  });
+
+  if (!response.ok) {
+    return {
+      ...candidate,
+      finalError: `FINAL_V20_${response.status}`
+    };
   }
 
-  try {
-    const res = await fetch("/api/stocks");
-    if (res.ok) {
-      const rows = await res.json();
-      if (Array.isArray(rows)) {
-        for (const row of rows) {
-          const symbol = String(row?.symbol || "").trim();
-          const price = num(row?.price);
-          if (!symbol || price <= 0) continue;
-          const market = normalizeMarket(row?.market, symbol);
-          // Stock scanner only. Crypto must use a separate 24/7 session and risk model.
-          if (market === "BTC") continue;
-          merged.set(symbol, {
-            symbol,
-            name: String(row?.name || symbol),
-            price,
-            changePct: num(row?.changePct),
-            market,
-            volume: num(row?.volume),
-            tradingValue: num(row?.tradingValue ?? row?.marketCap),
-          });
-        }
-      }
-    }
-  } catch (error) {
-    console.warn("[VerifiedScanner] /api/stocks unavailable", error);
+  const payload = await response.json();
+  if (payload?.authority !== "SERVER_V20_FINAL" || payload?.execution !== "DECISION_ONLY" || !payload?.decision) {
+    return {
+      ...candidate,
+      finalError: "INVALID_FINAL_AUTHORITY_RESPONSE"
+    };
   }
 
-  return Array.from(merged.values());
-}
-
-async function analyzeItem(item: UniverseItem): Promise<ScannedCandidate | null> {
-  const res = await fetch(
-    `/api/market/realtime-candles?symbol=${encodeURIComponent(item.symbol)}&timeframe=D&count=70`,
-    { cache: "no-store" },
-  );
-  if (!res.ok) return null;
-  const json = await res.json();
-  if (!Array.isArray(json?.candles)) return null;
-  const result = evaluateVerifiedSignal(json.candles);
-  return result ? { ...item, result, intraday: null } : null;
-}
-
-async function analyzeIntraday(candidate: ScannedCandidate): Promise<ScannedCandidate> {
-  try {
-    const res = await fetch(
-      `/api/market/realtime-candles?symbol=${encodeURIComponent(candidate.symbol)}&timeframe=5m&count=120`,
-      { cache: "no-store" },
-    );
-    if (!res.ok) return candidate;
-    const json = await res.json();
-    if (!Array.isArray(json?.candles)) return candidate;
-    const intraday = evaluateVerifiedIntradayPatterns(json.candles, 5);
-    return { ...candidate, intraday };
-  } catch (error) {
-    console.warn(`[VerifiedScanner] intraday unavailable for ${candidate.symbol}`, error);
-    return candidate;
-  }
+  return {
+    ...candidate,
+    finalDecision: payload.decision as ServerFinalDecision,
+    finalError: undefined
+  };
 }
 
 export const VerifiedAiOpportunityScanner: React.FC = () => {
   const { setSelectedSymbol, addToast } = useApp() as any;
   const [isScanning, setIsScanning] = useState(false);
-  const [progress, setProgress] = useState({ current: 0, total: 0 });
-  const [results, setResults] = useState<ScannedCandidate[]>([]);
-  const [lastScanAt, setLastScanAt] = useState<string>("");
-  const [scanError, setScanError] = useState<string>("");
+  const [results, setResults] = useState<PrecheckCandidate[]>([]);
+  const [lastScanAt, setLastScanAt] = useState("");
+  const [scanError, setScanError] = useState("");
 
-  const approved = useMemo(
-    () => results.filter((x) => x.result.decision === "BUY_APPROVED"),
-    [results],
-  );
-  const watch = useMemo(
-    () => results.filter((x) => x.result.decision === "BUY_WATCH"),
-    [results],
-  );
-  const intradayMatched = useMemo(
-    () => results.filter((x) => x.intraday && !x.intraday.blocked && x.intraday.hits.length > 0),
-    [results],
-  );
+  const buyCount = useMemo(() => results.filter(isFinalBuy).length, [results]);
+  const watchCount = results.length - buyCount;
 
   const handleScan = async () => {
     if (isScanning) return;
     setIsScanning(true);
     setScanError("");
-    setProgress({ current: 0, total: 0 });
 
     try {
-      const universe = await fetchUniverse();
-      if (!universe.length) {
-        throw new Error("실시간 종목 유니버스를 불러오지 못했습니다.");
-      }
-
-      const shortlist = [...universe]
-        .sort((a, b) => {
-          const liquidityA = Math.log10(Math.max(1, a.tradingValue || a.volume || 1));
-          const liquidityB = Math.log10(Math.max(1, b.tradingValue || b.volume || 1));
-          const activityA = Math.min(8, Math.abs(a.changePct));
-          const activityB = Math.min(8, Math.abs(b.changePct));
-          return liquidityB + activityB - (liquidityA + activityA);
+      const res = await fetch("/api/ai/hot-list", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          marketFilter: "ALL",
+          exchangeFilter: "ALL",
+          patternFilter: "ALL",
+          minYield: 0
         })
-        .slice(0, 24);
-
-      setProgress({ current: 0, total: shortlist.length });
-      const analyzed: ScannedCandidate[] = [];
-      const concurrency = 4;
-
-      for (let i = 0; i < shortlist.length; i += concurrency) {
-        const batch = shortlist.slice(i, i + concurrency);
-        const batchResults = await Promise.allSettled(batch.map(analyzeItem));
-        for (const settled of batchResults) {
-          if (settled.status === "fulfilled" && settled.value) analyzed.push(settled.value);
-        }
-        setProgress({ current: Math.min(i + batch.length, shortlist.length), total: shortlist.length });
-      }
-
-      const rank = { BUY_APPROVED: 2, BUY_WATCH: 1, NO_BUY: 0 } as const;
-      analyzed.sort((a, b) => {
-        const decisionDiff = rank[b.result.decision] - rank[a.result.decision];
-        if (decisionDiff !== 0) return decisionDiff;
-        return b.result.score - a.result.score;
       });
 
-      // Intraday calls are deliberately limited to the strongest daily candidates.
-      // This avoids doubling requests across the entire universe while still adding
-      // ORB/VWAP/First-Pullback confirmation where it matters most.
-      const intradayTargets = analyzed
-        .filter((candidate) => candidate.result.decision !== "NO_BUY")
-        .slice(0, 8);
-      const intradayResults = await Promise.all(intradayTargets.map(analyzeIntraday));
-      const intradayBySymbol = new Map(intradayResults.map((candidate) => [candidate.symbol, candidate]));
-      const enriched = analyzed.map((candidate) => intradayBySymbol.get(candidate.symbol) || candidate);
+      if (!res.ok) throw new Error(`PRECHECK 실패 (${res.status})`);
 
-      enriched.sort((a, b) => {
-        const decisionDiff = rank[b.result.decision] - rank[a.result.decision];
-        if (decisionDiff !== 0) return decisionDiff;
-        const intradayA = a.intraday?.hits.length || 0;
-        const intradayB = b.intraday?.hits.length || 0;
-        if (intradayB !== intradayA) return intradayB - intradayA;
-        return b.result.score - a.result.score;
+      const json = await res.json();
+      const rows = Array.isArray(json?.hotItems) ? json.hotItems : [];
+      const precheck: PrecheckCandidate[] = rows
+        .filter((row: any) => row && typeof row.symbol === "string")
+        .map((row: any) => ({
+          symbol: String(row.symbol),
+          name: String(row.name || row.symbol),
+          market: row.market === "US" || row.market === "CRYPTO" ? row.market : "KR",
+          exchange: ["KOSPI", "KOSDAQ", "NASDAQ", "NYSE", "AMEX", "UPBIT"].includes(row.exchange)
+            ? row.exchange
+            : "UNKNOWN",
+          currentPrice: Number(row.currentPrice),
+          priceChange24hPct: num(row.priceChange24hPct) ?? 0,
+          volume: num(row.volume) ?? 0,
+          tradeValue: num(row.tradeValue) ?? 0,
+          volumeIncreaseRatio: num(row.volumeIncreaseRatio) ?? 0,
+          patternType: row.patternType ? String(row.patternType) : undefined,
+          patternName: row.patternName ? String(row.patternName) : undefined,
+          setupScore: num(row.setupScore) ?? undefined,
+          grade: row.grade ? String(row.grade) : undefined,
+          reasoning: row.reasoning ? String(row.reasoning) : undefined,
+          metrics: row.metrics,
+          trueMtf: row.trueMtf,
+          dataStatus: row.dataStatus ? String(row.dataStatus) : "NO_DATA"
+        }))
+        .filter((row: PrecheckCandidate) => Number.isFinite(row.currentPrice) && row.currentPrice > 0)
+        .sort((a: PrecheckCandidate, b: PrecheckCandidate) => (b.setupScore ?? 0) - (a.setupScore ?? 0))
+        .slice(0, 12);
+
+      // PRECHECK is only candidate compression. Every displayed BUY must come
+      // from SERVER_V20_FINAL. Failed or incomplete final verification stays WATCH/VERIFYING.
+      const finalRows = await Promise.all(precheck.map(requestFinalDecision));
+      const ranked = finalRows.sort((a, b) => {
+        const buyDelta = Number(isFinalBuy(b)) - Number(isFinalBuy(a));
+        if (buyDelta !== 0) return buyDelta;
+        return (b.finalDecision?.aiScore ?? b.setupScore ?? 0) - (a.finalDecision?.aiScore ?? a.setupScore ?? 0);
       });
 
-      setResults(enriched);
+      setResults(ranked);
       setLastScanAt(new Date().toLocaleTimeString("ko-KR"));
-
-      const yesCount = enriched.filter((x) => x.result.decision === "BUY_APPROVED").length;
-      const intradayCount = enriched.filter((x) => x.intraday && !x.intraday.blocked && x.intraday.hits.length > 0).length;
+      const finalBuyCount = ranked.filter(isFinalBuy).length;
       addToast?.({
-        type: yesCount > 0 ? "SUCCESS" : "INFO",
-        title: "검증형 AI 스캔 완료",
-        message: `검증 ${enriched.length}종목 · BUY APPROVED ${yesCount} · 5M SETUP ${intradayCount}`,
+        type: finalBuyCount > 0 ? "SUCCESS" : "INFO",
+        title: "SERVER V20 FINAL 완료",
+        message: `PRECHECK ${precheck.length}종목 · 최종 BUY ${finalBuyCount}종목 · 억지 TOP5 없음`
       });
     } catch (error: any) {
-      const message = error?.message || "스캔 중 오류가 발생했습니다.";
+      const message = error?.message || "SERVER V20 FINAL 스캔 중 오류가 발생했습니다.";
       setScanError(message);
-      addToast?.({ type: "ERROR", title: "AI 스캔 실패", message });
+      addToast?.({ type: "ERROR", title: "V20 스캔 실패", message });
     } finally {
       setIsScanning(false);
     }
   };
 
-  const selectCandidate = (candidate: ScannedCandidate) => {
+  const selectCandidate = (candidate: PrecheckCandidate) => {
     setSelectedSymbol?.(candidate.symbol);
-    window.dispatchEvent(
-      new CustomEvent("verified-ai-candidate-selected", {
-        detail: {
-          symbol: candidate.symbol,
-          score: candidate.result.score,
-          decision: candidate.result.decision,
-        },
-      }),
-    );
+    window.dispatchEvent(new CustomEvent("verified-ai-candidate-selected", {
+      detail: {
+        symbol: candidate.symbol,
+        score: candidate.finalDecision?.aiScore ?? null,
+        decision: candidate.finalDecision?.action ?? "WATCH",
+        finalAuthority: candidate.finalDecision ? "SERVER_V20_FINAL" : "SERVER_V20_PENDING",
+        dataStatus: candidate.finalDecision?.dataStatus || candidate.dataStatus
+      }
+    }));
   };
 
   const topFive = results
-    .filter((x) => x.result.decision !== "NO_BUY")
+    .filter((x) => isFinalBuy(x) || x.finalDecision?.action === "WATCH")
     .slice(0, 5);
 
   return (
-    <section className="w-full bg-slate-950 text-white border-b border-slate-800">
-      <div className="max-w-[1600px] mx-auto px-4 md:px-6 py-5">
-        <div className="flex flex-col lg:flex-row lg:items-center gap-4 justify-between">
+    <section className="w-full border-b border-slate-800 bg-slate-950 text-white">
+      <div className="mx-auto max-w-[1600px] px-4 py-5 md:px-6">
+        <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
           <div>
-            <div className="flex items-center gap-2 text-cyan-300 text-xs font-bold tracking-[0.2em] uppercase">
-              <Radar size={15} /> Verified Opportunity Scanner
-            </div>
-            <h2 className="mt-2 text-2xl md:text-3xl font-black tracking-tight">
-              실시간 데이터 기반 AI 종목 스캔
-            </h2>
-            <p className="mt-1 text-sm text-slate-400 max-w-3xl">
-              일봉 조건을 먼저 검증하고 상위 후보에만 5분 완료봉 ORB · Opening Drive · VWAP Retest · First Pullback을 추가 확인합니다.
-            </p>
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-cyan-300"><Radar size={15} /> SERVER V20 FINAL AUTHORITY</div>
+            <h2 className="mt-2 text-2xl font-black tracking-tight md:text-3xl">AI BUY & HOLD 최종판정</h2>
+            <p className="mt-1 max-w-3xl text-sm text-slate-400">PRECHECK는 후보 압축만 합니다. BUY/STRONG BUY는 반드시 `/api/v20/final-buy-hold`의 SERVER_V20_FINAL 응답으로만 표시합니다. MTF·실행패턴·실데이터가 부족하면 WATCH로 남습니다.</p>
           </div>
-
-          <button
-            type="button"
-            onClick={handleScan}
-            disabled={isScanning}
-            className="shrink-0 inline-flex items-center justify-center gap-2 rounded-2xl bg-cyan-400 px-6 py-4 font-black text-slate-950 shadow-lg shadow-cyan-500/10 hover:bg-cyan-300 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isScanning ? <Loader2 size={20} className="animate-spin" /> : <Play size={20} fill="currentColor" />}
-            {isScanning ? "AI 스캔 중" : "AI 종목 스캔 시작"}
+          <button type="button" onClick={handleScan} disabled={isScanning} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-cyan-400 px-6 py-4 font-black text-slate-950 disabled:opacity-50">
+            {isScanning ? <Loader2 size={20} className="animate-spin" /> : <Play size={20} fill="currentColor" />}{isScanning ? "FINAL 검증 중" : "AI BUY & HOLD 스캔"}
           </button>
         </div>
 
-        {progress.total > 0 && (
-          <div className="mt-5">
-            <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-              <span>일봉 검증 진행</span>
-              <span>{progress.current} / {progress.total}</span>
-            </div>
-            <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
-              <div
-                className="h-full bg-cyan-400 transition-all duration-300"
-                style={{ width: `${Math.round((progress.current / progress.total) * 100)}%` }}
-              />
-            </div>
+        {scanError && <div className="mt-4 flex gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200"><AlertTriangle size={18} /><span>{scanError}</span></div>}
+
+        {!isScanning && results.length > 0 && <>
+          <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+            <Stat label="FINAL 검증" value={`${results.length}`} icon={<Activity size={17} />} />
+            <Stat label="최종 BUY" value={`${buyCount}`} icon={<ShieldCheck size={17} />} />
+            <Stat label="WATCH/미검증" value={`${watchCount}`} icon={<Target size={17} />} />
+            <Stat label="마지막 스캔" value={lastScanAt || "-"} icon={<Radar size={17} />} />
           </div>
-        )}
-
-        {scanError && (
-          <div className="mt-4 flex gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-            <AlertTriangle size={18} className="shrink-0" />
-            <span>{scanError}</span>
+          <div className="mt-5 grid grid-cols-1 gap-3 xl:grid-cols-5">
+            {topFive.length === 0 ? <div className="xl:col-span-5 rounded-2xl border border-slate-800 bg-slate-900/70 p-6 text-center text-slate-400">현재 SERVER_V20_FINAL 기준을 통과한 후보가 없습니다. TOP5를 억지로 채우지 않습니다.</div> : topFive.map((candidate, index) => <CandidateCard key={candidate.symbol} rank={index + 1} candidate={candidate} onSelect={() => selectCandidate(candidate)} />)}
           </div>
-        )}
+        </>}
 
-        {!isScanning && results.length > 0 && (
-          <>
-            <div className="mt-5 grid grid-cols-2 md:grid-cols-4 gap-3">
-              <Stat label="검증 완료" value={`${results.length}`} icon={<Activity size={17} />} />
-              <Stat label="BUY APPROVED" value={`${approved.length}`} icon={<CheckCircle2 size={17} />} />
-              <Stat label="5M SETUP" value={`${intradayMatched.length}`} icon={<Clock3 size={17} />} />
-              <Stat label="마지막 스캔" value={lastScanAt || "-"} icon={<ShieldCheck size={17} />} />
-            </div>
-
-            <div className="mt-2 text-[11px] text-slate-500">BUY WATCH {watch.length}종목 · 5분 장중 분석은 상위 비-NO_BUY 후보 최대 8종목에만 수행</div>
-
-            <div className="mt-5 grid grid-cols-1 xl:grid-cols-5 gap-3">
-              {topFive.length === 0 ? (
-                <div className="xl:col-span-5 rounded-2xl border border-slate-800 bg-slate-900/70 p-6 text-center text-slate-400">
-                  현재 필수 조건을 통과한 BUY/BUY WATCH 후보가 없습니다. 조건을 억지로 완화하지 않고 NO BUY로 유지합니다.
-                </div>
-              ) : (
-                topFive.map((candidate, index) => (
-                  <CandidateCard
-                    key={candidate.symbol}
-                    rank={index + 1}
-                    candidate={candidate}
-                    onSelect={() => selectCandidate(candidate)}
-                  />
-                ))
-              )}
-            </div>
-          </>
-        )}
+        {!isScanning && !scanError && lastScanAt && results.length === 0 && <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-900/70 p-6 text-center text-slate-400">현재 최종판정 후보 없음. 근거를 만들어 채우지 않습니다.</div>}
       </div>
     </section>
   );
 };
 
-const Stat: React.FC<{ label: string; value: string; icon: React.ReactNode }> = ({ label, value, icon }) => (
-  <div className="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-3">
-    <div className="flex items-center gap-2 text-slate-400 text-xs">{icon}{label}</div>
-    <div className="mt-1 text-xl font-black text-white">{value}</div>
-  </div>
-);
+const Stat: React.FC<{ label: string; value: string; icon: React.ReactNode }> = ({ label, value, icon }) => <div className="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-3"><div className="flex items-center gap-2 text-xs text-slate-400">{icon}{label}</div><div className="mt-1 text-xl font-black text-white">{value}</div></div>;
 
-const CandidateCard: React.FC<{
-  rank: number;
-  candidate: ScannedCandidate;
-  onSelect: () => void;
-}> = ({ rank, candidate, onSelect }) => {
-  const { result } = candidate;
-  const approved = result.decision === "BUY_APPROVED";
-  const intradayHits = candidate.intraday && !candidate.intraday.blocked ? candidate.intraday.hits : [];
-
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className="text-left rounded-2xl border border-slate-800 bg-slate-900/80 p-4 hover:border-cyan-400/60 hover:bg-slate-900 transition-colors"
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <div className="text-xs text-slate-500 font-bold">TOP {rank} · {candidate.market}</div>
-          <div className="mt-1 font-black truncate">{candidate.name}</div>
-          <div className="text-xs text-slate-400">{candidate.symbol}</div>
-        </div>
-        <div className={`rounded-xl px-2.5 py-1 text-xs font-black ${approved ? "bg-emerald-400 text-emerald-950" : "bg-amber-300 text-amber-950"}`}>
-          {approved ? "BUY" : "WATCH"}
-        </div>
-      </div>
-
-      <div className="mt-4 flex items-end justify-between">
-        <div>
-          <div className="text-xs text-slate-500">VERIFIED SCORE</div>
-          <div className="text-3xl font-black text-cyan-300">{result.score}</div>
-        </div>
-        <div className="text-right">
-          <div className="text-sm font-bold">{compactPrice(result.metrics.close)}</div>
-          <div className="text-xs text-slate-400">D RVOL {result.metrics.rvol.toFixed(2)}x</div>
-        </div>
-      </div>
-
-      <div className="mt-3 flex min-h-7 flex-wrap gap-1.5">
-        {intradayHits.length > 0 ? intradayHits.slice(0, 3).map((hit) => (
-          <span
-            key={hit.id}
-            className={`rounded-md px-2 py-1 text-[9px] font-black ${hit.confidence === "STRONG" ? "bg-emerald-400 text-emerald-950" : "bg-cyan-400/15 text-cyan-200"}`}
-          >
-            5M {INTRADAY_LABELS[hit.id] || hit.id}
-          </span>
-        )) : (
-          <span className="rounded-md bg-slate-800 px-2 py-1 text-[9px] font-bold text-slate-500">
-            5M NO VERIFIED SETUP
-          </span>
-        )}
-      </div>
-
-      <div className="mt-4 space-y-1.5">
-        {result.reasons.slice(0, 3).map((reason) => (
-          <div key={reason} className="flex items-start gap-1.5 text-xs text-slate-300">
-            <TrendingUp size={13} className="mt-0.5 shrink-0 text-emerald-400" />
-            <span>{reason}</span>
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-4 grid grid-cols-3 gap-2 text-[11px]">
-        <Mini label="ENTRY" value={`${compactPrice(result.entryLow)}~${compactPrice(result.entryHigh)}`} />
-        <Mini label="STOP" value={compactPrice(result.stopLoss)} />
-        <Mini label="T1" value={compactPrice(result.target1)} />
-      </div>
-
-      <div className="mt-4 flex items-center justify-between text-xs font-bold text-cyan-300">
-        <span className="inline-flex items-center gap-1"><Sparkles size={13} /> 상세 분석</span>
-        <ChevronRight size={15} />
-      </div>
-    </button>
-  );
+const CandidateCard: React.FC<{ rank: number; candidate: PrecheckCandidate; onSelect: () => void }> = ({ rank, candidate, onSelect }) => {
+  const decision = finalLabel(candidate);
+  const buy = isFinalBuy(candidate);
+  const final = candidate.finalDecision;
+  return <button type="button" onClick={onSelect} className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 text-left hover:border-cyan-400/60">
+    <div className="flex items-start justify-between gap-2"><div><div className="text-xs font-bold text-slate-500">TOP {rank} · {candidate.market}</div><div className="mt-1 truncate font-black">{candidate.name}</div><div className="text-xs text-slate-400">{candidate.symbol}</div></div><div className={`rounded-xl px-2.5 py-1 text-xs font-black ${buy ? "bg-emerald-400 text-emerald-950" : "bg-amber-300 text-amber-950"}`}>{decision}</div></div>
+    <div className="mt-4 flex items-end justify-between"><div><div className="text-xs text-slate-500">FINAL AI SCORE</div><div className="text-3xl font-black text-cyan-300">{final?.aiScore ?? "-"}</div></div><div className="text-right"><div className="text-sm font-bold">{compactPrice(candidate.currentPrice)}</div><div className="text-xs text-slate-400">RVOL {candidate.volumeIncreaseRatio > 0 ? `${candidate.volumeIncreaseRatio.toFixed(2)}x` : "N/A"}</div></div></div>
+    <div className="mt-4 space-y-1.5">
+      {candidate.patternName && <div className="flex items-start gap-1.5 text-xs text-slate-300"><TrendingUp size={13} className="mt-0.5 text-cyan-400" /><span>{candidate.patternName}</span></div>}
+      <div className="text-xs text-slate-400">MTF {final?.trueMtfPassed ? "PASS" : "NOT PASSED"} · 표본 {final?.sampleSize ?? 0} · 승률 {final?.verifiedWinRatePct == null ? "N/A" : `${final.verifiedWinRatePct.toFixed(1)}%`}</div>
+      <div className="text-xs text-slate-400">PF {final?.profitFactor == null ? "N/A" : final.profitFactor.toFixed(2)} · EV {final?.expectancyPct == null ? "N/A" : `${final.expectancyPct.toFixed(2)}%`}</div>
+      {final?.plan?.source === "ATR_STRUCTURE" && <div className="text-xs text-emerald-300">ENTRY {compactPrice(final.plan.entry)} · STOP {compactPrice(final.plan.stop)} · TP1 {compactPrice(final.plan.tp1)} · TP2 {compactPrice(final.plan.tp2)} · TP3 {compactPrice(final.plan.tp3)}</div>}
+      {candidate.finalError && <div className="text-xs text-amber-300">최종검증 미완료: {candidate.finalError}</div>}
+      {final?.blockers?.length ? <div className="text-[11px] text-slate-500">BLOCK: {final.blockers.slice(0, 3).join(" · ")}</div> : null}
+    </div>
+    <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-3 text-xs font-bold text-cyan-300"><span>{final ? "SERVER_V20_FINAL" : "FINAL 검증대기"}</span><ChevronRight size={16} /></div>
+  </button>;
 };
-
-const Mini: React.FC<{ label: string; value: string }> = ({ label, value }) => (
-  <div className="rounded-lg bg-slate-950/70 p-2 min-w-0">
-    <div className="text-slate-600">{label}</div>
-    <div className="mt-0.5 text-slate-300 font-bold truncate">{value}</div>
-  </div>
-);

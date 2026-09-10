@@ -1,0 +1,77 @@
+name: Apply V20 Final Server Integration
+
+on:
+  push:
+    branches:
+      - integration/buymoney-final-buy-hold
+    paths:
+      - scripts/apply-v20-final-server-integration.mjs
+      - scripts/normalize-legacy-pattern-truth.mjs
+      - scripts/patch-v20-mtf-cap-and-no-pattern.mjs
+      - scripts/replace-legacy-explainable-with-real-precheck.mjs
+      - scripts/cleanup-public-stock-routes.mjs
+      - scripts/patch-preset-no-data-type.mjs
+      - .github/workflows/apply-v20-final-server-integration.yml
+  pull_request:
+    branches: [main]
+    types: [reopened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: integration/buymoney-final-buy-hold
+          fetch-depth: 0
+
+      - name: Normalize legacy forced patterns
+        run: node scripts/normalize-legacy-pattern-truth.mjs
+
+      - name: Apply guarded migration only for legacy source shapes
+        run: |
+          if grep -Fq 'volume: item.volumeIncreaseRatio || 1' server.ts \
+            || grep -Fq 'app.post("/api/autotrade/order"' server.ts \
+            || grep -Fq 'liveVolume = 250000' server.ts; then
+            node scripts/apply-v20-final-server-integration.mjs
+          else
+            echo "Legacy guarded migration already satisfied by current V20/main structure."
+          fi
+
+      - name: Apply explicit NO_DATA type migration
+        run: node scripts/patch-preset-no-data-type.mjs
+
+      - name: Apply MTF capacity and no-pattern patch
+        run: node scripts/patch-v20-mtf-cap-and-no-pattern.mjs
+
+      - name: Replace public synthetic scanner and index fallback
+        run: node scripts/replace-legacy-explainable-with-real-precheck.mjs
+
+      - name: Fail closed public stock search and detail fallbacks
+        run: node scripts/cleanup-public-stock-routes.mjs
+
+      - name: Verify intended source changes
+        run: |
+          git diff --check
+          git diff --exit-code -- server/v20/FinalBuyHoldHttpHandlerV20.ts || true
+          if git diff --quiet -- server.ts src/services/GlobalRealtimeScannerV192.ts; then
+            echo "Migration already applied; nothing to commit."
+            exit 0
+          fi
+          git diff -- server.ts src/services/GlobalRealtimeScannerV192.ts
+
+      - name: Commit patched production wiring
+        run: |
+          if git diff --quiet -- server.ts src/services/GlobalRealtimeScannerV192.ts; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server.ts src/services/GlobalRealtimeScannerV192.ts
+          git commit -m "fix(truth): finalize fail-closed public data and V20 wiring"
+          git push origin HEAD:integration/buymoney-final-buy-hold

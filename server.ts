@@ -14,6 +14,7 @@ import { serverRealtimeMarketHubV20 } from "./server/v20/ServerRealtimeMarketHub
 import { serverUpbitRealtimeClientV20 } from "./server/v20/ServerUpbitRealtimeClientV20";
 import { brokerExecutionRuntimeBridgeV20 } from "./server/v20/BrokerExecutionRuntimeBridgeV20";
 import { ServerGlobalRealtimeScannerV20 } from "./server/v20/ServerGlobalRealtimeScannerV20";
+import { finalBuyHoldHttpHandlerV20 } from "./server/v20/FinalBuyHoldHttpHandlerV20";
 import { ServerKISRealtimeClientV20 } from "./server/v20/ServerKISRealtimeClientV20";
 import { KISBrokerGatewayV121 } from "./server/broker/KISBrokerGatewayV121";
 import { DEMO_FIXTURE_STOCKS } from "./src/data/presetStocks.js";
@@ -35,6 +36,9 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json());
+
+// Single production decision boundary. This route never places or simulates orders.
+app.post("/api/v20/final-buy-hold", finalBuyHoldHttpHandlerV20);
 
 // Initialize Gemini SDK lazily
 let aiClient: GoogleGenAI | null = null;
@@ -215,7 +219,7 @@ interface PresetStock {
   technical: {
     rsi: number;
     macd: string; // "Golden Cross" or "Dead Cross" or "Bullish Divergence" etc.
-    bollinger: 'upper' | 'middle' | 'lower';
+    bollinger: 'upper' | 'middle' | 'lower' | 'NO_DATA';
     trend: 'up' | 'down' | 'sideways';
   };
 }
@@ -513,11 +517,18 @@ const liveStockDataCache = new Map<string, { data: PresetStock; expiresAt: numbe
 
 // Fetch live stock and crypto data from primary real-time APIs (Naver Polling, Naver Basic, Upbit, Yahoo)
 async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
+  // PUBLIC_VERIFIED_QUOTE_SANITIZER: public quote endpoints may expose only
+  // provider-verified price fields. Fundamentals/TA placeholders are never truth.
+  const sanitizeVerifiedQuote = (data: PresetStock): PresetStock => ({
+    ...data,
+    per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0,
+    technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
+  });
   const symbol = preset.symbol;
   const now = Date.now();
   const cached = liveStockDataCache.get(symbol);
   if (cached && cached.expiresAt > now) {
-    return cached.data;
+    return sanitizeVerifiedQuote(cached.data);
   }
 
   // 0) Upbit crypto (e.g. KRW-BTC, KRW-ETH, or symbol BTC) -> Real-time Upbit Ticker API
@@ -538,8 +549,8 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
             marketCap: `${Math.round((t.acc_trade_price_24h || 0) / 1e8).toLocaleString()}억원`,
             market: "BTC"
           };
-          liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
-          return stockRes;
+          liveStockDataCache.set(symbol, { data: sanitizeVerifiedQuote(stockRes), expiresAt: Date.now() + 4000 });
+          return sanitizeVerifiedQuote(stockRes);
         }
       }
     } catch (e) {}
@@ -599,8 +610,8 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
               changePct: isDown ? -Math.abs(ratioNum) : Math.abs(ratioNum),
               marketCap: marketCapStr
             };
-            liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
-            return stockRes;
+            liveStockDataCache.set(symbol, { data: sanitizeVerifiedQuote(stockRes), expiresAt: Date.now() + 4000 });
+            return sanitizeVerifiedQuote(stockRes);
           }
         }
       }
@@ -643,8 +654,8 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
               change: changeNum,
               changePct: ratioNum
             };
-            liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
-            return stockRes;
+            liveStockDataCache.set(symbol, { data: sanitizeVerifiedQuote(stockRes), expiresAt: Date.now() + 4000 });
+            return sanitizeVerifiedQuote(stockRes);
           }
         }
       }
@@ -675,8 +686,8 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
               change: changeVal,
               changePct: changePctVal
             };
-            liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
-            return stockRes;
+            liveStockDataCache.set(symbol, { data: sanitizeVerifiedQuote(stockRes), expiresAt: Date.now() + 4000 });
+            return sanitizeVerifiedQuote(stockRes);
           }
         }
       } catch (e) {
@@ -714,8 +725,8 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
                 change: Math.round(signedChange * 100) / 100,
                 changePct: Math.round(signedRatio * 100) / 100
               };
-              liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
-              return stockRes;
+              liveStockDataCache.set(symbol, { data: sanitizeVerifiedQuote(stockRes), expiresAt: Date.now() + 4000 });
+              return sanitizeVerifiedQuote(stockRes);
             }
           }
         }
@@ -742,27 +753,21 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
       const result = data?.chart?.result?.[0];
       if (result && result.meta && result.meta.regularMarketPrice) {
         const meta = result.meta;
-        const currentPrice = meta.regularMarketPrice || preset.price;
-        const prevClose = meta.chartPreviousClose || meta.previousClose || currentPrice;
+        const currentPrice = Number(meta.regularMarketPrice);
+        const prevClose = Number(meta.chartPreviousClose || meta.previousClose);
+        if (!(currentPrice > 0) || !(prevClose > 0)) throw new Error("MISSING_VERIFIED_US_QUOTE_REFERENCE");
         const change = currentPrice - prevClose;
         const changePct = prevClose !== 0 ? (change / prevClose) * 100 : 0;
-        
-        let realRsi = preset.technical.rsi;
-        if (changePct > 1.5) realRsi = Math.min(80, realRsi + 3);
-        else if (changePct < -1.5) realRsi = Math.max(20, realRsi - 3);
         
         const stockRes: PresetStock = {
           ...preset,
           price: Math.round(currentPrice * 100) / 100,
           change: Math.round(change * 100) / 100,
           changePct: Math.round(changePct * 100) / 100,
-          technical: {
-            ...preset.technical,
-            rsi: Math.round(realRsi)
-          }
+          technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
         };
-        liveStockDataCache.set(symbol, { data: stockRes, expiresAt: Date.now() + 4000 });
-        return stockRes;
+        liveStockDataCache.set(symbol, { data: sanitizeVerifiedQuote(stockRes), expiresAt: Date.now() + 4000 });
+        return sanitizeVerifiedQuote(stockRes);
       }
     }
   } catch (err: any) {
@@ -771,9 +776,9 @@ async function fetchLiveStockData(preset: PresetStock): Promise<PresetStock> {
 
   const fallbackCached = liveStockDataCache.get(symbol);
   if (fallbackCached) {
-    return fallbackCached.data;
+    return sanitizeVerifiedQuote(fallbackCached.data);
   }
-  return preset;
+  return sanitizeVerifiedQuote({ ...preset, price: 0, change: 0, changePct: 0, marketCap: "N/A" });
 }
 
 // Pass-through function to preserve exact real market quotes without pseudo-random corruption
@@ -892,8 +897,9 @@ async function fetchIndexData(symbol: string, defaultVal: { value: number; chang
     if (!result) throw new Error("Empty index result");
     
     const meta = result.meta;
-    const current = meta.regularMarketPrice || defaultVal.value;
-    const prev = meta.previousClose || meta.chartPreviousClose || defaultVal.value;
+    const current = Number(meta.regularMarketPrice);
+    const prev = Number(meta.previousClose || meta.chartPreviousClose);
+    if (!(current > 0) || !(prev > 0)) throw new Error("MISSING_VERIFIED_INDEX_PRICE");
     const change = current - prev;
     const pct = prev !== 0 ? (change / prev) * 100 : 0;
     
@@ -903,8 +909,8 @@ async function fetchIndexData(symbol: string, defaultVal: { value: number; chang
       pct: Math.round(pct * 100) / 100
     };
   } catch (err: any) {
-    console.warn(`[Yahoo Finance API] Falling back to index presets for ${symbol}:`, err.message || err);
-    return defaultVal;
+    console.warn(`[Yahoo Finance API] verified index data unavailable for ${symbol}:`, err.message || err);
+    throw err;
   }
 }
 
@@ -1106,141 +1112,94 @@ app.get("/api/broker/v12/account-balance", async (req, res) => {
 
 // AI Explainable Profit Opportunity Scanner Endpoint & YES ONLY Endpoint
 app.get(["/api/explainable-scanner", "/api/yes-only-scanner"], async (req, res) => {
+  // REAL_VERIFIED_PRECHECK_V192: compatibility endpoint for scan-to-review UI only.
+  // It never fabricates candles and never has final BUY authority.
   try {
-    const market = (req.query.market as string || "ALL").toUpperCase();
-    const isYesOnlyRequested = req.path.includes("yes-only") || req.query.yesOnly === "true";
-    const candidatePool: { symbol: string; name: string; market: "KOREA" | "US" | "BTC" }[] = [];
+    const rawMarket = String(req.query.market || "ALL").toUpperCase();
+    const marketFilter = rawMarket === "BTC" || rawMarket === "CRYPTO" || rawMarket === "UPBIT"
+      ? "UPBIT"
+      : rawMarket === "US"
+        ? "US"
+        : rawMarket === "KOREA"
+          ? "KOREA"
+          : "ALL";
+    const yesOnly = req.path.includes("yes-only") || req.query.yesOnly === "true";
+    const scan = await scanGlobalRealtimeHotListV192({
+      marketFilter,
+      exchangeFilter: "ALL",
+      patternFilter: "ALL",
+      minObjectivePct: 0,
+      minSetupScore: 0
+    });
 
-    if (market === "KOREA" || market === "ALL") {
-      KOREA_POPULAR_STOCKS.slice(0, 15).forEach(s => candidatePool.push({ symbol: s.symbol, name: s.name, market: "KOREA" }));
-    }
-    if (market === "US" || market === "ALL") {
-      US_POPULAR_STOCKS.slice(0, 10).forEach(s => candidatePool.push({ symbol: s.symbol, name: s.name, market: "US" }));
-    }
-    if (market === "BTC" || market === "ALL") {
-      candidatePool.push(
-        { symbol: "BTC", name: "비트코인 (Bitcoin)", market: "BTC" },
-        { symbol: "ETH", name: "이더리움 (Ethereum)", market: "BTC" },
-        { symbol: "SOL", name: "솔라나 (Solana)", market: "BTC" },
-        { symbol: "XRP", name: "리플 (XRP)", market: "BTC" }
-      );
-    }
+    const ideas = scan.hotItems.map((item) => {
+      const price = Number(item.currentPrice);
+      const atr = Number(item.metrics?.atr14);
+      const rvol = Number(item.volumeIncreaseRatio);
+      const rsi = Number(item.rsiIndicator);
+      const stop = item.stopLoss == null ? null : Number(item.stopLoss);
+      const target1 = item.targetPrice == null ? null : Number(item.targetPrice);
+      const atrPct = Number.isFinite(atr) && atr > 0 && price > 0 ? (atr / price) * 100 : null;
+      const target2 = Number.isFinite(atr) && atr > 0 && price > 0 ? price + atr * 4.5 : null;
+      const evidenceComplete =
+        item.dataStatus === "REALTIME_VERIFIED" &&
+        price > 0 &&
+        item.volume > 0 &&
+        item.tradeValue > 0 &&
+        Number.isFinite(rvol) && rvol > 0 &&
+        Number.isFinite(rsi) &&
+        atrPct != null &&
+        stop != null && stop > 0 && stop < price &&
+        target1 != null && target1 > price &&
+        item.patternType !== "NO_PATTERN";
+      const strongPrecheck = evidenceComplete && (item.grade === "S" || item.grade === "A");
+      return {
+        symbol: item.symbol,
+        name: item.name,
+        market: item.market === "BTC" ? "BTC" : item.market,
+        score: item.setupScore,
+        grade: item.grade,
+        decision: strongPrecheck ? "REVIEW" : "WATCH",
+        price,
+        changePct: item.priceChange24hPct,
+        entryLow: evidenceComplete ? price : null,
+        entryHigh: evidenceComplete ? price : null,
+        stop,
+        target1,
+        target2,
+        rsi: Number.isFinite(rsi) ? rsi : null,
+        rvol: Number.isFinite(rvol) ? rvol : null,
+        atrPct,
+        pattern: item.patternType,
+        bullishReasons: Array.isArray(item.evidenceList) ? item.evidenceList : [],
+        riskReasons: evidenceComplete ? [] : ["VERIFIED_PRECHECK_EVIDENCE_INCOMPLETE"],
+        thesis: item.reasoning,
+        invalidation: stop != null ? String(stop) : "NO_VERIFIED_STOP",
+        wouldBuy: strongPrecheck,
+        authority: "REAL_PRECHECK_ONLY",
+        finalAuthority: "SERVER_V20_FINAL_REQUIRED"
+      };
+    });
 
-    const ideas: ExplainableTradeIdea[] = [];
-    const rejectedLog: { symbol: string; name: string; reasons: string[] }[] = [];
-
-    for (const item of candidatePool) {
-      try {
-        const dummyPreset: PresetStock = {
-          symbol: item.symbol,
-          name: item.name,
-          market: item.market,
-          price: 10000,
-          change: 0,
-          changePct: 0,
-          marketCap: "1000억",
-          per: 15,
-          pbr: 1.2,
-          roe: 12,
-          debtRatio: 40,
-          revenueGrowth: 10,
-          operatingMargin: 12,
-          news: [],
-          technical: { rsi: 55, macd: "Golden Cross", bollinger: "middle", trend: "up" }
-        };
-
-        const liveData = await fetchLiveStockData(dummyPreset);
-        const currPrice = liveData.price || 10000;
-
-        const records: CandleRecord[] = [];
-        let curr = currPrice * 0.95;
-        const now = Date.now();
-        for (let i = 30; i >= 0; i--) {
-          const rand = (Math.sin(i * 0.7) * 0.015 + (Math.random() - 0.48) * 0.01) * curr;
-          const open = curr;
-          const close = i === 0 ? currPrice : curr + rand;
-          const high = Math.max(open, close) + Math.random() * 0.005 * curr;
-          const low = Math.min(open, close) - Math.random() * 0.005 * curr;
-          const volume = Math.floor(Math.random() * 8000) + 1500;
-          records.push({ open, high, low, close, volume, timestamp: now - i * 60000 });
-          curr = close;
-        }
-
-        const idea = analyzeStockIdea(item.symbol, item.name, item.market, records, currPrice, liveData.changePct);
-        if (idea.wouldBuy && idea.score >= 82) {
-          ideas.push(idea);
-        } else {
-          rejectedLog.push({
-            symbol: item.symbol,
-            name: item.name,
-            reasons: idea.riskReasons.length > 0 ? idea.riskReasons : ["Profit Opportunity Score 기준 (82점) 미달"]
-          });
-          if (!isYesOnlyRequested) {
-            ideas.push(idea);
-          }
-        }
-      } catch (err) {
-        // quiet skip
-      }
-    }
-
-    let topIdeas: ExplainableTradeIdea[] = [];
-    if (isYesOnlyRequested) {
-      topIdeas = filterYesOnlyCandidates(ideas, 5, 82);
-    } else {
-      ideas.sort((a, b) => b.score - a.score);
-      topIdeas = ideas.slice(0, 5);
-    }
-
-    const ai = getAI();
-    if (ai && topIdeas.length > 0 && req.query.aiExplain === "true") {
-      try {
-        const top1 = topIdeas[0];
-        const prompt = `
-[AI Explainable Trading Decision Engine Analysis Request]
-Stock: ${top1.name} (${top1.symbol})
-Opportunity Score: ${top1.score} / 100 [${top1.grade}]
-Decision: ${top1.decision}
-Current Price: ${top1.price.toLocaleString()} KRW
-Would AI Buy: ${top1.wouldBuy ? "YES" : "NO"}
-Bullish Reasons: ${top1.bullishReasons.join(", ")}
-Risk Warnings: ${top1.riskReasons.join(", ")}
-Pattern: ${top1.pattern}
-
-Please provide a concise 3-bullet point executive summary in Korean explaining:
-1. Why this stock was captured by the mathematical scanner.
-2. The core risk factors to watch.
-3. Logical invalidation condition.
-`;
-        const response = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: prompt
-        });
-        if (response.text) {
-          top1.aiSummary = response.text.trim();
-        }
-      } catch (err) {
-        // silent fallback
-      }
-    }
-
+    const ranked = ideas.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+    const topIdeas = (yesOnly ? ranked.filter((idea) => idea.wouldBuy) : ranked).slice(0, 5);
     return res.json({
       success: true,
-      scannedAt: new Date().toLocaleTimeString("ko-KR"),
-      market,
-      isYesOnly: isYesOnlyRequested,
-      totalScanned: candidatePool.length,
+      authority: "REAL_PRECHECK_ONLY",
+      finalAuthority: "SERVER_V20_FINAL_REQUIRED",
+      scannedAt: new Date().toISOString(),
+      totalScanned: scan.scannedTotal,
       passedCount: topIdeas.length,
-      rejectedCount: rejectedLog.length,
-      message: topIdeas.length === 0
-        ? "현재 모든 검증을 통과한 YES 종목 없음 (위험 및 약세 종목 자동 필터링 완료)"
-        : `🔥 YES ONLY 스캐너: ${candidatePool.length}개 종목 검증 완료 → ${topIdeas.length}개 최종 YES 통과`,
+      dataStatus: scan.dataStatus,
       topIdeas
     });
-  } catch (err: any) {
-    return res.status(500).json({
+  } catch (error) {
+    console.error("[REAL PRECHECK] verified scanner unavailable", error);
+    return res.status(503).json({
       success: false,
-      message: err.message || String(err),
+      authority: "REAL_PRECHECK_ONLY",
+      finalAuthority: "SERVER_V20_FINAL_REQUIRED",
+      message: "검증된 실시간 데이터가 없어 PRECHECK를 생성하지 않았습니다.",
       topIdeas: []
     });
   }
@@ -1314,7 +1273,7 @@ app.get("/api/market/naver-batch", async (req, res) => {
                   nameKor: data.stockExchangeType?.nameKor || "코스피"
                 },
                 marketValueFull: data.marketValue || "실시간 연동",
-                accumulatedTradingVolume: data.accumulatedTradingVolume || "1,000"
+                accumulatedTradingVolume: data.accumulatedTradingVolume || "0"
               };
             }
           }
@@ -1329,27 +1288,8 @@ app.get("/api/market/naver-batch", async (req, res) => {
     }
   } catch (err) {}
 
-  // Tier 3: Internal Universe fallback to ensure 100% endpoint reliability
-  const universeFallback = codeList.map((code) => {
-    const preset = DEMO_STOCKS.find((p) => p.symbol === code);
-    const pPrice = preset?.price || 50000;
-    return {
-      itemCode: code,
-      stockName: preset?.name || `종목_${code}`,
-      closePrice: String(pPrice),
-      closePriceRaw: String(pPrice),
-      compareToPreviousClosePrice: "500",
-      compareToPreviousClosePriceRaw: "500",
-      fluctuationsRatio: "1.00",
-      fluctuationsRatioRaw: "1.00",
-      compareToPreviousPrice: { code: "2", name: "RISING" },
-      stockExchangeType: { nameKor: "코스피" },
-      marketValueFull: "실시간 연동",
-      accumulatedTradingVolume: "1,000,000"
-    };
-  });
-
-  return res.json({ datas: universeFallback });
+  // No synthetic Tier 3. Missing providers remain NO_DATA.
+  return res.status(503).json({ datas: [], dataStatus: "NO_DATA", source: "NAVER_REAL_ONLY" });
 });
 
 let cachedUpbitMarkets: { market: string; korean_name: string; english_name: string }[] = [];
@@ -1396,7 +1336,7 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
             marketCap: 'N/A',
             per: 15, pbr: 1.2, roe: 10, debtRatio: 20, revenueGrowth: 5, operatingMargin: 10,
             news: [],
-            technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+            technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
           };
           return await fetchLiveStockData(baseItem);
         })
@@ -1411,19 +1351,20 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
   if (!queryVal) {
     if (marketFilter === "UPBIT") {
       const upbitPresets: PresetStock[] = [
-        { symbol: "KRW-BTC", name: "비트코인 (Bitcoin)", market: "BTC", price: 108000000, change: 0, changePct: 0, marketCap: "2,000조원", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 55, macd: "Bullish", bollinger: "upper", trend: "up" } },
-        { symbol: "KRW-ETH", name: "이더리움 (Ethereum)", market: "BTC", price: 3850000, change: 0, changePct: 0, marketCap: "450조원", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 52, macd: "Bullish", bollinger: "middle", trend: "up" } },
-        { symbol: "KRW-SOL", name: "솔라나 (Solana)", market: "BTC", price: 215000, change: 0, changePct: 0, marketCap: "95조원", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 61, macd: "Bullish", bollinger: "upper", trend: "up" } },
-        { symbol: "KRW-XRP", name: "리플 (Ripple)", market: "BTC", price: 820, change: 0, changePct: 0, marketCap: "48조원", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 48, macd: "Neutral", bollinger: "middle", trend: "sideways" } },
-        { symbol: "KRW-DOGE", name: "도지코인 (Dogecoin)", market: "BTC", price: 165, change: 0, changePct: 0, marketCap: "24조원", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 54, macd: "Bullish", bollinger: "middle", trend: "up" } },
-        { symbol: "KRW-ADA", name: "에이다 (Cardano)", market: "BTC", price: 540, change: 0, changePct: 0, marketCap: "19조원", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 49, macd: "Neutral", bollinger: "middle", trend: "sideways" } },
-        { symbol: "KRW-AVAX", name: "아발란체 (Avalanche)", market: "BTC", price: 34000, change: 0, changePct: 0, marketCap: "14조원", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 53, macd: "Bullish", bollinger: "middle", trend: "up" } },
+        { symbol: "KRW-BTC", name: "비트코인 (Bitcoin)", market: "BTC", price: 0, change: 0, changePct: 0, marketCap: "N/A", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" } },
+        { symbol: "KRW-ETH", name: "이더리움 (Ethereum)", market: "BTC", price: 0, change: 0, changePct: 0, marketCap: "N/A", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" } },
+        { symbol: "KRW-SOL", name: "솔라나 (Solana)", market: "BTC", price: 0, change: 0, changePct: 0, marketCap: "N/A", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" } },
+        { symbol: "KRW-XRP", name: "리플 (Ripple)", market: "BTC", price: 0, change: 0, changePct: 0, marketCap: "N/A", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" } },
+        { symbol: "KRW-DOGE", name: "도지코인 (Dogecoin)", market: "BTC", price: 0, change: 0, changePct: 0, marketCap: "N/A", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" } },
+        { symbol: "KRW-ADA", name: "에이다 (Cardano)", market: "BTC", price: 0, change: 0, changePct: 0, marketCap: "N/A", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" } },
+        { symbol: "KRW-AVAX", name: "아발란체 (Avalanche)", market: "BTC", price: 0, change: 0, changePct: 0, marketCap: "N/A", per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0, news: [], technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" } },
       ];
       try {
         const liveUpbit = await Promise.all(upbitPresets.map(stock => fetchLiveStockData(stock)));
         return res.json(liveUpbit);
       } catch (e) {
-        return res.json(upbitPresets);
+        console.warn("[Stock Search] verified Upbit quotes unavailable", e);
+        return res.status(503).json([]);
       }
     }
 
@@ -1437,7 +1378,8 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
       );
       return res.json(liveStocks);
     } catch (e) {
-      return res.json(DEMO_STOCKS);
+      console.warn("[Stock Search] verified market quotes unavailable", e);
+      return res.status(503).json([]);
     }
   }
 
@@ -1459,13 +1401,13 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
           symbol: u.market,
           name: `${u.korean_name} (${u.market.replace("KRW-", "")})`,
           market: "BTC",
-          price: 1000,
+          price: 0,
           change: 0,
           changePct: 0,
           marketCap: "N/A",
           per: 0, pbr: 0, roe: 0, debtRatio: 0, revenueGrowth: 0, operatingMargin: 0,
           news: [],
-          technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+          technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
         });
       });
     } catch (e) {}
@@ -1486,13 +1428,13 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
           symbol: k.symbol,
           name: k.name,
           market: 'KOREA',
-          price: 50000,
+          price: 0,
           change: 0,
           changePct: 0,
           marketCap: 'N/A',
           per: 12, pbr: 1.1, roe: 10, debtRatio: 30, revenueGrowth: 5, operatingMargin: 10,
           news: [],
-          technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+          technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
         });
       }
     }
@@ -1526,7 +1468,7 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
                 marketCap: item[2] || '국내주식',
                 per: 15, pbr: 1.2, roe: 10, debtRatio: 20, revenueGrowth: 5, operatingMargin: 10,
                 news: [],
-                technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+                technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
               });
             }
           }
@@ -1569,7 +1511,7 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
               marketCap: 'KOSPI/KOSDAQ',
               per: 15, pbr: 1.2, roe: 10, debtRatio: 20, revenueGrowth: 5, operatingMargin: 10,
               news: [],
-              technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+              technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
             });
           }
         }
@@ -1587,13 +1529,13 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
           symbol: u.symbol,
           name: u.name,
           market: 'US',
-          price: 150,
+          price: 0,
           change: 0,
           changePct: 0,
           marketCap: 'N/A',
           per: 25, pbr: 3, roe: 15, debtRatio: 20, revenueGrowth: 10, operatingMargin: 15,
           news: [],
-          technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+          technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
         });
       }
     }
@@ -1606,13 +1548,13 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
         symbol: queryVal,
         name: `${queryVal} (한국 주식)`,
         market: 'KOREA',
-        price: 10000,
+        price: 0,
         change: 0,
         changePct: 0,
         marketCap: 'N/A',
         per: 15, pbr: 1.2, roe: 10, debtRatio: 20, revenueGrowth: 5, operatingMargin: 10,
         news: [],
-        technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+        technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
       });
     } else if (/^[A-Za-z]{1,5}$/.test(queryVal)) {
       const symUpper = queryVal.toUpperCase();
@@ -1620,13 +1562,13 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
         symbol: symUpper,
         name: resolveStockName(symUpper, `${symUpper} Corp.`, 'US'),
         market: 'US',
-        price: 100,
+        price: 0,
         change: 0,
         changePct: 0,
         marketCap: 'N/A',
         per: 20, pbr: 2, roe: 12, debtRatio: 25, revenueGrowth: 8, operatingMargin: 12,
         news: [],
-        technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+        technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
       });
     }
   }
@@ -1640,8 +1582,8 @@ app.get(["/api/stocks", "/api/stocks/search"], async (req, res) => {
     );
     res.json(liveResults);
   } catch (e) {
-    console.error("Live stock search failed, falling back to candidates:", e);
-    res.json(topCandidates);
+    console.error("Live stock search failed; returning NO_DATA instead of seed candidates:", e);
+    res.status(503).json([]);
   }
 });
 
@@ -1659,7 +1601,7 @@ app.get("/api/stocks/:symbol", async (req, res) => {
       symbol: resolvedSymbol,
       name: resolvedName,
       market: marketType,
-      price: marketType === "KOREA" ? 50000 : marketType === "BTC" ? 100000000 : 100,
+      price: 0,
       change: 0,
       changePct: 0,
       marketCap: "실시간 연동",
@@ -1670,7 +1612,7 @@ app.get("/api/stocks/:symbol", async (req, res) => {
       revenueGrowth: 5,
       operatingMargin: 10,
       news: [],
-      technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
+      technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
     };
   }
   
@@ -1736,12 +1678,12 @@ app.get("/api/stocks/:symbol", async (req, res) => {
         }
       }
     } catch (err: any) {
-      // Quiet fallback to synthetic history
+      console.warn(`[Stock Detail] verified history unavailable for ${tickedPreset.symbol}:`, err?.message || err);
     }
   }
   
   if (!history || history.length === 0) {
-    history = generateHistory(tickedPreset.price, 30);
+    history = [];
   }
   
   // Update the last element of history with current live ticked price
@@ -1749,8 +1691,11 @@ app.get("/api/stocks/:symbol", async (req, res) => {
     history[history.length - 1].price = tickedPreset.price;
   }
   
+  const detailDataValid = Number(tickedPreset.price) > 0 && history.length > 0;
   res.json({
     ...tickedPreset,
+    dataValid: detailDataValid,
+    dataStatus: detailDataValid ? "REALTIME_VERIFIED" : "NO_DATA",
     history
   });
 });
@@ -1762,7 +1707,7 @@ app.get("/api/market/realtime-candles", async (req, res) => {
   try {
     const rawSymbol = String(req.query.symbol || "005930").trim();
     const timeframe = String(req.query.timeframe || "D").trim();
-    const requestedCount = Math.min(Math.max(parseInt(String(req.query.count || "60"), 10) || 60, 15), 120);
+    const requestedCount = Math.min(Math.max(parseInt(String(req.query.count || "60"), 10) || 60, 15), 240);
 
     // Auto-detect market
     const isUpbit = rawSymbol.startsWith("KRW-") || 
@@ -1964,7 +1909,8 @@ app.get("/api/market/realtime-candles", async (req, res) => {
                     const o = Math.round(quote.open?.[i] || c);
                     const h = Math.round(quote.high?.[i] || Math.max(o, c));
                     const l = Math.round(quote.low?.[i] || Math.min(o, c));
-                    const v = Math.round(quote.volume?.[i] || 1000);
+                    const rawVolume = quote.volume?.[i];
+                    const v = typeof rawVolume === "number" && Number.isFinite(rawVolume) && rawVolume > 0 ? Math.round(rawVolume) : 0;
                     parsed.push({
                       time: timeLabel,
                       timestamp: timestamps[i] * 1000,
@@ -2044,7 +1990,8 @@ app.get("/api/market/realtime-candles", async (req, res) => {
                 const o = +(quote.open?.[i] || c).toFixed(2);
                 const h = +(quote.high?.[i] || Math.max(o, c)).toFixed(2);
                 const l = +(quote.low?.[i] || Math.min(o, c)).toFixed(2);
-                const v = Math.round(quote.volume?.[i] || 1000);
+                const rawVolume = quote.volume?.[i];
+                    const v = typeof rawVolume === "number" && Number.isFinite(rawVolume) && rawVolume > 0 ? Math.round(rawVolume) : 0;
                 parsed.push({
                   time: timeLabel,
                   timestamp: timestamps[i] * 1000,
@@ -2340,7 +2287,8 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
                   const o = Math.round(quote.open?.[idx] || c);
                   const h = Math.round(quote.high?.[idx] || Math.max(o, c));
                   const l = Math.round(quote.low?.[idx] || Math.min(o, c));
-                  const v = Math.round(quote.volume?.[idx] || 10000);
+                  const rawVolume = quote.volume?.[idx];
+                  const v = typeof rawVolume === "number" && Number.isFinite(rawVolume) && rawVolume > 0 ? Math.round(rawVolume) : 0;
                   return { time: dateStr, open: o, high: h, low: l, close: c, volume: v };
                 }).filter((c: any) => c.close > 0);
               }
@@ -2385,7 +2333,8 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
               const o = +(quote.open?.[idx] || c).toFixed(2);
               const h = +(quote.high?.[idx] || Math.max(o, c)).toFixed(2);
               const l = +(quote.low?.[idx] || Math.min(o, c)).toFixed(2);
-              const v = Math.round(quote.volume?.[idx] || 1000);
+              const rawVolume = quote.volume?.[idx];
+              const v = typeof rawVolume === "number" && Number.isFinite(rawVolume) && rawVolume > 0 ? Math.round(rawVolume) : 0;
               return { time: dateStr, open: o, high: h, low: l, close: c, volume: v };
             }).filter((c: any) => c.close > 0);
           }
@@ -2395,40 +2344,20 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
       }
     }
 
-    // Fallback if APIs were unreachable: fetch live quote via fetchLiveStockData
-    if (!livePrice) {
-      const dummyPreset: PresetStock = {
+    // Truth-first hard gate. Quant factors require provider-backed price,
+    // absolute volume and enough real OHLCV history. Missing evidence is NO_DATA.
+    const realVolumeCandles = candles.filter(c => Number.isFinite(c.volume) && c.volume > 0);
+    if (!(livePrice > 0) || !(liveVolume > 0) || candles.length < 20 || realVolumeCandles.length < 5) {
+      return res.status(200).json({
         symbol: rawSymbol,
         name: resolvedName,
         market: marketType,
-        price: 0,
-        change: 0,
-        changePct: 0,
-        marketCap: "N/A",
-        per: 15, pbr: 1.2, roe: 10, debtRatio: 20, revenueGrowth: 5, operatingMargin: 10,
-        news: [],
-        technical: { rsi: 50, macd: "Bullish", bollinger: "middle", trend: "up" }
-      };
-      const fetchedLive = await fetchLiveStockData(dummyPreset);
-      livePrice = fetchedLive.price || 0;
-      liveChangePct = fetchedLive.changePct || 0;
-      liveChangePrice = fetchedLive.change || 0;
-      liveOpen = Math.round(livePrice * 0.98);
-      liveHigh = Math.round(livePrice * 1.02);
-      liveLow = Math.round(livePrice * 0.97);
-      liveVolume = 250000;
-      liveTradingValue = 1200;
-    }
-
-    // Do not fabricate synthetic bars if empty
-    if (candles.length === 0 && livePrice > 0) {
-      candles.push({
-        time: "1m",
-        open: liveOpen || livePrice,
-        high: liveHigh || livePrice,
-        low: liveLow || livePrice,
-        close: livePrice,
-        volume: liveVolume || 0
+        dataValid: false,
+        dataStatus: "NO_DATA",
+        reason: "INSUFFICIENT_VERIFIED_QUANT_MARKET_DATA",
+        currentPrice: livePrice > 0 ? livePrice : 0,
+        volume: liveVolume > 0 ? liveVolume : 0,
+        candles: []
       });
     }
 
@@ -2446,10 +2375,13 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
     // =========================================================================
 
     // 1. RVOL (Relative Volume Calculation: Current / 20-period Average Volume)
-    const recentVolumes = candles.map(c => c.volume);
-    const avgVol = recentVolumes.length > 1 ? recentVolumes.reduce((a, b) => a + b, 0) / recentVolumes.length : 10000;
-    const currentVol = candles[candles.length - 1]?.volume || avgVol;
-    const rvol = +(Math.max(0.5, currentVol / (avgVol || 1))).toFixed(2);
+    const recentVolumes = candles.map(c => c.volume).filter(v => Number.isFinite(v) && v > 0);
+    const avgVol = recentVolumes.reduce((a, b) => a + b, 0) / recentVolumes.length;
+    const currentVol = candles[candles.length - 1]?.volume;
+    if (!(avgVol > 0) || !(currentVol > 0)) {
+      return res.status(200).json({ symbol: rawSymbol, name: resolvedName, market: marketType, dataValid: false, dataStatus: "NO_DATA", reason: "INVALID_VERIFIED_VOLUME_HISTORY" });
+    }
+    const rvol = +(currentVol / avgVol).toFixed(2);
 
     // 2. Real VWAP Calculation
     let sumTypicalVol = 0;
@@ -2497,7 +2429,7 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
     const c2 = candles[n - 2] || c1;
     const c3 = candles[n - 3] || c2;
 
-    let detectedCandlePattern = "Bullish Engulfing (상승 장악형)";
+    let detectedCandlePattern = "NO_PATTERN";
     const body1 = c1.close - c1.open;
     const body2 = c2.close - c2.open;
     const lowerShadow1 = Math.min(c1.open, c1.close) - c1.low;
@@ -2520,11 +2452,11 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
     } else if (Math.abs(c1.low - c2.low) <= (totalRange1 * 0.05)) {
       detectedCandlePattern = "Tweezer Bottom (집게형 바닥)";
     } else {
-      detectedCandlePattern = liveChangePct >= 0 ? "Bullish Engulfing (상승 장악형)" : "Tweezer Bottom (집게형 바닥)";
+      detectedCandlePattern = "NO_PATTERN";
     }
 
     // 6. Real Chart Pattern Recognition
-    let detectedChartPattern = "Double Bottom (더블 바텀)";
+    let detectedChartPattern = "NO_PATTERN";
     if (stock20dReturn > 15 && Math.abs(liveChangePct) < 3) {
       detectedChartPattern = "Bullish Pennant (강세 페넌트)";
     } else if (stock20dReturn > 8 && rvol >= 2.0) {
@@ -2534,7 +2466,7 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
     } else if (sslSwept) {
       detectedChartPattern = "Double Bottom (더블 바텀 반등)";
     } else {
-      detectedChartPattern = "Inverse Head & Shoulders (역H&S 반전)";
+      detectedChartPattern = "NO_PATTERN";
     }
 
     // 7. Real 30-Minute Market Open Rule Determination
@@ -2561,7 +2493,7 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
       );
       sumTr += tr;
     }
-    const atr = candles.length > 1 ? +(sumTr / (candles.length - 1)).toFixed(2) : +(livePrice * 0.03).toFixed(2);
+    const atr = +(sumTr / (candles.length - 1)).toFixed(2);
 
     const isUs = marketType === "US";
     const necklinePrice = isUs
@@ -2584,7 +2516,7 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
     else score += 12;
 
     // Factor 2: Candlestick Confirmation (Max 20 pts)
-    score += 20;
+    if (detectedCandlePattern !== "NO_PATTERN") score += 20;
 
     // Factor 3: RVOL & Trading Value (Max 20 pts)
     if (rvol >= 3.0) score += 20;
@@ -2643,7 +2575,7 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
       low: c.low,
       close: c.close,
       volume: c.volume,
-      candleTag: idx === candles.length - 1 ? detectedCandlePattern.split(" ")[0] : undefined,
+      candleTag: idx === candles.length - 1 && detectedCandlePattern !== "NO_PATTERN" ? detectedCandlePattern.split(" ")[0] : undefined,
       entryLine: necklinePrice,
       stopLossLine: stopLossPrice,
       target1Line: targetPrice1,
@@ -2703,7 +2635,7 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
       score,
       grade,
       status,
-      isTradeable: score >= 75 && rule30MinId !== "rule_rise_drop" && rule30MinId !== "rule_drop_fail",
+      isTradeable: detectedCandlePattern !== "NO_PATTERN" && detectedChartPattern !== "NO_PATTERN" && score >= 75 && rule30MinId !== "rule_rise_drop" && rule30MinId !== "rule_drop_fail",
       chartSeries,
       analyzedAt: new Date().toLocaleTimeString()
     });
@@ -3605,7 +3537,7 @@ const autoTradeLogsStore: Array<{
   reasons: string[];
 }> = [];
 
-app.post("/api/autotrade/order", (req, res) => {
+app.post("/api/legacy/simulated-autotrade/order", (req, res) => {
   const payload = req.body as AutoTradeOrderRequest;
   if (!payload || !payload.symbol || !payload.price) {
     return res.status(400).json({ success: false, error: "Symbol and price are required for auto-trade order execution." });
@@ -3655,7 +3587,7 @@ app.post("/api/autotrade/order", (req, res) => {
     masterScore: payload.masterScore,
     tier: payload.tier || 'S_TIER',
     status: 'EXECUTED' as const,
-    brokerResponse: `✅ [한국투자증권 REST API] 체결 완료 - 계좌 번호: 50123984-01 | 체결가: ${payload.price.toLocaleString()}원 | 수량: ${qty}주`,
+    brokerResponse: `[SIMULATION_ONLY] 가상 체결 기록 · 가격 ${payload.price.toLocaleString()} · 수량 ${qty}`,
     reasons: payload.reasons || ["단일 뇌엔진 컨센서스 통과"]
   };
 
@@ -3666,11 +3598,11 @@ app.post("/api/autotrade/order", (req, res) => {
     success: true,
     status: "EXECUTED",
     log: executedLog,
-    message: "단일 마스터 뇌엔진 컨센서스 통과: 자율 주문이 성공적으로 체결되었습니다."
+    message: "SIMULATION_ONLY: 실제 브로커 주문이 전송되지 않았습니다."
   });
 });
 
-app.get("/api/autotrade/status", (req, res) => {
+app.get("/api/legacy/simulated-autotrade/status", (req, res) => {
   return res.json({
     active: true,
     engineName: "Single Omni-Brain AI Master Intelligence Engine",
@@ -3835,7 +3767,7 @@ JSON 구조 요구사항:
               price: st.price || 45000,
               change: 1000,
               changePct: st.changePct || 2.5,
-              marketCap: "N/A", per: 15, pbr: 1.2, roe: 10, debtRatio: 20, revenueGrowth: 10, operatingMargin: 12, news: [], technical: { rsi: 55, macd: "Bullish", bollinger: "middle", trend: "up" }
+              marketCap: "N/A", per: 15, pbr: 1.2, roe: 10, debtRatio: 20, revenueGrowth: 10, operatingMargin: 12, news: [], technical: { rsi: 0, macd: "NO_DATA", bollinger: "NO_DATA", trend: "sideways" }
             };
             const live = await fetchLiveStockData(preset as PresetStock).catch(() => ({ price: st.price, changePct: st.changePct }));
             return {
@@ -3912,59 +3844,59 @@ JSON 구조 요구사항:
   // Master List of 100+ Real Listed Stocks across KOSPI, KOSDAQ, US, Upbit
   const ALL_REAL_STOCKS_MASTER = [
     // 반도체 & HBM & 소부장
-    { symbol: "005930", name: "삼성전자", market: "KOSPI", price: 78500, changePct: 1.42, category: "반도체/파운드리", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "468.2조원", tags: ["삼성", "반도체", "hbm", "파운드리", "메모리", "대장주", "냉각", "방열", "cxl"] },
-    { symbol: "000660", name: "SK하이닉스", market: "KOSPI", price: 198500, changePct: 2.10, category: "AI 반도체", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "144.5조원", tags: ["sk", "하이닉스", "반도체", "hbm", "dram", "ai", "cxl", "유리기판"] },
-    { symbol: "042700", name: "한미반도체", market: "KOSPI", price: 135000, changePct: 3.80, category: "HBM 장비", capGroup: "MID", capGroupKo: "중형주", marketCap: "13.1조원", tags: ["한미반도체", "hbm", "tc본더", "반도체장비", "냉각"] },
+    { symbol: "005930", name: "삼성전자", market: "KOSPI", price: 78500, changePct: 1.42, category: "반도체/파운드리", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["삼성", "반도체", "hbm", "파운드리", "메모리", "대장주", "냉각", "방열", "cxl"] },
+    { symbol: "000660", name: "SK하이닉스", market: "KOSPI", price: 198500, changePct: 2.10, category: "AI 반도체", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["sk", "하이닉스", "반도체", "hbm", "dram", "ai", "cxl", "유리기판"] },
+    { symbol: "042700", name: "한미반도체", market: "KOSPI", price: 135000, changePct: 3.80, category: "HBM 장비", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["한미반도체", "hbm", "tc본더", "반도체장비", "냉각"] },
     { symbol: "399720", name: "가온칩스", market: "KOSDAQ", price: 82500, changePct: 4.50, category: "디자인하우스", capGroup: "MID", capGroupKo: "중형주", marketCap: "9,500억원", tags: ["가온칩스", "디자인하우스", "팹리스", "삼성파운드리"] },
     { symbol: "394280", name: "오픈엣지테크놀로지", market: "KOSDAQ", price: 21500, changePct: 5.20, category: "AI IP", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "4,600억원", tags: ["오픈엣지", "팹리스", "ip", "cxl", "npu"] },
-    { symbol: "025770", name: "리노공업", market: "KOSDAQ", price: 210000, changePct: 2.80, category: "반도체 소켓", capGroup: "MID", capGroupKo: "중형주", marketCap: "3.2조원", tags: ["리노공업", "리노핀", "소켓", "테스트"] },
-    { symbol: "089030", name: "테크윙", market: "KOSDAQ", price: 38500, changePct: 6.10, category: "HBM 검사장비", capGroup: "MID", capGroupKo: "중형주", marketCap: "1.4조원", tags: ["테크윙", "hbm", "핸들러", "검사장비"] },
+    { symbol: "025770", name: "리노공업", market: "KOSDAQ", price: 210000, changePct: 2.80, category: "반도체 소켓", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["리노공업", "리노핀", "소켓", "테스트"] },
+    { symbol: "089030", name: "테크윙", market: "KOSDAQ", price: 38500, changePct: 6.10, category: "HBM 검사장비", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["테크윙", "hbm", "핸들러", "검사장비"] },
     { symbol: "161580", name: "필옵틱스", market: "KOSDAQ", price: 24500, changePct: 7.20, category: "유리기판", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "5,800억원", tags: ["필옵틱스", "유리기판", "tgv", "레이저"] },
 
     // 2차전지 & 배터리 & 리튬
-    { symbol: "373220", name: "LG에너지솔루션", market: "KOSPI", price: 342000, changePct: 0.88, category: "배터리 셀", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "80.0조원", tags: ["lg", "lg엔솔", "배터리", "2차전지", "전기차"] },
-    { symbol: "247540", name: "에코프로비엠", market: "KOSDAQ", price: 185000, changePct: 2.30, category: "양극재", capGroup: "MID", capGroupKo: "중형주", marketCap: "18.1조원", tags: ["에코프로", "에코프로비엠", "양극재", "2차전지", "코스닥"] },
-    { symbol: "086520", name: "에코프로", market: "KOSDAQ", price: 92000, changePct: 3.12, category: "2차전지 지주사", capGroup: "MID", capGroupKo: "중형주", marketCap: "12.2조원", tags: ["에코프로", "지주사", "2차전지", "리튬"] },
-    { symbol: "003670", name: "포스코퓨처엠", market: "KOSPI", price: 245000, changePct: 1.80, category: "음/양극재", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "18.9조원", tags: ["포스코", "퓨처엠", "양극재", "음극재", "배터리"] },
-    { symbol: "066970", name: "엘앤에프", market: "KOSPI", price: 112000, changePct: 2.10, category: "양극재", capGroup: "MID", capGroupKo: "중형주", marketCap: "4.1조원", tags: ["엘앤에프", "양극재", "테슬라 supply", "2차전지"] },
-    { symbol: "006400", name: "삼성SDI", market: "KOSPI", price: 382000, changePct: 1.50, category: "전고체 배터리", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "26.2조원", tags: ["삼성", "삼성sdi", "전고체", "배터리", "2차전지"] },
-    { symbol: "457190", name: "이수스페셜티케미컬", market: "KOSDAQ", price: 42500, changePct: 8.10, category: "전고체 황화물", capGroup: "MID", capGroupKo: "중형주", marketCap: "1.2조원", tags: ["이수", "전고체", "황화리튬", "배터리소재"] },
+    { symbol: "373220", name: "LG에너지솔루션", market: "KOSPI", price: 342000, changePct: 0.88, category: "배터리 셀", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["lg", "lg엔솔", "배터리", "2차전지", "전기차"] },
+    { symbol: "247540", name: "에코프로비엠", market: "KOSDAQ", price: 185000, changePct: 2.30, category: "양극재", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["에코프로", "에코프로비엠", "양극재", "2차전지", "코스닥"] },
+    { symbol: "086520", name: "에코프로", market: "KOSDAQ", price: 92000, changePct: 3.12, category: "2차전지 지주사", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["에코프로", "지주사", "2차전지", "리튬"] },
+    { symbol: "003670", name: "포스코퓨처엠", market: "KOSPI", price: 245000, changePct: 1.80, category: "음/양극재", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["포스코", "퓨처엠", "양극재", "음극재", "배터리"] },
+    { symbol: "066970", name: "엘앤에프", market: "KOSPI", price: 112000, changePct: 2.10, category: "양극재", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["엘앤에프", "양극재", "테슬라 supply", "2차전지"] },
+    { symbol: "006400", name: "삼성SDI", market: "KOSPI", price: 382000, changePct: 1.50, category: "전고체 배터리", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["삼성", "삼성sdi", "전고체", "배터리", "2차전지"] },
+    { symbol: "457190", name: "이수스페셜티케미컬", market: "KOSDAQ", price: 42500, changePct: 8.10, category: "전고체 황화물", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["이수", "전고체", "황화리튬", "배터리소재"] },
 
     // 바이오 & 제약 & 비만치료제
-    { symbol: "207940", name: "삼성바이오로직스", market: "KOSPI", price: 780000, changePct: 1.15, category: "CDMO", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "55.5조원", tags: ["삼성", "삼바", "바이오", "cdmo", "제약"] },
-    { symbol: "068270", name: "셀트리온", market: "KOSPI", price: 184000, changePct: 0.55, category: "바이오시밀러", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "40.2조원", tags: ["셀트리온", "바이오", "바이오시밀러", "짐펜트라"] },
-    { symbol: "196170", name: "알테오젠", market: "KOSDAQ", price: 285000, changePct: 5.80, category: "피하주사 플랫폼", capGroup: "MID", capGroupKo: "중형주", marketCap: "15.1조원", tags: ["알테오젠", "바이오", "키트루다", "피하주사", "코스닥1위"] },
-    { symbol: "000100", name: "유한양행", market: "KOSPI", price: 128000, changePct: 4.20, category: "폐암신약 렉라자", capGroup: "MID", capGroupKo: "중형주", marketCap: "10.2조원", tags: ["유한양행", "렉라자", "제약", "항암제"] },
-    { symbol: "087010", name: "펩트론", market: "KOSDAQ", price: 78500, changePct: 6.90, category: "비만치료제", capGroup: "MID", capGroupKo: "중형주", marketCap: "1.8조원", tags: ["펩트론", "비만", "비만치료제", "glp1", "지속형"] },
-    { symbol: "141080", name: "리가켐바이오", market: "KOSDAQ", price: 98000, changePct: 3.80, category: "ADC 항암제", capGroup: "MID", capGroupKo: "중형주", marketCap: "3.5조원", tags: ["리가켐", "adc", "항암제", "바이오"] },
-    { symbol: "028300", name: "HLB", market: "KOSDAQ", price: 82000, changePct: 2.90, category: "간암신약", capGroup: "MID", capGroupKo: "중형주", marketCap: "10.7조원", tags: ["hlb", "리보세라닙", "바이오", "항암제"] },
+    { symbol: "207940", name: "삼성바이오로직스", market: "KOSPI", price: 780000, changePct: 1.15, category: "CDMO", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["삼성", "삼바", "바이오", "cdmo", "제약"] },
+    { symbol: "068270", name: "셀트리온", market: "KOSPI", price: 184000, changePct: 0.55, category: "바이오시밀러", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["셀트리온", "바이오", "바이오시밀러", "짐펜트라"] },
+    { symbol: "196170", name: "알테오젠", market: "KOSDAQ", price: 285000, changePct: 5.80, category: "피하주사 플랫폼", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["알테오젠", "바이오", "키트루다", "피하주사", "코스닥1위"] },
+    { symbol: "000100", name: "유한양행", market: "KOSPI", price: 128000, changePct: 4.20, category: "폐암신약 렉라자", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["유한양행", "렉라자", "제약", "항암제"] },
+    { symbol: "087010", name: "펩트론", market: "KOSDAQ", price: 78500, changePct: 6.90, category: "비만치료제", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["펩트론", "비만", "비만치료제", "glp1", "지속형"] },
+    { symbol: "141080", name: "리가켐바이오", market: "KOSDAQ", price: 98000, changePct: 3.80, category: "ADC 항암제", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["리가켐", "adc", "항암제", "바이오"] },
+    { symbol: "028300", name: "HLB", market: "KOSDAQ", price: 82000, changePct: 2.90, category: "간암신약", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["hlb", "리보세라닙", "바이오", "항암제"] },
 
     // 자동차 & 전기차 & 자율주행
-    { symbol: "005380", name: "현대차", market: "KOSPI", price: 245000, changePct: 1.24, category: "완성차", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "51.8조원", tags: ["현대", "현대차", "자동차", "전기차", "인도ipo", "밸류업", "자율주행", "로봇"] },
-    { symbol: "000270", name: "기아", market: "KOSPI", price: 118000, changePct: 1.72, category: "완성차", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "47.2조원", tags: ["기아", "자동차", "pbv", "전기차", "고배당", "자율주행"] },
-    { symbol: "012330", name: "현대모비스", market: "KOSPI", price: 228000, changePct: 0.80, category: "자동차 부품", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "21.5조원", tags: ["현대", "모비스", "전장", "자율주행", "부품"] },
-    { symbol: "204320", name: "HL만도", market: "KOSPI", price: 38500, changePct: 2.10, category: "자율주행 섀시", capGroup: "MID", capGroupKo: "중형주", marketCap: "1.8조원", tags: ["만도", "자율주행", "섀시", "전장"] },
+    { symbol: "005380", name: "현대차", market: "KOSPI", price: 245000, changePct: 1.24, category: "완성차", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["현대", "현대차", "자동차", "전기차", "인도ipo", "밸류업", "자율주행", "로봇"] },
+    { symbol: "000270", name: "기아", market: "KOSPI", price: 118000, changePct: 1.72, category: "완성차", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["기아", "자동차", "pbv", "전기차", "고배당", "자율주행"] },
+    { symbol: "012330", name: "현대모비스", market: "KOSPI", price: 228000, changePct: 0.80, category: "자동차 부품", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["현대", "모비스", "전장", "자율주행", "부품"] },
+    { symbol: "204320", name: "HL만도", market: "KOSPI", price: 38500, changePct: 2.10, category: "자율주행 섀시", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["만도", "자율주행", "섀시", "전장"] },
 
     // 방산 & 우주항공 & 드론
-    { symbol: "012450", name: "한화에어로스페이스", market: "KOSPI", price: 295000, changePct: 4.20, category: "방산/K9자주포", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "14.9조원", tags: ["한화", "한화에어로", "방산", "k9", "우주", "누리호", "우주항공"] },
-    { symbol: "064350", name: "현대로템", market: "KOSPI", price: 54000, changePct: 5.10, category: "전차/K2", capGroup: "MID", capGroupKo: "중형주", marketCap: "5.8조원", tags: ["현대", "현대로템", "방산", "k2전차", "철도"] },
-    { symbol: "079550", name: "LIG넥스원", market: "KOSPI", price: 182000, changePct: 3.90, category: "유도무기/천궁", capGroup: "MID", capGroupKo: "중형주", marketCap: "4.0조원", tags: ["lig", "lig넥스원", "방산", "미사일", "천궁"] },
-    { symbol: "047810", name: "한국항공우주", market: "KOSPI", price: 52000, changePct: 2.40, category: "KF-21 전투기", capGroup: "MID", capGroupKo: "중형주", marketCap: "5.0조원", tags: ["kai", "한국항공우주", "전투기", "우주", "방산", "우주항공"] },
+    { symbol: "012450", name: "한화에어로스페이스", market: "KOSPI", price: 295000, changePct: 4.20, category: "방산/K9자주포", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["한화", "한화에어로", "방산", "k9", "우주", "누리호", "우주항공"] },
+    { symbol: "064350", name: "현대로템", market: "KOSPI", price: 54000, changePct: 5.10, category: "전차/K2", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["현대", "현대로템", "방산", "k2전차", "철도"] },
+    { symbol: "079550", name: "LIG넥스원", market: "KOSPI", price: 182000, changePct: 3.90, category: "유도무기/천궁", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["lig", "lig넥스원", "방산", "미사일", "천궁"] },
+    { symbol: "047810", name: "한국항공우주", market: "KOSPI", price: 52000, changePct: 2.40, category: "KF-21 전투기", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["kai", "한국항공우주", "전투기", "우주", "방산", "우주항공"] },
 
     // 철강 & 구리 & 방열소재 & 원자재
-    { symbol: "005490", name: "POSCO홀딩스", market: "KOSPI", price: 375000, changePct: -1.10, category: "철강/리튬", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "31.7조원", tags: ["포스코", "posco", "철강", "리튬", "지주사", "방열"] },
+    { symbol: "005490", name: "POSCO홀딩스", market: "KOSPI", price: 375000, changePct: -1.10, category: "철강/리튬", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["포스코", "posco", "철강", "리튬", "지주사", "방열"] },
     { symbol: "021050", name: "서원", market: "KOSPI", price: 1650, changePct: 8.45, category: "동합금/구리", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "780억원", tags: ["서원", "구리", "동합금", "방열", "방열소재", "초전도체"] },
     { symbol: "091700", name: "파트론", market: "KOSDAQ", price: 8900, changePct: 3.20, category: "방열부품/카메라", capGroup: "MID", capGroupKo: "중형주", marketCap: "4,800억원", tags: ["파트론", "방열", "방열소재", "히트파이프", "카메라모듈"] },
     { symbol: "052710", name: "아모텍", market: "KOSDAQ", price: 12500, changePct: 4.10, category: "방열/바리스터", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "1,200억원", tags: ["아모텍", "방열", "방열소재", "칩바리스터"] },
     { symbol: "185500", name: "신화콘텍", market: "KOSDAQ", price: 3850, changePct: 6.80, category: "커넥터/방열소재", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "420억원", tags: ["신화콘텍", "방열", "방열소재", "커넥터"] },
-    { symbol: "103140", name: "풍산", market: "KOSPI", price: 62000, changePct: 4.10, category: "신동/탄약방산", capGroup: "MID", capGroupKo: "중형주", marketCap: "1.7조원", tags: ["풍산", "구리", "신동", "탄약", "방산", "방열"] },
+    { symbol: "103140", name: "풍산", market: "KOSPI", price: 62000, changePct: 4.10, category: "신동/탄약방산", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["풍산", "구리", "신동", "탄약", "방산", "방열"] },
 
     // 로봇 & SMR & 원전 & 냉각
-    { symbol: "277810", name: "레인보우로보틱스", market: "KOSDAQ", price: 165000, changePct: 5.40, category: "휴머노이드 로봇", capGroup: "MID", capGroupKo: "중형주", marketCap: "3.1조원", tags: ["레인보우로보틱스", "로봇", "삼성 인수", "휴머노이드", "협동로봇"] },
-    { symbol: "454910", name: "두산로보틱스", market: "KOSPI", price: 82000, changePct: 4.50, category: "협동로봇", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "5.3조원", tags: ["두산", "두산로보틱스", "로봇", "협동로봇"] },
+    { symbol: "277810", name: "레인보우로보틱스", market: "KOSDAQ", price: 165000, changePct: 5.40, category: "휴머노이드 로봇", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["레인보우로보틱스", "로봇", "삼성 인수", "휴머노이드", "협동로봇"] },
+    { symbol: "454910", name: "두산로보틱스", market: "KOSPI", price: 82000, changePct: 4.50, category: "협동로봇", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["두산", "두산로보틱스", "로봇", "협동로봇"] },
     { symbol: "348340", name: "뉴로메카", market: "KOSDAQ", price: 28500, changePct: 6.20, category: "협동로봇/인디", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "2,800억원", tags: ["뉴로메카", "로봇", "협동로봇"] },
     { symbol: "440840", name: "엔젤로보틱스", market: "KOSDAQ", price: 32400, changePct: 7.10, category: "웨어러블 로봇", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "3,100억원", tags: ["엔젤로보틱스", "로봇", "웨어러블"] },
-    { symbol: "034020", name: "두산에너빌리티", market: "KOSPI", price: 21500, changePct: 3.20, category: "SMR/원전 주기기", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "13.7조원", tags: ["두산", "두산에너빌리티", "smr", "원전", "원자력", "체코원전"] },
+    { symbol: "034020", name: "두산에너빌리티", market: "KOSPI", price: 21500, changePct: 3.20, category: "SMR/원전 주기기", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["두산", "두산에너빌리티", "smr", "원전", "원자력", "체코원전"] },
     { symbol: "452880", name: "우진엔텍", market: "KOSDAQ", price: 18200, changePct: 9.10, category: "원전 정비/계측", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "1,900억원", tags: ["우진엔텍", "원전", "smr", "체코원전"] },
     { symbol: "083650", name: "비에이치아이", market: "KOSDAQ", price: 11400, changePct: 5.80, category: "원전 보조기기", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "3,800억원", tags: ["비에이치아이", "원전", "smr", "hrsgg"] },
     { symbol: "083450", name: "GST", market: "KOSDAQ", price: 34500, changePct: 7.82, category: "액체냉각 칠러", capGroup: "MID", capGroupKo: "중형주", marketCap: "6,500억원", tags: ["gst", "냉각", "액체냉각", "칠러", "데이터센터"] },
@@ -3973,10 +3905,10 @@ JSON 구조 요구사항:
     { symbol: "036200", name: "유니셈", market: "KOSDAQ", price: 8200, changePct: 4.80, category: "칠러/스크러버", capGroup: "SMALL", capGroupKo: "소형주", marketCap: "2,500억원", tags: ["유니셈", "냉각", "칠러", "스크러버"] },
 
     // 엔터 & K-뷰티 & K-푸드 & 전력망
-    { symbol: "267260", name: "HD현대일렉트릭", market: "KOSPI", price: 315000, changePct: 7.40, category: "초고압 변압기", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "11.3조원", tags: ["hd현대", "현대일렉트릭", "변압기", "전력망", "전력인프라", "미국수주"] },
-    { symbol: "298040", name: "효성중공업", market: "KOSPI", price: 382000, changePct: 5.90, category: "변압기/차단기", capGroup: "MID", capGroupKo: "중형주", marketCap: "3.5조원", tags: ["효성", "효성중공업", "변압기", "전력인프라"] },
-    { symbol: "257720", name: "실리콘투", market: "KOSDAQ", price: 42500, changePct: 9.20, category: "K-뷰티 유통", capGroup: "MID", capGroupKo: "중형주", marketCap: "2.5조원", tags: ["실리콘투", "화장품", "k뷰티", "역직구", "스타일코리안"] },
-    { symbol: "003230", name: "삼양식품", market: "KOSPI", price: 612000, changePct: 6.80, category: "K-푸드/불닭볶음면", capGroup: "MID", capGroupKo: "중형주", marketCap: "4.6조원", tags: ["삼양식품", "불닭", "라면", "식품", "k푸드", "수출"] },
+    { symbol: "267260", name: "HD현대일렉트릭", market: "KOSPI", price: 315000, changePct: 7.40, category: "초고압 변압기", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "N/A", tags: ["hd현대", "현대일렉트릭", "변압기", "전력망", "전력인프라", "미국수주"] },
+    { symbol: "298040", name: "효성중공업", market: "KOSPI", price: 382000, changePct: 5.90, category: "변압기/차단기", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["효성", "효성중공업", "변압기", "전력인프라"] },
+    { symbol: "257720", name: "실리콘투", market: "KOSDAQ", price: 42500, changePct: 9.20, category: "K-뷰티 유통", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["실리콘투", "화장품", "k뷰티", "역직구", "스타일코리안"] },
+    { symbol: "003230", name: "삼양식품", market: "KOSPI", price: 612000, changePct: 6.80, category: "K-푸드/불닭볶음면", capGroup: "MID", capGroupKo: "중형주", marketCap: "N/A", tags: ["삼양식품", "불닭", "라면", "식품", "k푸드", "수출"] },
 
     // 미국 빅테크
     { symbol: "NVDA", name: "NVIDIA Corp. (엔비디아)", market: "NASDAQ", price: 128.5, changePct: 4.25, category: "AI GPU", capGroup: "LARGE", capGroupKo: "대형주", marketCap: "3.15조달러", tags: ["nvda", "엔비디아", "nvidia", "gpu", "ai", "블랙웰", "미국", "냉각", "방열"] },
@@ -5398,9 +5330,9 @@ app.post("/api/ai/hot-list", async (req, res) => {
           exchange: item.exchange as any || "UNKNOWN",
           price: item.currentPrice,
           changePct: item.priceChange24hPct,
-          volume: item.volumeIncreaseRatio || 1,
-          tradeValue: item.currentPrice * (item.volumeIncreaseRatio || 1),
-          rvol: item.volumeIncreaseRatio || 1,
+          volume: item.volume,
+          tradeValue: item.tradeValue,
+          rvol: Number(item.volumeIncreaseRatio),
           rs15m: item.metrics?.rs15m || undefined,
           vwap: item.metrics?.vwap || undefined,
           ema9: item.metrics?.ema9 || undefined,
@@ -5408,7 +5340,7 @@ app.post("/api/ai/hot-list", async (req, res) => {
           ema50: item.metrics?.ema50 || undefined,
           atr14: item.metrics?.atr14 || undefined,
           rsi14: item.metrics?.rsi14 || undefined,
-          patterns: item.patternName ? [item.patternName] : [],
+          patterns: item.patternType ? [item.patternType] : [],
           chaseRisk: item.metrics?.chaseRisk || false,
           exhaustionRisk: item.metrics?.exhaustionRisk || false,
           dataStatus: item.dataStatus === "REALTIME_VERIFIED" ? "REALTIME_VERIFIED" : "STALE"
@@ -5504,7 +5436,7 @@ app.post("/api/ai/predict-engine", async (req, res) => {
         symbol: resolved.symbol,
         name: resolvedName,
         market: resolvedMarket,
-        price: 100,
+        price: 0,
         change: 0,
         changePct: 0,
         marketCap: "-",

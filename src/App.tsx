@@ -19,6 +19,7 @@ import { VerifiedDecisionDetailPanel } from "./components/VerifiedDecisionDetail
 import { VerifiedIntradaySignalPanel } from "./components/VerifiedIntradaySignalPanel";
 import { VerifiedPatternStatusPanel } from "./components/VerifiedPatternStatusPanel";
 import { VerifiedPatternGuideBridge } from "./components/VerifiedPatternGuideBridge";
+import { BuyHoldSystemStatusPanel } from "./components/BuyHoldSystemStatusPanel";
 import { evaluateVerifiedSignal, type VerifiedSignalResult } from "./scanner/verifiedSignalEngine";
 
 type VerifiedPatternSelection = {
@@ -137,6 +138,10 @@ function MainLayout() {
   return (
     <div className="min-h-screen bg-white text-slate-800 flex flex-col font-sans relative">
       <RealtimeMarketStreamManager />
+
+      <ErrorBoundary>
+        <BuyHoldSystemStatusPanel />
+      </ErrorBoundary>
 
       <ErrorBoundary>
         <RealtimeLongShortRadar />

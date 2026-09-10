@@ -81,7 +81,7 @@ function makeStrongCandidate(
     spreadBps: 12,
     orderbookImbalance: 0.35,
     signedFlow: 1,
-    patterns: ["BULLISH_ENGULFING"],
+    patterns: ["DOUBLE_BOTTOM"],
     structureTrend: "BULLISH",
     isBreakout: true,
     isRetest: true,
@@ -93,13 +93,15 @@ function makeStrongCandidate(
   };
 }
 
-test("V20 True MTF: verified 1m/3m/5m/D can promote a strong candidate to BUY", () => {
+test("V20 True MTF: verified 1m/3m/5m/D plus executable pattern can promote a strong candidate to BUY", () => {
   const result = ServerGlobalRealtimeScannerV20.evaluateCandidate(
     makeStrongCandidate()
   );
 
   assert.equal(result.trueMtfGate.passed, true);
   assert.equal(result.trueMtfGate.hardReject, false);
+  assert.equal(result.patternGate.passed, true);
+  assert.ok(result.patternGate.executableMatches.includes("DOUBLE_BOTTOM"));
   assert.equal(result.recommendation, "BUY_CANDIDATE");
   assert.ok(result.setupScore >= 76);
 });
@@ -199,4 +201,22 @@ test("V20 YES-only TOP5 never fills missing ranks with WATCH candidates", () => 
   assert.equal(results.length, 1);
   assert.equal(results[0].symbol, "YES1");
   assert.equal(results[0].recommendation, "BUY_CANDIDATE");
+});
+
+test("V20 data truth: legacy RVOL ratio cannot masquerade as absolute volume and trade value", () => {
+  const rvol = 3.2;
+  const price = 105;
+  const result = ServerGlobalRealtimeScannerV20.evaluateCandidate(
+    makeStrongCandidate({
+      price,
+      volume: rvol,
+      rvol,
+      tradeValue: price * rvol
+    })
+  );
+
+  assert.equal(result.recommendation, "REJECT");
+  assert.equal(result.rejectionReason, "LIQUIDITY_TRUTH_UNVERIFIED");
+  assert.ok(result.missingFields.includes("volume"));
+  assert.ok(result.missingFields.includes("tradeValue"));
 });

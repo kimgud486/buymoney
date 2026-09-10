@@ -170,7 +170,7 @@ test("05. ServerGlobalRealtimeScannerV20 - Rejects STALE / NO_DATA", () => {
   assert.ok(res.rejectionReason?.includes("DATA_TRUTH_REJECT"));
 });
 
-test("06. ServerGlobalRealtimeScannerV20 - Evaluates S-grade candidate with True MTF confirmation", () => {
+test("06. ServerGlobalRealtimeScannerV20 - Evaluates S-grade candidate with True MTF confirmation and executable pattern", () => {
   const now = Date.now();
   const res = ServerGlobalRealtimeScannerV20.evaluateCandidate({
     symbol: "005930",
@@ -193,6 +193,7 @@ test("06. ServerGlobalRealtimeScannerV20 - Evaluates S-grade candidate with True
     atr14: 1200,
     rsi14: 68,
     spreadBps: 10,
+    patterns: ["DOUBLE_BOTTOM"],
     structureTrend: "BULLISH",
     isBreakout: true,
     trueMtf: {
@@ -265,6 +266,8 @@ test("06. ServerGlobalRealtimeScannerV20 - Evaluates S-grade candidate with True
   });
 
   assert.equal(res.trueMtfGate.passed, true);
+  assert.equal(res.patternGate.passed, true);
+  assert.ok(res.patternGate.executableMatches.includes("DOUBLE_BOTTOM"));
   assert.equal(res.recommendation, "BUY_CANDIDATE");
   assert.ok(res.setupScore >= 85);
   assert.equal(res.grade, "S");
