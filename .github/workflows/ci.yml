@@ -59,15 +59,11 @@ jobs:
           test -s dist/index.html
           test -s dist/server.cjs
           test -d dist/assets
-          test -s build/index.html
-          test -s build/server.cjs
 
       - name: Upload app build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: buymoney-app-build
-          path: |
-            dist/**
-            build/**
+          path: dist/**
           if-no-files-found: error
           retention-days: 7
