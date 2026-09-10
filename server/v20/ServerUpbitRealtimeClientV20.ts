@@ -5,6 +5,7 @@
 
 import { WebSocket } from "ws";
 import { realtimeSubscriptionRegistryV20 } from "./RealtimeSubscriptionRegistryV20";
+import { serverRealtimeMarketHubV20 } from "./ServerRealtimeMarketHubV20";
 
 export interface UpbitRealtimeTickV20 {
   type: "ticker" | "trade" | "orderbook";
@@ -55,21 +56,43 @@ export class ServerUpbitRealtimeClientV20 {
           const str = data.toString("utf8");
           const parsed = JSON.parse(str);
           if (parsed && parsed.code && parsed.trade_price) {
+            const cleanSymbol = String(parsed.code).replace("KRW-", "").toUpperCase();
             const tick: UpbitRealtimeTickV20 = {
               type: "ticker",
-              symbol: parsed.code.replace("KRW-", ""),
-              price: parsed.trade_price,
-              signedChangePrice: parsed.signed_change_price || 0,
-              signedChangeRate: (parsed.signed_change_rate || 0) * 100,
-              accTradeVolume24h: parsed.acc_trade_volume_24h || 0,
-              accTradePrice24h: parsed.acc_trade_price_24h || 0,
-              highest52WeekPrice: parsed.highest_52_week_price || parsed.trade_price,
-              lowest52WeekPrice: parsed.lowest_52_week_price || parsed.trade_price,
-              tradeVolume: parsed.trade_volume || 0,
+              symbol: cleanSymbol,
+              price: Number(parsed.trade_price) || 0,
+              signedChangePrice: Number(parsed.signed_change_price) || 0,
+              signedChangeRate: (Number(parsed.signed_change_rate) || 0) * 100,
+              accTradeVolume24h: Number(parsed.acc_trade_volume_24h) || 0,
+              accTradePrice24h: Number(parsed.acc_trade_price_24h) || 0,
+              highest52WeekPrice: Number(parsed.highest_52_week_price) || Number(parsed.trade_price) || 0,
+              lowest52WeekPrice: Number(parsed.lowest_52_week_price) || Number(parsed.trade_price) || 0,
+              tradeVolume: Number(parsed.trade_volume) || 0,
               askBid: parsed.ask_bid === "ASK" ? "ASK" : "BID",
-              timestamp: parsed.timestamp || Date.now(),
+              timestamp: Number(parsed.timestamp) || Date.now(),
               grade: "EXECUTION_GRADE"
             };
+
+            // Unified truth path: Upbit now enters the same realtime market hub
+            // used by KIS domestic and overseas quotes. The hub creates 1m OHLCV
+            // candles from actual execution volume and runs the common pattern engine.
+            if (tick.price > 0) {
+              serverRealtimeMarketHubV20.updateQuote(
+                tick.symbol,
+                `${tick.symbol} (Upbit)`,
+                "UPBIT",
+                tick.price,
+                tick.signedChangePrice,
+                tick.signedChangeRate,
+                tick.accTradeVolume24h,
+                tick.accTradePrice24h,
+                "UPBIT_WEBSOCKET_V1",
+                "EXECUTION_GRADE",
+                undefined,
+                undefined,
+                tick.tradeVolume,
+              );
+            }
 
             for (const callback of this.listeners) {
               callback(tick);
