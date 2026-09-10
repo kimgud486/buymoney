@@ -216,7 +216,7 @@ test("V20 data truth: legacy RVOL ratio cannot masquerade as absolute volume and
   );
 
   assert.equal(result.recommendation, "REJECT");
-  assert.equal(result.rejectionReason, "SUSPECT_DERIVED_LIQUIDITY_FIELDS");
-  assert.ok(result.missingFields.includes("authoritativeVolume"));
-  assert.ok(result.missingFields.includes("authoritativeTradeValue"));
+  assert.equal(result.rejectionReason, "LIQUIDITY_TRUTH_UNVERIFIED");
+  assert.ok(result.missingFields.includes("volume"));
+  assert.ok(result.missingFields.includes("tradeValue"));
 });
