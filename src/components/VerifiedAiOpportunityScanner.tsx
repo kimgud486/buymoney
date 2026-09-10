@@ -304,7 +304,7 @@ export const VerifiedAiOpportunityScanner: React.FC = () => {
           <div>
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-cyan-300"><Radar size={15} /> SERVER V20 FINAL AUTHORITY</div>
             <h2 className="mt-2 text-2xl font-black tracking-tight md:text-3xl">AI BUY & HOLD 최종판정</h2>
-            <p className="mt-1 max-w-3xl text-sm text-slate-400">BUY/STRONG BUY는 `/api/v20/final-buy-hold`의 SERVER_V20_FINAL 응답만 인정합니다. 카드에는 SERVER_MARKET_HUB의 실제 데이터 출처·마지막 틱·지연·캔들 수를 함께 표시합니다.</p>
+            <p className="mt-1 max-w-3xl text-sm text-slate-400">PRECHECK는 후보 압축만 합니다. BUY/STRONG BUY는 `/api/v20/final-buy-hold`의 SERVER_V20_FINAL 응답만 인정합니다. 카드에는 SERVER_MARKET_HUB의 실제 데이터 출처·마지막 틱·지연·캔들 수를 함께 표시합니다.</p>
           </div>
           <button type="button" onClick={handleScan} disabled={isScanning} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-cyan-400 px-6 py-4 font-black text-slate-950 disabled:opacity-50">
             {isScanning ? <Loader2 size={20} className="animate-spin" /> : <Play size={20} fill="currentColor" />}{isScanning ? "FINAL 검증 중" : "AI BUY & HOLD 스캔"}
