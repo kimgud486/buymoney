@@ -10,6 +10,7 @@ on:
       - scripts/patch-v20-mtf-cap-and-no-pattern.mjs
       - scripts/replace-legacy-explainable-with-real-precheck.mjs
       - scripts/cleanup-public-stock-routes.mjs
+      - scripts/patch-preset-no-data-type.mjs
       - .github/workflows/apply-v20-final-server-integration.yml
 
 permissions:
@@ -38,6 +39,9 @@ jobs:
           else
             echo "Legacy guarded migration already satisfied by current V20/main structure."
           fi
+
+      - name: Apply explicit NO_DATA type migration
+        run: node scripts/patch-preset-no-data-type.mjs
 
       - name: Apply MTF capacity and no-pattern patch
         run: node scripts/patch-v20-mtf-cap-and-no-pattern.mjs
