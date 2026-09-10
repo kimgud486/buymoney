@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------
-// ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V4 (AISTOCK V19.1 TRUTH-FIRST)
+// ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V5 (AISTOCK V21 TRUTH-FIRST)
 // ----------------------------------------------------------------------
 
 import fs from "node:fs";
@@ -50,8 +50,6 @@ const forbidden = [
   /generateSynthetic\b/,
   /simulatedFill\b/,
   /mockPrice\b/,
-
-  // V19.1 Strict Rules
   /1,250,400\s*주/,
   /currentPrice\s*\*\s*0\.015/,
   /validProjections\[0\]\s*\*\s*1\.0[12]/,
@@ -68,64 +66,77 @@ const allowedFolders = [
   `${path.sep}test${path.sep}`,
   `${path.sep}tests${path.sep}`,
   `${path.sep}fixtures${path.sep}`,
-  `GlobalRealtimeScannerV188.ts` // Ignore legacy file when auditing new V19.1 codebase
+  `GlobalRealtimeScannerV188.ts`
 ];
 
 let failed = false;
 
+function fail(message) {
+  console.error(`❌ ${message}`);
+  failed = true;
+}
+
+function auditPresetFixture() {
+  const presetPath = path.resolve("src/data/presetStocks.ts");
+  if (!fs.existsSync(presetPath)) return;
+  const text = fs.readFileSync(presetPath, "utf8");
+  const requiredEmptyExports = [
+    /export const PRESET_CATALOG_STOCKS:\s*PresetStock\[\]\s*=\s*\[\s*\];/,
+    /export const DEMO_FIXTURE_STOCKS:\s*PresetStock\[\]\s*=\s*\[\s*\];/
+  ];
+  for (const rule of requiredEmptyExports) {
+    if (!rule.test(text)) {
+      fail("src/data/presetStocks.ts must keep production preset/demo stock arrays empty");
+      break;
+    }
+  }
+
+  const fabricatedPayloadMarkers = [
+    /priceNote\s*:\s*["'].*실시간/,
+    /marketCap\s*:\s*["']/,
+    /news\s*:\s*\[/,
+    /technical\s*:\s*\{\s*rsi\s*:/
+  ];
+  if (fabricatedPayloadMarkers.some((rule) => rule.test(text))) {
+    fail("fabricated stock payload data exists in src/data/presetStocks.ts");
+  }
+}
+
 function scanPath(p) {
   if (!fs.existsSync(p)) return;
   const stat = fs.statSync(p);
-
-  if (stat.isFile()) {
-    scanFile(p);
-    return;
-  }
-
-  if (stat.isDirectory()) {
-    for (const entry of fs.readdirSync(p, { withFileTypes: true })) {
-      const full = path.join(p, entry.name);
-      if (entry.isDirectory()) {
-        scanPath(full);
-      } else if (/\.(ts|tsx|js|jsx)$/.test(entry.name)) {
-        scanFile(full);
-      }
-    }
+  if (stat.isFile()) return scanFile(p);
+  if (!stat.isDirectory()) return;
+  for (const entry of fs.readdirSync(p, { withFileTypes: true })) {
+    const full = path.join(p, entry.name);
+    if (entry.isDirectory()) scanPath(full);
+    else if (/\.(ts|tsx|js|jsx)$/.test(entry.name)) scanFile(full);
   }
 }
 
 function scanFile(fullPath) {
-  if (allowedFolders.some((folder) => fullPath.includes(folder))) {
-    return;
-  }
-
+  if (allowedFolders.some((folder) => fullPath.includes(folder))) return;
   const text = fs.readFileSync(fullPath, "utf8");
 
-  // Core production engine rule: trading, services, realtime, and server engines MUST NOT import from demo
   if (/(src[\\/](trading|services|realtime)|server[\\/])/.test(fullPath)) {
     if (/from\s+["'].*\/demo\b/.test(text)) {
-      console.error(`❌ CORE PRODUCTION ENGINE IMPORTS DEMO CODE: ${fullPath}`);
-      failed = true;
+      fail(`CORE PRODUCTION ENGINE IMPORTS DEMO CODE: ${fullPath}`);
     }
   }
 
   for (const pattern of forbidden) {
     if (pattern.test(text)) {
-      console.error(`❌ FAKE DATA PATTERN FOUND IN PRODUCTION CODE: ${fullPath}`);
-      console.error(`   Pattern: ${pattern}`);
-      failed = true;
+      fail(`FAKE DATA PATTERN FOUND IN PRODUCTION CODE: ${fullPath} (${pattern})`);
     }
   }
 }
 
-console.log("🔍 Running Production Zero Fake Data Audit V4...");
-for (const rootPath of ROOTS) {
-  scanPath(rootPath);
-}
+console.log("🔍 Running Production Zero Fake Data Audit V5...");
+auditPresetFixture();
+for (const rootPath of ROOTS) scanPath(rootPath);
 
 if (failed) {
-  console.error("💥 Zero Fake Data Audit V4 FAILED!");
+  console.error("💥 Zero Fake Data Audit V5 FAILED!");
   process.exit(1);
-} else {
-  console.log("✅ Production Zero Fake Data Audit V4 PASSED cleanly.");
 }
+console.log("✅ Production Zero Fake Data Audit V5 PASSED cleanly.");
