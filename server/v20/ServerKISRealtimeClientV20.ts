@@ -10,6 +10,7 @@ import { brokerExecutionTruthBusV20 } from "./BrokerExecutionTruthBusV20";
 import { KISOverseasParserV20 } from "./KISOverseasParserV20";
 import { KISDomesticTradeParserV20 } from "./KISDomesticTradeParserV20";
 import { serverRealtimeMarketHubV20 } from "./ServerRealtimeMarketHubV20";
+import { realtimeSubscriptionRegistryV20 } from "./RealtimeSubscriptionRegistryV20";
 
 export interface KISRealtimeClientConfig {
   appKey: string;
@@ -80,8 +81,19 @@ export class ServerKISRealtimeClientV20 {
     const cleanSymbol = String(symbol || "").trim().toUpperCase();
     if (!cleanSymbol) return;
 
+    const market = trId === "HDFSCNT0" ? "US" : "KR";
+    realtimeSubscriptionRegistryV20.register({ symbol: cleanSymbol, market });
+
     this.subscribedSymbols.add(`${trId}:${cleanSymbol}`);
     this.sendSubscription(trId, cleanSymbol);
+  }
+
+  public getSubscriptionSnapshot(): string[] {
+    return Array.from(this.subscribedSymbols.values());
+  }
+
+  public isSocketConnected(): boolean {
+    return Boolean(this.ws && this.isConnected && this.ws.readyState === WebSocket.OPEN);
   }
 
   private sendSubscription(trId: "H0STCNT0" | "HDFSCNT0", symbol: string): void {
