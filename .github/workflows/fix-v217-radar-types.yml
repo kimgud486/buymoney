@@ -1,0 +1,33 @@
+name: Fix V21.7 Radar Types
+
+on:
+  push:
+    branches:
+      - fix/v21-7-truth-hardening-20260910
+    paths:
+      - scripts/fix-v217-radar-types.mjs
+      - .github/workflows/fix-v217-radar-types.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/v21-7-truth-hardening-20260910
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/fix-v217-radar-types.mjs
+      - name: Commit fix
+        run: |
+          if git diff --quiet -- src/components/AllMarketRadar.tsx; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/components/AllMarketRadar.tsx
+          git commit -m "fix: type radar signal merge map"
+          git push origin HEAD:fix/v21-7-truth-hardening-20260910
