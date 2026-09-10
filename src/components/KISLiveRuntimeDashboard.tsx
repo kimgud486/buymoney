@@ -23,6 +23,24 @@ type RuntimePayload = {
   requiresUserConfirmation?: boolean;
   canSubmitOrder?: boolean;
   blockers?: string[];
+  liveEnvironmentProof?: {
+    status?: "ESTABLISHED" | "PROOF_NOT_ESTABLISHED";
+    checkedAt?: string;
+    symbol?: string | null;
+    evidence?: {
+      brokerConfigured?: boolean;
+      oauthAuthenticated?: boolean;
+      accountQuerySucceeded?: boolean;
+      quoteQuerySucceeded?: boolean;
+      marketOpen?: boolean;
+      realtimeQuoteVerified?: boolean;
+      accountFresh?: boolean;
+      exactOrderabilityVerified?: boolean;
+    };
+    quoteAsOf?: string | null;
+    accountAsOf?: string | null;
+    blockers?: string[];
+  };
   orderReadiness?: {
     ready?: boolean;
     blockers?: string[];
@@ -47,6 +65,15 @@ function badgeClass(ok: boolean) {
   return ok
     ? "bg-emerald-50 text-emerald-700 border-emerald-200"
     : "bg-rose-50 text-rose-700 border-rose-200";
+}
+
+function ProofEvidence({ label, ok }: { label: string; ok: boolean }) {
+  return (
+    <div className={`rounded-lg border px-2 py-2 text-center ${badgeClass(ok)}`}>
+      <div className="text-[9px] font-semibold opacity-70">{label}</div>
+      <div className="mt-0.5 text-[10px] font-black">{ok ? "VERIFIED" : "MISSING"}</div>
+    </div>
+  );
 }
 
 export function KISLiveRuntimeDashboard() {
@@ -95,11 +122,14 @@ export function KISLiveRuntimeDashboard() {
     ...(payload?.blockers ?? []),
     ...(payload?.orderReadiness?.blockers ?? []),
   ]));
+  const proofBlockers = Array.from(new Set(payload?.liveEnvironmentProof?.blockers ?? []));
   const warnings = Array.from(new Set(payload?.orderReadiness?.warnings ?? []));
   const ready = Boolean(payload?.orderReadiness?.ready || payload?.requiresUserConfirmation);
   const connected = Boolean(payload?.connected);
   const quoteFresh = payload?.dataStatus === "REALTIME_VERIFIED" && Number(payload?.quoteAgeMs) <= 30_000;
   const accountFresh = Number.isFinite(Number(payload?.accountAgeMs)) && Number(payload?.accountAgeMs) <= 30_000;
+  const proofEstablished = payload?.liveEnvironmentProof?.status === "ESTABLISHED";
+  const evidence = payload?.liveEnvironmentProof?.evidence;
 
   const tiles = [
     ["KIS", connected ? "CONNECTED" : "DISCONNECTED", connected],
@@ -112,9 +142,12 @@ export function KISLiveRuntimeDashboard() {
     <section className="mx-3 mt-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-base font-bold text-slate-900">KIS LIVE RUNTIME</h2>
             <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-600">LIVE ONLY</span>
+            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${badgeClass(proofEstablished)}`}>
+              ENV PROOF: {proofEstablished ? "ESTABLISHED" : "NOT ESTABLISHED"}
+            </span>
           </div>
           <p className="mt-1 text-xs text-slate-500">실계좌 연결과 시세·계좌 freshness를 읽기 전용으로 검증합니다. 자동주문은 전송하지 않습니다.</p>
         </div>
@@ -167,6 +200,35 @@ export function KISLiveRuntimeDashboard() {
         </div>
       </div>
 
+      <div className={`mt-3 rounded-xl border p-3 ${badgeClass(proofEstablished)}`}>
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="text-[10px] font-semibold opacity-70">LIVE ENVIRONMENT PROOF</div>
+            <div className="mt-1 text-base font-black">{proofEstablished ? "ESTABLISHED" : "PROOF_NOT_ESTABLISHED"}</div>
+            <div className="mt-1 text-[10px] font-semibold opacity-70">
+              {payload?.liveEnvironmentProof?.checkedAt
+                ? `Checked ${new Date(payload.liveEnvironmentProof.checkedAt).toLocaleString("ko-KR")}`
+                : "실제 KIS 증거 응답 대기중"}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-8">
+            <ProofEvidence label="CONFIG" ok={Boolean(evidence?.brokerConfigured)} />
+            <ProofEvidence label="OAUTH" ok={Boolean(evidence?.oauthAuthenticated)} />
+            <ProofEvidence label="ACCOUNT" ok={Boolean(evidence?.accountQuerySucceeded)} />
+            <ProofEvidence label="QUOTE" ok={Boolean(evidence?.quoteQuerySucceeded)} />
+            <ProofEvidence label="MARKET" ok={Boolean(evidence?.marketOpen)} />
+            <ProofEvidence label="FRESH QUOTE" ok={Boolean(evidence?.realtimeQuoteVerified)} />
+            <ProofEvidence label="FRESH ACCT" ok={Boolean(evidence?.accountFresh)} />
+            <ProofEvidence label="ORDERABLE" ok={Boolean(evidence?.exactOrderabilityVerified)} />
+          </div>
+        </div>
+        {!proofEstablished && proofBlockers.length > 0 && (
+          <ul className="mt-3 space-y-1 text-[11px] font-semibold">
+            {proofBlockers.map((reason) => <li key={reason}>• {reason}</li>)}
+          </ul>
+        )}
+      </div>
+
       <div className="mt-3 flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="text-[10px] font-semibold text-slate-500">CURRENT QUOTE</div>
@@ -205,7 +267,7 @@ export function KISLiveRuntimeDashboard() {
       )}
 
       <div className="mt-3 flex items-center justify-between text-[10px] text-slate-400">
-        <span>15초 자동 갱신 · fail-closed</span>
+        <span>15초 자동 갱신 · fail-closed · read-only proof</span>
         <span>{lastCheckedAt ? `Last check ${new Date(lastCheckedAt).toLocaleTimeString("ko-KR")}` : "Not checked"}</span>
       </div>
     </section>
