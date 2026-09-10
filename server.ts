@@ -17,6 +17,8 @@ import { ServerGlobalRealtimeScannerV20 } from "./server/v20/ServerGlobalRealtim
 import { finalBuyHoldHttpHandlerV20 } from "./server/v20/FinalBuyHoldHttpHandlerV20";
 import { ServerKISRealtimeClientV20 } from "./server/v20/ServerKISRealtimeClientV20";
 import { KISBrokerGatewayV121 } from "./server/broker/KISBrokerGatewayV121";
+import { buildKISRuntimePanel } from "./server/broker/KISRuntimePanelV213";
+import { probeKISDomesticRuntime } from "./server/broker/KISRuntimeProbeV213";
 import { DEMO_FIXTURE_STOCKS } from "./src/data/presetStocks.js";
 import { analyzeStockIdea, CandleRecord, ExplainableTradeIdea, filterYesOnlyCandidates } from "./src/scanner/ExplainableOpportunityScannerEngine.js";
 
@@ -39,6 +41,78 @@ app.use(express.json());
 
 // Single production decision boundary. This route never places or simulates orders.
 app.post("/api/v20/final-buy-hold", finalBuyHoldHttpHandlerV20);
+
+// V21.3 KIS REAL ACCOUNT RUNTIME DIAGNOSTICS.
+// Read-only endpoint: never submits an order.
+app.get("/api/broker/v21/runtime", async (req, res) => {
+  const symbol = String(req.query.symbol || "005930").trim();
+  if (!/^\d{6}$/.test(symbol)) {
+    return res.status(400).json({ error: "INVALID_KOREA_SYMBOL", dataStatus: "NO_DATA" });
+  }
+
+  const nowMs = Date.now();
+  const brokerConfigured = kisBrokerGateway.isConfigured();
+  const token = brokerConfigured ? await kisBrokerGateway.getOAuthToken(false) : null;
+  const oauthAuthenticated = Boolean(token);
+
+  const account = token
+    ? await kisBrokerGateway.getAccountBalance("KOREA", false)
+    : { success: false, depositKRW: 0, totalEvalAmt: 0, holdings: [], message: "KIS OAuth unavailable" };
+  const accountAsOf = account.success ? new Date(nowMs).toISOString() : null;
+
+  const probe = token
+    ? await probeKISDomesticRuntime({ symbol, token, nowMs })
+    : {
+        quoteSuccess: false, quoteAsOf: null, lastPrice: null, marketSession: "UNKNOWN" as const,
+        orderableSuccess: false, orderableCash: null, orderableQty: null, errors: ["KIS OAuth unavailable"],
+      };
+
+  const side = String(req.query.side || "").toUpperCase();
+  const qty = Number(req.query.qty);
+  const orderType = String(req.query.orderType || "LIMIT").toUpperCase();
+  const price = Number(req.query.price);
+  const hasIntent = (side === "BUY" || side === "SELL") && Number.isInteger(qty) && qty > 0;
+  const intent = hasIntent ? {
+    symbol,
+    market: "KOREA" as const,
+    side: side as "BUY" | "SELL",
+    orderType: orderType === "MARKET" ? "MARKET" as const : "LIMIT" as const,
+    qty,
+    ...(orderType === "MARKET" ? {} : { price }),
+  } : null;
+
+  const panel = buildKISRuntimePanel({
+    brokerConfigured,
+    oauthAuthenticated,
+    accountSuccess: account.success,
+    accountAsOf,
+    depositKRW: account.success ? account.depositKRW : null,
+    totalEvalAmt: account.success ? account.totalEvalAmt : null,
+    holdings: account.success ? account.holdings : [],
+    quoteSuccess: probe.quoteSuccess,
+    quoteAsOf: probe.quoteAsOf,
+    lastPrice: probe.lastPrice,
+    marketSession: probe.marketSession,
+    orderableCash: probe.orderableSuccess ? probe.orderableCash : null,
+    orderableQty: probe.orderableSuccess ? probe.orderableQty : null,
+    symbol,
+    intent,
+    nowMs,
+  });
+
+  return res.json({
+    ...panel,
+    diagnostics: {
+      accountMessage: account.message,
+      probeErrors: probe.errors,
+    },
+    safety: {
+      readOnly: true,
+      automaticOrderSubmission: false,
+      userConfirmationRequired: true,
+    },
+  });
+});
 
 // Initialize Gemini SDK lazily
 let aiClient: GoogleGenAI | null = null;
