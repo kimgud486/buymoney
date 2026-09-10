@@ -1,6 +1,7 @@
 // ----------------------------------------------------------------------
 // CHECK FINAL PRODUCTION TRUTH MJS (BUYMONEY FINAL SYSTEM)
 // Verifies production zero-fake posture & V20 BUY/HOLD authority wiring
+// Final validation anchor after latest main scanner-truth sync.
 // ----------------------------------------------------------------------
 
 import fs from "fs";
