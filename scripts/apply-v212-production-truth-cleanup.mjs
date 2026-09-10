@@ -32,7 +32,7 @@ function replaceExpressRoute(method, route, replacement) {
       continue;
     }
 
-    if (ch === '"' || ch === "'" || ch === "`") {
+    if (ch === '"' || ch === "'") {
       quote = ch;
       continue;
     }
@@ -55,6 +55,18 @@ function replaceExpressRoute(method, route, replacement) {
   if (end < 0) throw new Error(`Unable to locate end of ${marker}`);
   source = `${source.slice(0, start)}${replacement}${source.slice(end)}`;
   console.log(`replaced ${method.toUpperCase()} ${route}`);
+}
+
+function replaceSection(startMarker, endMarker, replacement) {
+  const start = source.indexOf(startMarker);
+  if (start < 0) {
+    console.log(`skip section: ${startMarker}`);
+    return;
+  }
+  const end = source.indexOf(endMarker, start);
+  if (end < 0) throw new Error(`Unable to locate section end: ${endMarker}`);
+  source = `${source.slice(0, start)}${replacement}\n\n${source.slice(end)}`;
+  console.log(`replaced section starting ${startMarker}`);
 }
 
 replaceExpressRoute("post", "/api/backtest", `app.post("/api/backtest", (_req, res) => {
@@ -81,27 +93,29 @@ replaceExpressRoute("get", "/api/legacy/simulated-autotrade/status", `app.get("/
   });
 });`);
 
-replaceExpressRoute("get", "/api/search/theme", `app.get("/api/search/theme", (_req, res) => {
-  return res.status(503).json({
-    error: "VERIFIED_THEME_DATA_REQUIRED",
-    dataStatus: "NO_DATA",
-    provider: null,
-    stocks: [],
-    relatedStocks: [],
-    news: [],
-    message: "Theme intelligence is fail-closed until verified market/news providers supply the result. AI-generated prices, flows, news and scores are not used as facts."
-  });
-});`);
+replaceSection(
+  "// Deep Theme & Sector Search Endpoint (/api/search/theme?q=전고체배터리)",
+  "// ----------------------------------------------------------------------\n// CROSS-MARKET ARBITRAGE OPPORTUNITY & KIMCHI PREMIUM ENGINE (/api/market/arbitrage)",
+  `// Deep Theme & Sector Search Endpoint - REAL DATA ONLY\napp.get("/api/search/theme", (_req, res) => {\n  return res.status(503).json({\n    error: "VERIFIED_THEME_DATA_REQUIRED",\n    dataStatus: "NO_DATA",\n    provider: null,\n    stocks: [],\n    relatedStocks: [],\n    news: [],\n    message: "Theme intelligence is fail-closed until verified market/news providers supply the result. AI-generated prices, flows, news and scores are not used as facts."\n  });\n});`
+);
 
-replaceExpressRoute("get", "/api/market/arbitrage", (_req => `app.get("/api/market/arbitrage", (_req, res) => {
-  return res.status(503).json({
-    error: "VERIFIED_ARBITRAGE_DATA_REQUIRED",
-    dataStatus: "NO_DATA",
-    provider: null,
-    opportunities: [],
-    message: "Arbitrage output is disabled until both venue prices and FX are verified live inputs."
-  });
-});`)());
+replaceSection(
+  "// ----------------------------------------------------------------------\n// CROSS-MARKET ARBITRAGE OPPORTUNITY & KIMCHI PREMIUM ENGINE (/api/market/arbitrage)",
+  "// ----------------------------------------------------------------------\n// MARKET SYNCHRONIZATION OVERLAY VIEWER DATA (/api/market/sync-overlay)",
+  `// ----------------------------------------------------------------------\n// CROSS-MARKET ARBITRAGE - VERIFIED LIVE INPUTS REQUIRED\n// ----------------------------------------------------------------------\napp.get("/api/market/arbitrage", (_req, res) => {\n  return res.status(503).json({\n    error: "VERIFIED_ARBITRAGE_DATA_REQUIRED",\n    dataStatus: "NO_DATA",\n    provider: null,\n    opportunities: [],\n    message: "Arbitrage output is disabled until both venue prices and FX are verified live inputs."\n  });\n});`
+);
+
+replaceSection(
+  "// ----------------------------------------------------------------------\n// MARKET SYNCHRONIZATION OVERLAY VIEWER DATA (/api/market/sync-overlay)",
+  "// AI 6-Core Quant Algorithm Suite Execution Endpoint",
+  `// ----------------------------------------------------------------------\n// MARKET SYNCHRONIZATION OVERLAY - VERIFIED LIVE INPUTS REQUIRED\n// ----------------------------------------------------------------------\napp.get("/api/market/sync-overlay", (_req, res) => {\n  return res.status(503).json({\n    error: "VERIFIED_SYNC_OVERLAY_DATA_REQUIRED",\n    dataStatus: "NO_DATA",\n    provider: null,\n    timeline: [],\n    message: "Synthetic synchronized timelines were removed from production."\n  });\n});`
+);
+
+replaceSection(
+  "// AI 6-Core Quant Algorithm Suite Execution Endpoint",
+  "// AI Chat Explainer Endpoint using Gemini",
+  `// AI 6-Core Quant Algorithm Suite - VERIFIED FEATURE INPUTS REQUIRED\napp.post("/api/ai/algorithm-suite", (_req, res) => {\n  return res.status(503).json({\n    error: "VERIFIED_ALGORITHM_INPUTS_REQUIRED",\n    dataStatus: "NO_DATA",\n    signal: "WAIT",\n    message: "Synthetic VIX, win-rate, timeframe, orderbook and correlation inputs were removed from production."\n  });\n});`
+);
 
 fs.writeFileSync(FILE, source);
 console.log("V21.2 production truth cleanup applied.");
