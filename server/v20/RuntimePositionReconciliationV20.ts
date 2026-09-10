@@ -1,4 +1,4 @@
-import { livePositionRuntimeService } from "../../src/trading/LivePositionRuntimeService";
+import { livePositionRuntimeService, type LivePositionRuntimeService } from "../../src/trading/LivePositionRuntimeService";
 import { reconcilePositions, type BrokerPositionTruth } from "../../src/trading/AccountReconciliationService";
 
 export interface VerifiedBrokerHoldingsSnapshotV20 {
@@ -11,7 +11,7 @@ export interface VerifiedBrokerHoldingsSnapshotV20 {
 export interface RuntimeReconciliationActionV20 {
   symbol: string;
   positionId?: string;
-  type: "SYNCED" | "QTY_ADJUSTED" | "LOCAL_CLOSED" | "ORPHAN_BROKER_POSITION";
+  type: "SYNCED" | "QTY_ADJUSTED" | "LOCAL_CLOSED" | "ORPHAN_BROKER_POSITION" | "AMBIGUOUS_LOCAL_POSITIONS";
   brokerQty: number;
   localQty: number;
 }
@@ -31,10 +31,11 @@ const normalize = (value: string) => String(value || "").trim().toUpperCase();
  */
 export function reconcileRuntimeWithBrokerV20(
   snapshot: VerifiedBrokerHoldingsSnapshotV20,
-  options: { nowMs?: number; maxAgeMs?: number } = {}
+  options: { nowMs?: number; maxAgeMs?: number; runtime?: LivePositionRuntimeService } = {}
 ): RuntimeReconciliationReportV20 {
   const nowMs = options.nowMs ?? Date.now();
   const maxAgeMs = options.maxAgeMs ?? 30_000;
+  const runtime = options.runtime ?? livePositionRuntimeService;
   const ageMs = nowMs - Number(snapshot?.asOf || 0);
 
   if (!snapshot?.verified || snapshot.dataStatus !== "REALTIME_VERIFIED") {
@@ -47,7 +48,7 @@ export function reconcileRuntimeWithBrokerV20(
     return { applied: false, blocked: true, reason: "BROKER_HOLDINGS_INVALID", actions: [] };
   }
 
-  const active = livePositionRuntimeService.getAllPositions().filter((p) => p.state !== "CLOSED");
+  const active = runtime.getAllPositions().filter((p) => p.state !== "CLOSED");
   const localTruth = active.map((p) => ({
     symbol: p.symbol,
     qty: p.quantities.currentPositionQty,
@@ -82,10 +83,9 @@ export function reconcileRuntimeWithBrokerV20(
       continue;
     }
 
-    // Multiple local positions for one broker symbol cannot be allocated safely.
     if (locals.length > 1) {
       const localQty = locals.reduce((sum, p) => sum + p.quantities.currentPositionQty, 0);
-      actions.push({ symbol, type: "SYNCED", brokerQty, localQty });
+      actions.push({ symbol, type: "AMBIGUOUS_LOCAL_POSITIONS", brokerQty, localQty });
       continue;
     }
 
@@ -111,10 +111,15 @@ export function reconcileRuntimeWithBrokerV20(
     actions.push({ symbol, positionId: position.positionId, type: "QTY_ADJUSTED", brokerQty, localQty });
   }
 
+  const hasAmbiguity = actions.some((action) => action.type === "AMBIGUOUS_LOCAL_POSITIONS");
   return {
-    applied: true,
-    blocked: false,
-    reason: comparison.ok ? "SYNCED" : "RECONCILED_FROM_VERIFIED_BROKER_TRUTH",
+    applied: !hasAmbiguity,
+    blocked: hasAmbiguity,
+    reason: hasAmbiguity
+      ? "AMBIGUOUS_LOCAL_POSITIONS"
+      : comparison.ok
+        ? "SYNCED"
+        : "RECONCILED_FROM_VERIFIED_BROKER_TRUTH",
     actions
   };
 }
