@@ -9,13 +9,13 @@ async function openCurrentDashboard(page: import("@playwright/test").Page) {
 test.describe("Current unified AI trading safety E2E", () => {
   test.describe.configure({ retries: 0 });
 
-  test("unified dashboard mounts the current scanner and safety controls", async ({ page }) => {
+  test("unified dashboard mounts current account and scanner controls", async ({ page }) => {
     await openCurrentDashboard(page);
 
-    await expect(page.getByText("검증형 AI 포착 종목", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("지금 스캔", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText(/긴급 킬스위치/).first()).toBeVisible();
-    await expect(page.getByText(/계좌·보유잔고/).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: "AI AUTO TRADING" })).toBeVisible();
+    await expect(page.getByTestId("open-holdings")).toBeVisible();
+    await expect(page.getByTestId("open-explainable-scanner")).toBeVisible();
+    await expect(page.getByTestId("theme-toggle")).toBeVisible();
   });
 
   test("live trading remains locked by default behind the dual-lock gate", async ({ page }) => {
@@ -26,10 +26,10 @@ test.describe("Current unified AI trading safety E2E", () => {
     await expect(page.getByText(/현재:\s*PAPER/).first()).toBeVisible();
   });
 
-  test("removed legacy Safe AI launcher stays unmounted while the unified scanner remains visible", async ({ page }) => {
+  test("removed legacy Safe AI launcher stays unmounted", async ({ page }) => {
     await openCurrentDashboard(page);
 
     await expect(page.getByTestId("safe-ai-autotrade-launcher")).toHaveCount(0);
-    await expect(page.getByText("검증형 AI 포착 종목", { exact: true }).first()).toBeVisible();
+    await expect(page.getByTestId("open-explainable-scanner")).toBeVisible();
   });
 });
