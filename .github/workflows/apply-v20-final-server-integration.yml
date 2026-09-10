@@ -29,8 +29,15 @@ jobs:
       - name: Normalize legacy forced patterns
         run: node scripts/normalize-legacy-pattern-truth.mjs
 
-      - name: Apply guarded migration
-        run: node scripts/apply-v20-final-server-integration.mjs
+      - name: Apply guarded migration only for legacy source shapes
+        run: |
+          if grep -Fq 'volume: item.volumeIncreaseRatio || 1' server.ts \
+            || grep -Fq 'app.post("/api/autotrade/order"' server.ts \
+            || grep -Fq 'liveVolume = 250000' server.ts; then
+            node scripts/apply-v20-final-server-integration.mjs
+          else
+            echo "Legacy guarded migration already satisfied by current V20/main structure."
+          fi
 
       - name: Apply MTF capacity and no-pattern patch
         run: node scripts/patch-v20-mtf-cap-and-no-pattern.mjs
