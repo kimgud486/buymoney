@@ -60,6 +60,19 @@ function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function marketLabel(market: RadarMarket): string {
+  if (market === "KOREA") return "국내 주식";
+  if (market === "US") return "미국 주식";
+  return "업비트 코인";
+}
+
+function confidenceLabel(value: unknown): string {
+  const raw = String(value || "").toUpperCase();
+  if (raw.includes("HIGH") || raw.includes("STRONG")) return "신호가 비교적 강해요";
+  if (raw.includes("LOW") || raw.includes("WEAK")) return "신호가 약해요";
+  return "신호를 더 확인해요";
+}
+
 function normalizeStockRow(row: any, fallbackMarket: RadarMarket): UniverseItem | null {
   const symbol = String(row?.symbol || row?.itemCode || row?.code || "").trim().toUpperCase();
   if (!symbol || symbol.startsWith("KRW-")) return null;
@@ -167,11 +180,11 @@ async function analyze(item: UniverseItem): Promise<RadarRow> {
 
     const json = await response.json();
     const candles = Array.isArray(json?.candles) ? json.candles : [];
-    if (!candles.length) return { ...item, status: "NO_DATA", signal: null, checkedAt, reason: "캔들 없음" };
-    if (candles.length < 56) return { ...item, status: "INSUFFICIENT_BARS", signal: null, checkedAt, reason: `${candles.length}/56봉` };
+    if (!candles.length) return { ...item, status: "NO_DATA", signal: null, checkedAt, reason: "가격 자료가 없어요" };
+    if (candles.length < 56) return { ...item, status: "INSUFFICIENT_BARS", signal: null, checkedAt, reason: `${candles.length}/56개` };
 
     const signal = evaluateLongShortSignal(candles);
-    if (!signal) return { ...item, status: "NO_DATA", signal: null, checkedAt, reason: "검증 엔진 NO_DATA" };
+    if (!signal) return { ...item, status: "NO_DATA", signal: null, checkedAt, reason: "분석할 자료가 없어요" };
     if (signal.direction === "WAIT") return { ...item, status: "WAIT", signal, checkedAt };
     if (signal.plan.source !== "ATR_VWAP_VERIFIED") return { ...item, status: "NO_PLAN", signal, checkedAt };
     return { ...item, status: "SIGNAL", signal, checkedAt };
@@ -181,7 +194,7 @@ async function analyze(item: UniverseItem): Promise<RadarRow> {
       status: "API_ERROR",
       signal: null,
       checkedAt,
-      reason: error instanceof Error ? error.message : "unknown error",
+      reason: error instanceof Error ? error.message : "연결 중 문제가 생겼어요",
     };
   }
 }
@@ -311,22 +324,22 @@ export const AllMarketRadar: React.FC = () => {
           <div>
             <div className="flex items-center gap-2">
               <Globe2 className="h-5 w-5 text-cyan-300" />
-              <h2 className="font-black">ALL MARKET RADAR · 전종목 시장 레이더</h2>
-              <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${running ? "bg-emerald-400 text-emerald-950" : "bg-slate-800 text-slate-400"}`}>{running ? "RUNNING" : "PAUSED"}</span>
+              <h2 className="font-black">전체 시장에서 좋은 종목 찾기</h2>
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${running ? "bg-emerald-400 text-emerald-950" : "bg-slate-800 text-slate-400"}`}>{running ? "찾는 중" : "멈춤"}</span>
             </div>
-            <p className="mt-1 text-[11px] text-slate-400">KOSPI/KOSDAQ 공급자 유니버스 · 미국 공급자 유니버스 · Upbit KRW 전체 마켓을 순환 스캔합니다. 가짜 시세는 생성하지 않습니다.</p>
+            <p className="mt-1 text-[11px] text-slate-400">국내 주식, 미국 주식, 업비트 코인을 차례로 확인합니다. 없는 가격을 만들어서 보여주지 않습니다.</p>
           </div>
           <div className="flex gap-2">
-            <button type="button" onClick={() => setRunning((value) => !value)} className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-black text-slate-200">{running ? "레이더 일시정지" : "레이더 재개"}</button>
-            <button type="button" onClick={() => void refreshUniverse()} disabled={loadingUniverse} className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-black text-slate-200 disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${loadingUniverse ? "animate-spin" : ""}`} /> 유니버스 갱신</button>
+            <button type="button" onClick={() => setRunning((value) => !value)} className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-black text-slate-200">{running ? "잠깐 멈추기" : "다시 찾기"}</button>
+            <button type="button" onClick={() => void refreshUniverse()} disabled={loadingUniverse} className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-black text-slate-200 disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${loadingUniverse ? "animate-spin" : ""}`} /> 종목 목록 새로 받기</button>
           </div>
         </div>
 
         <div className="mt-4 grid gap-2 sm:grid-cols-4">
-          <TopMetric label="전체 후보" value={total} />
-          <TopMetric label="현재 사이클 분석" value={scanned} />
-          <TopMetric label="실제 신호" value={signalCount} />
-          <TopMetric label="사이클 진행률" value={`${progress}%`} />
+          <TopMetric label="살펴볼 종목" value={total} />
+          <TopMetric label="확인한 종목" value={scanned} />
+          <TopMetric label="조건에 맞은 종목" value={signalCount} />
+          <TopMetric label="얼마나 확인했나요?" value={`${progress}%`} />
         </div>
 
         <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-800">
@@ -339,21 +352,21 @@ export const AllMarketRadar: React.FC = () => {
 
         <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/70 p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-xs font-black text-cyan-200"><Radar className="h-4 w-4" /> 실시간 상위 LONG / SHORT 후보</div>
-            <div className="text-[10px] text-slate-500">사이클 {cycle} · {lastCheckedAt ? `마지막 분석 ${new Date(lastCheckedAt).toLocaleTimeString("ko-KR")}` : "분석 대기"}</div>
+            <div className="flex items-center gap-2 text-xs font-black text-cyan-200"><Radar className="h-4 w-4" /> 지금 눈여겨볼 종목</div>
+            <div className="text-[10px] text-slate-500">확인 횟수 {cycle} · {lastCheckedAt ? `마지막 확인 ${new Date(lastCheckedAt).toLocaleTimeString("ko-KR")}` : "아직 확인 전"}</div>
           </div>
           {signals.length ? (
             <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
               {signals.slice(0, 12).map((row) => <SignalCard key={`${row.market}:${row.symbol}`} row={row} />)}
             </div>
           ) : (
-            <div className="mt-3 flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-4 text-xs text-slate-400"><ShieldCheck className="h-4 w-4" /> 아직 ATR/VWAP 검증을 통과한 LONG/SHORT 신호가 없습니다. 아래 상태 카운터로 NO_DATA와 진짜 ZERO_MATCH를 구분할 수 있습니다.</div>
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-4 text-xs text-slate-400"><ShieldCheck className="h-4 w-4" /> 아직 기준을 모두 통과한 종목이 없습니다. 아래 숫자를 보면 자료가 부족한지, 조건에 맞는 종목이 정말 없는지 알 수 있습니다.</div>
           )}
         </div>
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500">
-          <span className="inline-flex items-center gap-1"><Activity className="h-3.5 w-3.5" /> 5분봉 90개 요청 · 56봉 이상만 분석 · 배치 {BATCH_SIZE}개 순환</span>
-          <span className="inline-flex items-center gap-1"><AlertTriangle className="h-3.5 w-3.5" /> 자동 주문 없음 · API 제한을 피하기 위해 전종목을 순환형으로 스캔</span>
+          <span className="inline-flex items-center gap-1"><Activity className="h-3.5 w-3.5" /> 최근 5분 가격 90개를 보고, 자료가 56개 이상일 때만 확인합니다.</span>
+          <span className="inline-flex items-center gap-1"><AlertTriangle className="h-3.5 w-3.5" /> 이 화면은 종목을 찾기만 합니다. 자동으로 사고팔지 않습니다.</span>
         </div>
       </div>
     </section>
@@ -362,32 +375,29 @@ export const AllMarketRadar: React.FC = () => {
 
 const TopMetric: React.FC<{ label: string; value: string | number }> = ({ label, value }) => (
   <div className="rounded-xl border border-slate-800 bg-slate-900 p-3">
-    <div className="text-[9px] font-bold uppercase tracking-wide text-slate-500">{label}</div>
+    <div className="text-[9px] font-bold tracking-wide text-slate-500">{label}</div>
     <div className="mt-1 text-xl font-black text-white">{value}</div>
   </div>
 );
 
-const MarketCard: React.FC<{ market: RadarMarket; counters: MarketCounters }> = ({ market, counters }) => {
-  const label = market === "KOREA" ? "국내 KOSPI/KOSDAQ" : market === "US" ? "미국 주식" : "Upbit KRW 전체";
-  return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="font-black text-slate-100">{label}</div>
-        <span className="rounded-md bg-slate-800 px-2 py-1 text-[10px] font-black text-cyan-200">{counters.scanned}/{counters.universe || "-"}</span>
-      </div>
-      <div className="mt-3 grid grid-cols-4 gap-1.5 text-center">
-        <Count label="SIGNAL" value={counters.signal} active />
-        <Count label="WAIT" value={counters.wait} />
-        <Count label="NO PLAN" value={counters.noPlan} />
-        <Count label="56봉 미만" value={counters.insufficient} />
-        <Count label="NO DATA" value={counters.noData} />
-        <Count label="API ERR" value={counters.apiError} />
-        <Count label="UNIVERSE" value={counters.universe} />
-        <Count label="SCANNED" value={counters.scanned} />
-      </div>
+const MarketCard: React.FC<{ market: RadarMarket; counters: MarketCounters }> = ({ market, counters }) => (
+  <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+    <div className="flex items-center justify-between gap-2">
+      <div className="font-black text-slate-100">{marketLabel(market)}</div>
+      <span className="rounded-md bg-slate-800 px-2 py-1 text-[10px] font-black text-cyan-200">{counters.scanned}/{counters.universe || "-"}</span>
     </div>
-  );
-};
+    <div className="mt-3 grid grid-cols-4 gap-1.5 text-center">
+      <Count label="조건 맞음" value={counters.signal} active />
+      <Count label="더 기다림" value={counters.wait} />
+      <Count label="가격 계획 없음" value={counters.noPlan} />
+      <Count label="자료 부족" value={counters.insufficient} />
+      <Count label="자료 없음" value={counters.noData} />
+      <Count label="연결 문제" value={counters.apiError} />
+      <Count label="전체 종목" value={counters.universe} />
+      <Count label="확인 완료" value={counters.scanned} />
+    </div>
+  </div>
+);
 
 const Count: React.FC<{ label: string; value: number; active?: boolean }> = ({ label, value, active }) => (
   <div className={`rounded-lg border px-1 py-2 ${active ? "border-cyan-400/30 bg-cyan-400/10" : "border-slate-800 bg-slate-950"}`}>
@@ -404,18 +414,18 @@ const SignalCard: React.FC<{ row: RadarRow }> = ({ row }) => {
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="truncate font-black text-slate-100">{row.name}</div>
-          <div className="mt-0.5 text-[10px] text-slate-500">{row.symbol} · {row.market}</div>
+          <div className="mt-0.5 text-[10px] text-slate-500">{row.symbol} · {marketLabel(row.market)}</div>
         </div>
         <span className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-black ${isLong ? "bg-emerald-400 text-emerald-950" : "bg-rose-400 text-rose-950"}`}>
-          {isLong ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}{signal.direction}
+          {isLong ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}{isLong ? "오를 힘이 더 커요" : "내릴 힘이 더 커요"}
         </span>
       </div>
       <div className="mt-3 grid grid-cols-3 gap-1 text-center">
-        <Mini label="LONG" value={`${signal.longStrength.toFixed(0)}%`} />
-        <Mini label="SHORT" value={`${signal.shortStrength.toFixed(0)}%`} />
-        <Mini label="PATTERN" value={signal.matchedPatterns} />
+        <Mini label="오를 힘" value={`${signal.longStrength.toFixed(0)}%`} />
+        <Mini label="내릴 힘" value={`${signal.shortStrength.toFixed(0)}%`} />
+        <Mini label="맞은 모양" value={signal.matchedPatterns} />
       </div>
-      <div className="mt-2 text-[10px] text-slate-500">우세도 격차 {signal.edge.toFixed(1)}pt · {signal.confidenceLabel}</div>
+      <div className="mt-2 text-[10px] text-slate-500">두 힘의 차이 {signal.edge.toFixed(1)}점 · {confidenceLabel(signal.confidenceLabel)}</div>
     </div>
   );
 };
