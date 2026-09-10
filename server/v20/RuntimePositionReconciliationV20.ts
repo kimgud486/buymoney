@@ -68,6 +68,26 @@ export function reconcileRuntimeWithBrokerV20(
     localBySymbol.set(key, bucket);
   }
 
+  // All-or-nothing safety: detect ambiguous symbol allocation before mutating any local quantity.
+  const ambiguityActions: RuntimeReconciliationActionV20[] = [];
+  for (const [symbol, locals] of localBySymbol.entries()) {
+    if (locals.length <= 1) continue;
+    ambiguityActions.push({
+      symbol,
+      type: "AMBIGUOUS_LOCAL_POSITIONS",
+      brokerQty: Math.max(0, Number(brokerBySymbol.get(symbol)?.qty) || 0),
+      localQty: locals.reduce((sum, p) => sum + p.quantities.currentPositionQty, 0)
+    });
+  }
+  if (ambiguityActions.length > 0) {
+    return {
+      applied: false,
+      blocked: true,
+      reason: "AMBIGUOUS_LOCAL_POSITIONS",
+      actions: ambiguityActions
+    };
+  }
+
   const actions: RuntimeReconciliationActionV20[] = [];
   const symbols = new Set([...brokerBySymbol.keys(), ...localBySymbol.keys()]);
 
@@ -80,12 +100,6 @@ export function reconcileRuntimeWithBrokerV20(
       if (brokerQty > 0) {
         actions.push({ symbol, type: "ORPHAN_BROKER_POSITION", brokerQty, localQty: 0 });
       }
-      continue;
-    }
-
-    if (locals.length > 1) {
-      const localQty = locals.reduce((sum, p) => sum + p.quantities.currentPositionQty, 0);
-      actions.push({ symbol, type: "AMBIGUOUS_LOCAL_POSITIONS", brokerQty, localQty });
       continue;
     }
 
@@ -111,15 +125,10 @@ export function reconcileRuntimeWithBrokerV20(
     actions.push({ symbol, positionId: position.positionId, type: "QTY_ADJUSTED", brokerQty, localQty });
   }
 
-  const hasAmbiguity = actions.some((action) => action.type === "AMBIGUOUS_LOCAL_POSITIONS");
   return {
-    applied: !hasAmbiguity,
-    blocked: hasAmbiguity,
-    reason: hasAmbiguity
-      ? "AMBIGUOUS_LOCAL_POSITIONS"
-      : comparison.ok
-        ? "SYNCED"
-        : "RECONCILED_FROM_VERIFIED_BROKER_TRUTH",
+    applied: true,
+    blocked: false,
+    reason: comparison.ok ? "SYNCED" : "RECONCILED_FROM_VERIFIED_BROKER_TRUTH",
     actions
   };
 }
