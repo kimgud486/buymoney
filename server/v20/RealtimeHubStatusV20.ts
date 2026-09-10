@@ -6,7 +6,14 @@ export interface RealtimeHubStatusV20 {
   generatedAt: number;
   subscriptions: { KOREA: number; US: number; UPBIT: number; total: number };
   quotes: { KOREA: number; US: number; UPBIT: number; total: number; fresh: number; stale: number };
-  warming: ReturnType<typeof serverCandleWarmCoordinatorV20.getStats>;
+  warming: {
+    requested: number;
+    warmed: number;
+    warmed1m: number;
+    warmed15m: number;
+    failed: number;
+    lastWarmAt: number | null;
+  };
   health: "HEALTHY" | "DEGRADED" | "NO_DATA";
   lastQuoteAt: number | null;
 }
@@ -26,7 +33,16 @@ export function buildRealtimeHubStatusV20(): RealtimeHubStatusV20 {
   const fresh = quotes.filter((x) => now - x.updatedAt <= 15_000 && x.grade === "EXECUTION_GRADE").length;
   const stale = quotes.length - fresh;
   const lastQuoteAt = quotes.length ? Math.max(...quotes.map((x) => x.updatedAt)) : null;
-  const warming = serverCandleWarmCoordinatorV20.getStats();
+  const warmStats = serverCandleWarmCoordinatorV20.getStats();
+
+  // The coordinator counts a symbol as warmed only after BOTH its verified
+  // 1m and 15m histories pass their minimum-bar gates. Therefore these two
+  // monitor counters are intentionally the same successful-symbol count.
+  const warming = {
+    ...warmStats,
+    warmed1m: warmStats.warmed,
+    warmed15m: warmStats.warmed,
+  };
 
   const health: RealtimeHubStatusV20["health"] = quotes.length === 0
     ? "NO_DATA"
