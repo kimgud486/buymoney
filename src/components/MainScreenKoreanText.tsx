@@ -82,40 +82,6 @@ const TEXT_MAP: Record<string, string> = {
   "Paused": "멈춤"
 };
 
-function translateTextNode(node: Text) {
-  const raw = node.nodeValue ?? "";
-  const trimmed = raw.trim();
-  const translated = TEXT_MAP[trimmed];
-  if (!translated || translated === trimmed) return;
-  const left = raw.match(/^\s*/)?.[0] ?? "";
-  const right = raw.match(/\s*$/)?.[0] ?? "";
-  node.nodeValue = `${left}${translated}${right}`;
-}
-
-function translateElement(root: Node) {
-  if (root.nodeType === Node.TEXT_NODE) {
-    translateTextNode(root as Text);
-    return;
-  }
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let current = walker.nextNode();
-  while (current) {
-    translateTextNode(current as Text);
-    current = walker.nextNode();
-  }
-}
-
 export function MainScreenKoreanText() {
-  useEffect(() => {
-    translateElement(document.body);
-    const observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        if (mutation.type === "characterData") translateElement(mutation.target);
-        for (const node of Array.from(mutation.addedNodes)) translateElement(node);
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-    return () => observer.disconnect();
-  }, []);
   return null;
 }

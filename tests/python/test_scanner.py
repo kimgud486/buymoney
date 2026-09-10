@@ -95,7 +95,7 @@ class TestExplainableScanner(unittest.TestCase):
 
         stats = calculate_pattern_history(
             candles,
-            pattern="STRONG_BULL",
+            pattern="THREE_WHITE_SOLDIERS",
             forward_bars=5,
             min_samples=5,
         )
