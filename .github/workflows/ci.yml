@@ -55,15 +55,14 @@ jobs:
         run: npm run build
 
       - name: Verify deployable output
-        run: |
-          test -s dist/index.html
-          test -s dist/server.cjs
-          test -d dist/assets
+        run: npm run verify:build-output
 
       - name: Upload app build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: buymoney-app-build
-          path: dist/**
+          path: |
+            dist/**
+            build/**
           if-no-files-found: error
           retention-days: 7
