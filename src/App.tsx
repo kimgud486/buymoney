@@ -23,6 +23,7 @@ import { VerifiedIntradaySignalPanel } from "./components/VerifiedIntradaySignal
 import { VerifiedPatternStatusPanel } from "./components/VerifiedPatternStatusPanel";
 import { VerifiedPatternGuideBridge } from "./components/VerifiedPatternGuideBridge";
 import { BuyHoldSystemStatusPanel } from "./components/BuyHoldSystemStatusPanel";
+import { RevenueSystemRoadmap } from "./components/RevenueSystemRoadmap";
 import { evaluateVerifiedSignal, type VerifiedSignalResult } from "./scanner/verifiedSignalEngine";
 
 type VerifiedPatternSelection = {
@@ -156,6 +157,10 @@ function MainLayout() {
 
       <ErrorBoundary>
         <BuyHoldSystemStatusPanel />
+      </ErrorBoundary>
+
+      <ErrorBoundary>
+        <RevenueSystemRoadmap />
       </ErrorBoundary>
 
       <ErrorBoundary>
