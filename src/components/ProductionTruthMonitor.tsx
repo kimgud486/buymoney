@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Activity, AlertTriangle, CheckCircle2, Database, Radio, ShieldCheck, XCircle } from "lucide-react";
+import { AlertTriangle, Database, Radio, ShieldCheck } from "lucide-react";
 import { useApp } from "../context/AppContext";
 import { LiveMarketQuote, realtimeMarketFeedService } from "../services/realtimeMarketFeedService";
 
 type TruthState = "LIVE" | "STALE" | "NO_DATA" | "DISCONNECTED" | "UNKNOWN";
+type TrafficLight = "GREEN" | "YELLOW" | "RED";
 
 type TruthItem = {
   label: string;
@@ -11,13 +12,36 @@ type TruthItem = {
   detail: string;
 };
 
-const stateClass: Record<TruthState, string> = {
-  LIVE: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
-  STALE: "border-amber-500/40 bg-amber-500/10 text-amber-300",
-  NO_DATA: "border-slate-700 bg-slate-800/50 text-slate-400",
-  DISCONNECTED: "border-rose-500/40 bg-rose-500/10 text-rose-300",
-  UNKNOWN: "border-slate-700 bg-slate-800/50 text-slate-400"
+const toTrafficLight = (state: TruthState): TrafficLight => {
+  if (state === "LIVE") return "GREEN";
+  if (state === "DISCONNECTED") return "RED";
+  return "YELLOW";
 };
+
+const lightClass: Record<TrafficLight, string> = {
+  GREEN: "border-emerald-500/50 bg-emerald-500/10 text-emerald-300",
+  YELLOW: "border-yellow-400/50 bg-yellow-400/10 text-yellow-200",
+  RED: "border-red-500/50 bg-red-500/10 text-red-300"
+};
+
+const dotClass: Record<TrafficLight, string> = {
+  GREEN: "bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.75)]",
+  YELLOW: "bg-yellow-300 shadow-[0_0_10px_rgba(253,224,71,0.7)]",
+  RED: "bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)]"
+};
+
+const lightLabel: Record<TrafficLight, string> = {
+  GREEN: "정상",
+  YELLOW: "확인 필요",
+  RED: "오류/차단"
+};
+
+const TrafficDot: React.FC<{ light: TrafficLight; pulse?: boolean }> = ({ light, pulse = true }) => (
+  <span className="relative flex h-2.5 w-2.5 shrink-0" aria-label={lightLabel[light]}>
+    {pulse && <span className={`absolute inline-flex h-full w-full rounded-full opacity-40 animate-ping ${dotClass[light]}`} />}
+    <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${dotClass[light]}`} />
+  </span>
+);
 
 export const ProductionTruthMonitor: React.FC = () => {
   const {
@@ -109,7 +133,11 @@ export const ProductionTruthMonitor: React.FC = () => {
     }
   ];
 
-  const unsafe = items.some(item => item.state === "DISCONNECTED" || item.state === "STALE");
+  const overallLight: TrafficLight = items.some(item => toTrafficLight(item.state) === "RED")
+    ? "RED"
+    : items.some(item => toTrafficLight(item.state) === "YELLOW")
+      ? "YELLOW"
+      : "GREEN";
 
   return (
     <div className="sticky top-0 z-40 border-b border-slate-800 bg-slate-950/95 px-3 py-2 backdrop-blur">
@@ -117,16 +145,37 @@ export const ProductionTruthMonitor: React.FC = () => {
         <div className="mr-1 flex items-center gap-1.5 text-xs font-black text-white">
           <ShieldCheck className="h-4 w-4 text-cyan-400" /> TRUTH MONITOR
         </div>
-        {items.map(item => (
-          <div key={item.label} title={item.detail} className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[10px] font-bold ${stateClass[item.state]}`}>
-            {item.state === "LIVE" ? <CheckCircle2 className="h-3 w-3" /> : item.state === "DISCONNECTED" ? <XCircle className="h-3 w-3" /> : item.state === "STALE" ? <AlertTriangle className="h-3 w-3" /> : <Database className="h-3 w-3" />}
-            <span>{item.label}</span>
-            <span className="font-mono opacity-80">{item.state}</span>
-          </div>
-        ))}
-        <div className={`ml-auto flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[10px] font-black ${unsafe ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"}`}>
-          {unsafe ? <AlertTriangle className="h-3 w-3" /> : <Radio className="h-3 w-3" />}
-          {unsafe ? "검증 필요" : "표시 데이터 정상"}
+
+        <div className="mr-1 flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900 px-2 py-1" title="초록=정상 · 노랑=확인 필요 · 빨강=오류/차단">
+          <TrafficDot light="RED" pulse={false} />
+          <TrafficDot light="YELLOW" pulse={false} />
+          <TrafficDot light="GREEN" pulse={false} />
+        </div>
+
+        {items.map(item => {
+          const light = toTrafficLight(item.state);
+          return (
+            <div
+              key={item.label}
+              title={`${item.detail} · ${lightLabel[light]}`}
+              className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[10px] font-bold ${lightClass[light]}`}
+            >
+              <TrafficDot light={light} />
+              <span>{item.label}</span>
+              <span className="font-mono opacity-90">{lightLabel[light]}</span>
+            </div>
+          );
+        })}
+
+        <div className={`ml-auto flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[10px] font-black ${lightClass[overallLight]}`}>
+          <TrafficDot light={overallLight} />
+          {overallLight === "GREEN" ? (
+            <><Radio className="h-3 w-3" /> 전체 정상</>
+          ) : overallLight === "YELLOW" ? (
+            <><AlertTriangle className="h-3 w-3" /> 일부 확인 필요</>
+          ) : (
+            <><Database className="h-3 w-3" /> 연결 오류 또는 주문 차단</>
+          )}
         </div>
       </div>
     </div>
