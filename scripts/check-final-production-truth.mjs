@@ -1,7 +1,7 @@
 // ----------------------------------------------------------------------
 // CHECK FINAL PRODUCTION TRUTH MJS (BUYMONEY FINAL SYSTEM)
-// Verifies production zero-fake posture & V20 BUY/HOLD authority wiring
-// Final validation anchor after latest main scanner-truth sync.
+// Verifies production zero-fake posture & V20 BUY/HOLD authority wiring.
+// UI composition follows the current unified main-dashboard contract.
 // ----------------------------------------------------------------------
 
 import fs from "fs";
@@ -32,6 +32,7 @@ const requiredFiles = [
   "src/components/BuyHoldSystemStatusPanel.tsx",
   "src/components/VerifiedAiOpportunityScanner.tsx",
   "src/components/VerifiedIntradaySignalPanel.tsx",
+  "src/components/trading/MasterAiAutoTradingDashboard.tsx",
   "src/services/KISRealtimeFieldSchema.ts",
   "src/trading/PositionStateMachine.ts",
   "src/trading/LivePositionRuntimeService.ts"
@@ -119,9 +120,15 @@ if (scannerUi.includes("evaluateVerifiedSignal(")) errors.push("VerifiedAiOpport
 if (scannerUi.includes('verified && score >= 76 ? "BUY"')) errors.push("Browser must never promote PRECHECK score directly to BUY");
 if (!scannerUi.includes("PRECHECK는 후보 압축만 합니다")) errors.push("UI must visibly distinguish PRECHECK from FINAL BUY authority");
 
+// Current main-screen contract: one unified trading dashboard is mounted.
+// Legacy panels remain available as modules but must not be required as separate main-screen mounts.
 const appContent = read("src/App.tsx");
-if (!appContent.includes("<BuyHoldSystemStatusPanel")) errors.push("App must keep BUY/HOLD system status UI");
-if (!appContent.includes("<VerifiedIntradaySignalPanel")) errors.push("Latest main intraday signal panel must survive final integration");
+if (!appContent.includes("<MasterAiAutoTradingDashboard")) {
+  errors.push("App must mount the current unified autonomous trading dashboard");
+}
+if (appContent.includes("<BuyHoldSystemStatusPanel") || appContent.includes("<VerifiedIntradaySignalPanel")) {
+  errors.push("Legacy duplicate trading panels must remain unmounted from the unified main screen");
+}
 
 const finalHttp = read("server/v20/FinalBuyHoldHttpHandlerV20.ts");
 if (!finalHttp.includes("FinalBuyHoldDecisionServiceV20.evaluate")) errors.push("Final HTTP handler must delegate to FinalBuyHoldDecisionServiceV20");
