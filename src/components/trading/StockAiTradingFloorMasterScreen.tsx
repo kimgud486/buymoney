@@ -54,7 +54,19 @@ export const StockAiTradingFloorMasterScreen: React.FC = () => {
   const { profile, executeTrade, addToast, isRealTrade } = useApp();
 
   // 마스터 상태
-  const [agents, setAgents] = useState<AgentProfile[]>(INITIAL_30_AI_AGENTS);
+  const [agents] = useState<AgentProfile[]>(() => INITIAL_30_AI_AGENTS.map((agent) => ({
+    ...agent,
+    status: "IDLE" as const,
+    currentTask: "실시간 근거 데이터 대기",
+    currentValue: "NO_DATA",
+    score: 0,
+    precision30D: 0,
+    profitFactor: 0,
+    signalsCount30D: 0,
+    recentEvidenceIds: [],
+    reasoningText: "실제 분석 실행 결과가 들어오면 표시됩니다.",
+    lastUpdated: "데이터 대기"
+  })));
   const [evidences, setEvidences] = useState<EvidenceItem[]>(INITIAL_EVIDENCES);
   const [scannedStocks, setScannedStocks] = useState<TargetStockScanItem[]>(INITIAL_SCANNED_STOCKS);
   const [selectedStock, setSelectedStock] = useState<TargetStockScanItem>(INITIAL_SCANNED_STOCKS[0]);
@@ -121,24 +133,6 @@ export const StockAiTradingFloorMasterScreen: React.FC = () => {
     isOpen: false,
     mode: "LONG"
   });
-
-  // 실시간 AI 분석관 상태 순환 애니메이션
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setAgents(prev => {
-        return prev.map(ag => {
-          if (Math.random() < 0.15) {
-            const statuses: AgentProfile["status"][] = ["CONFIRMED", "ANALYZING", "DEBATING", "DECIDING"];
-            const nextStatus = statuses[Math.floor(Math.random() * statuses.length)];
-            return { ...ag, status: ag.department === "CIO" ? "DECIDING" : nextStatus };
-          }
-          return ag;
-        });
-      });
-    }, 4000);
-
-    return () => clearInterval(interval);
-  }, []);
 
   // 스캐너 필터링
   const filteredStocks = useMemo(() => {

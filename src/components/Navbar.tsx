@@ -212,10 +212,10 @@ export const Navbar: React.FC<NavbarProps> = ({ onLock }) => {
             <button
               onClick={() => window.dispatchEvent(new CustomEvent("open-consensus-modal", { detail: "005930" }))}
               className="flex items-center gap-1.5 px-2.5 py-1.5 sm:px-3 rounded text-xs font-black transition cursor-pointer border shadow-xs bg-gradient-to-r from-cyan-900 to-indigo-900 hover:from-cyan-800 hover:to-indigo-800 text-cyan-200 border-cyan-500/70 ring-1 ring-cyan-500/30"
-              title="AI 4대 증권소 모델 통합 리서치 & 결론 허브"
+              title="실시간 근거 기반 AI 4모델 통합 분석 및 결론"
             >
               <Building2 className="h-3.5 w-3.5 text-cyan-300 shrink-0" />
-              <span className="hidden sm:inline">🏛️ AI 증권소 리서치</span>
+              <span className="hidden sm:inline">🏛️ AI 4모델 리서치</span>
               <span className="sm:hidden text-[10px]">AI 리서치</span>
             </button>
 

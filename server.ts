@@ -2724,11 +2724,11 @@ app.get("/api/quant/matrix/:symbol", async (req, res) => {
 app.get("/api/market/status", async (req, res) => {
   try {
     const [kospi, kosdaq, sp500, nasdaq, exchangeRate] = await Promise.all([
-      fetchIndexData("^KS11", { value: 2685.42, change: 32.12, pct: 1.21 }),
-      fetchIndexData("^KQ11", { value: 855.12, change: 8.44, pct: 1.00 }),
-      fetchIndexData("^GSPC", { value: 5522.30, change: 42.15, pct: 0.77 }),
-      fetchIndexData("^IXIC", { value: 17855.20, change: 168.40, pct: 0.95 }),
-      fetchIndexData("USDKRW=X", { value: 1384.50, change: -4.50, pct: -0.32 })
+      fetchIndexData("^KS11", { value: 0, change: 0, pct: 0 }),
+      fetchIndexData("^KQ11", { value: 0, change: 0, pct: 0 }),
+      fetchIndexData("^GSPC", { value: 0, change: 0, pct: 0 }),
+      fetchIndexData("^IXIC", { value: 0, change: 0, pct: 0 }),
+      fetchIndexData("USDKRW=X", { value: 0, change: 0, pct: 0 })
     ]);
     
     res.json({
@@ -2737,19 +2737,23 @@ app.get("/api/market/status", async (req, res) => {
       sp500,
       nasdaq,
       exchangeRate,
+      dataValid: true,
+      dataStatus: "LIVE",
       riskLevel: "NORMAL",
       opinion: "글로벌 증시는 미국의 인플레이션 둔화 신호와 기술 기업의 실적 호조에 힘입어 상승 모멘텀을 유지하고 있습니다. 반도체 및 대형주 위주의 수급 유입이 활발하며 위험 단계는 '보통(NORMAL)'으로 유지되어 비중 유지 혹은 추세 추종 전략을 가동하기 적합합니다."
     });
   } catch (err) {
     console.error("Failed to load market status indexes", err);
-    res.json({
-      kospi: { value: 2685.42, change: 32.12, pct: 1.21 },
-      kosdaq: { value: 855.12, change: 8.44, pct: 1.00 },
-      sp500: { value: 5522.30, change: 42.15, pct: 0.77 },
-      nasdaq: { value: 17855.20, change: 168.40, pct: 0.95 },
-      exchangeRate: { value: 1384.50, change: -4.50, pct: -0.32 },
-      riskLevel: "NORMAL",
-      opinion: "글로벌 증시는 미국의 인플레이션 둔화 신호와 기술 기업의 실적 호조에 힘입어 상승 모멘텀을 유지하고 있습니다. 반도체 및 대형주 위주의 수급 유입이 활발하며 위험 단계는 '보통(NORMAL)'으로 유지되어 비중 유지 혹은 추세 추종 전략을 가동하기 적합합니다."
+    res.status(503).json({
+      kospi: { value: 0, change: 0, pct: 0 },
+      kosdaq: { value: 0, change: 0, pct: 0 },
+      sp500: { value: 0, change: 0, pct: 0 },
+      nasdaq: { value: 0, change: 0, pct: 0 },
+      exchangeRate: { value: 0, change: 0, pct: 0 },
+      dataValid: false,
+      dataStatus: "NO_DATA",
+      riskLevel: "UNKNOWN",
+      opinion: "실시간 시장지수 수신에 실패하여 분석을 중단했습니다. 임의 숫자는 표시하지 않습니다."
     });
   }
 });

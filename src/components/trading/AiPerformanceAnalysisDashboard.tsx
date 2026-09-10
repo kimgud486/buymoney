@@ -59,7 +59,6 @@ export interface TradeHistoryRecord {
 
 export const AiPerformanceAnalysisDashboard: React.FC = () => {
   const { trades: userTrades } = useApp();
-  const [dataViewMode, setDataViewMode] = useState<"ALL" | "LIVE_ONLY">("ALL");
   const [selectedStockForScatter, setSelectedStockForScatter] = useState<StockItem>(INITIAL_STOCK_UNIVERSE[0]);
 
   // BEP Holding Notification Toggle State
@@ -224,11 +223,10 @@ export const AiPerformanceAnalysisDashboard: React.FC = () => {
     extraProfitCapturedPct: Math.max(0, (t.profitPct || 0) - 0.5)
   }));
 
-  const tradeRecords = dataViewMode === "LIVE_ONLY"
-    ? realFormattedTrades
-    : (realFormattedTrades.length > 0 ? [...realFormattedTrades, ...presetRecords] : presetRecords);
-
-  const isUsingBenchmarkData = realFormattedTrades.length === 0 || dataViewMode === "ALL";
+  // Production performance cards must only use the user's recorded executions.
+  // Preset/backtest rows are never merged into live PnL or win-rate totals.
+  const tradeRecords = realFormattedTrades;
+  const hasVerifiedTrades = tradeRecords.length > 0;
 
   // Key Aggregated Performance Statistics
   const totalTrades = tradeRecords.length;
@@ -236,14 +234,18 @@ export const AiPerformanceAnalysisDashboard: React.FC = () => {
   const winRatePct = Math.round((winningTrades / Math.max(1, totalTrades)) * 1000) / 10;
   const totalNetPnlKRW = tradeRecords.reduce((acc, t) => acc + t.netPnlAmount, 0);
   const avgNetProfitPct = Math.round((tradeRecords.reduce((acc, t) => acc + t.netProfitPct, 0) / Math.max(1, totalTrades)) * 100) / 100;
-  const totalFeeSavedEvents = 42;
 
   // AI Predictive Hold Extra Efficiency Metrics
   const validHoldTrades = tradeRecords.filter(t => t.extraProfitCapturedPct > 0);
   const avgExtraProfitCapturedPct = Math.round(
     (validHoldTrades.reduce((acc, t) => acc + t.extraProfitCapturedPct, 0) / Math.max(1, validHoldTrades.length)) * 100
   ) / 100;
-  const peakCaptureAccuracy = 96.4; // Average percentage of predicted peak captured
+  const peakCaptureAccuracy = hasVerifiedTrades
+    ? tradeRecords.reduce((sum, trade) => {
+        if (!(trade.predictedPeakPrice > 0) || !(trade.actualExitPrice > 0)) return sum;
+        return sum + Math.min(100, (trade.actualExitPrice / trade.predictedPeakPrice) * 100);
+      }, 0) / tradeRecords.length
+    : null;
 
   return (
     <div className="space-y-5 text-white font-sans">
@@ -251,45 +253,25 @@ export const AiPerformanceAnalysisDashboard: React.FC = () => {
       <div className="p-3.5 bg-gradient-to-r from-amber-950/80 via-slate-900 to-indigo-950/80 border border-amber-500/40 rounded-2xl space-y-2 text-xs">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            {isUsingBenchmarkData ? (
-              <span className="px-2.5 py-1 rounded-xl bg-amber-500/20 text-amber-300 font-black border border-amber-500/40 flex items-center gap-1.5 text-[11px]">
-                <TestTube className="w-4 h-4 text-amber-400 animate-pulse" />
-                <span>🧪 AI 백테스트 벤치마크 (샘플 시뮬레이션 데이터)</span>
-              </span>
-            ) : (
+            {hasVerifiedTrades ? (
               <span className="px-2.5 py-1 rounded-xl bg-emerald-500/20 text-emerald-300 font-black border border-emerald-500/40 flex items-center gap-1.5 text-[11px]">
                 <Activity className="w-4 h-4 text-emerald-400 animate-ping" />
-                <span>🔴 LIVE 실거래 계잔 체결 데이터 ({realFormattedTrades.length}건)</span>
+                <span>🔴 LIVE 실거래 계좌 체결 데이터 ({realFormattedTrades.length}건)</span>
+              </span>
+            ) : (
+              <span className="px-2.5 py-1 rounded-xl bg-zinc-800 text-zinc-300 font-black border border-zinc-700 flex items-center gap-1.5 text-[11px]">
+                <Info className="w-4 h-4" />
+                <span>실제 체결 데이터 없음</span>
               </span>
             )}
           </div>
-
-          <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl p-1 gap-1">
-            <button
-              type="button"
-              onClick={() => setDataViewMode("ALL")}
-              className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
-                dataViewMode === "ALL" ? "bg-amber-600 text-white font-black" : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              백테스트 벤치마크 포함
-            </button>
-            <button
-              type="button"
-              onClick={() => setDataViewMode("LIVE_ONLY")}
-              className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
-                dataViewMode === "LIVE_ONLY" ? "bg-emerald-600 text-white font-black" : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              실제 체결만 ({realFormattedTrades.length}건)
-            </button>
-          </div>
+          <span className="px-2.5 py-1 rounded-lg text-[10px] font-black bg-emerald-600 text-white">실제 체결만</span>
         </div>
 
         <p className="text-[11px] text-amber-200/90 leading-relaxed font-sans flex items-start gap-1.5">
           <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
           <span>
-            <strong>[데이터 투명성 안내]</strong> 현재 사용자 계좌에서 실거래가 미집행된 상태일 경우, 표출되는 수치(승률, 익절률, 알파 PnL)는 30인 AI 알고리즘의 사전 검증용 백테스트 시뮬레이션 baseline 샘플 데이터입니다. 실거래 API 연동 후 자동 매매를 가동하시면 <strong>실제 계좌 체결 내역(Live Trades)</strong>으로 즉시 자동 반영됩니다.
+            <strong>[데이터 투명성]</strong> 이 화면은 실제 계좌 체결 기록만 합산합니다. 기록이 없으면 0 또는 데이터 없음으로 표시하며 샘플 성과를 섞지 않습니다.
           </span>
         </p>
       </div>
@@ -354,7 +336,7 @@ export const AiPerformanceAnalysisDashboard: React.FC = () => {
             <Percent className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="text-2xl sm:text-3xl font-black text-emerald-400">
-            {winRatePct}%
+            {hasVerifiedTrades ? `${winRatePct}%` : "데이터 없음"}
           </div>
           <div className="text-[11px] text-slate-400 mt-1 font-sans">
             총 {totalTrades}건 중 <strong className="text-emerald-300">{winningTrades}승</strong> ({totalTrades - winningTrades}패)
@@ -382,7 +364,7 @@ export const AiPerformanceAnalysisDashboard: React.FC = () => {
             <Sparkles className="w-4 h-4 text-amber-400 animate-spin" />
           </div>
           <div className="text-2xl sm:text-3xl font-black text-amber-300">
-            +{avgExtraProfitCapturedPct}%p
+            {hasVerifiedTrades ? `+${avgExtraProfitCapturedPct}%p` : "데이터 없음"}
           </div>
           <div className="text-[11px] text-indigo-300/80 mt-1 font-sans">
             BEP 단순 매도 대비 추가 이익 알파
@@ -396,7 +378,7 @@ export const AiPerformanceAnalysisDashboard: React.FC = () => {
             <Target className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="text-2xl sm:text-3xl font-black text-emerald-300">
-            {peakCaptureAccuracy}%
+            {peakCaptureAccuracy === null ? "데이터 없음" : `${peakCaptureAccuracy.toFixed(1)}%`}
           </div>
           <div className="text-[11px] text-slate-400 mt-1 font-sans">
             AI 예측 고점 정밀 캡처 성공률
@@ -631,4 +613,3 @@ export const AiPerformanceAnalysisDashboard: React.FC = () => {
     </div>
   );
 };
-

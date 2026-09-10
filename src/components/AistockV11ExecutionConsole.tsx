@@ -27,11 +27,11 @@ import { AutonomousExecutionEngineV11, AutonomousEngineStatus } from "../service
 import { TradingMode, OrderState } from "../services/v11/ExecutionStateMachine";
 
 // Singleton Engine Instance
-export const v11ExecutionEngine = new AutonomousExecutionEngineV11("PAPER");
+export const v11ExecutionEngine = new AutonomousExecutionEngineV11("DRY_RUN");
 
 export const AistockV11ExecutionConsole: React.FC = () => {
   const [engineStatus, setEngineStatus] = useState<AutonomousEngineStatus>(v11ExecutionEngine.getStatus());
-  const [selectedMode, setSelectedMode] = useState<TradingMode>("PAPER");
+  const [selectedMode, setSelectedMode] = useState<TradingMode>("DRY_RUN");
   const [dualLockEnabled, setDualLockEnabled] = useState<boolean>(false);
   const [showRiskConfigModal, setShowRiskConfigModal] = useState<boolean>(false);
   const [customMaxKRW, setCustomMaxKRW] = useState<number>(5000000);
@@ -48,10 +48,10 @@ export const AistockV11ExecutionConsole: React.FC = () => {
 
   const handleModeChange = (mode: TradingMode) => {
     if (mode === "LIVE") {
-      // Direct enable live mode and dual lock smoothly
-      setDualLockEnabled(true);
       setSelectedMode("LIVE");
-      v11ExecutionEngine.setTradingMode("LIVE", true);
+      // Selecting LIVE never unlocks order submission by itself.
+      setDualLockEnabled(false);
+      v11ExecutionEngine.setTradingMode("LIVE", false);
     } else {
       setSelectedMode(mode);
       v11ExecutionEngine.setTradingMode(mode, dualLockEnabled);
@@ -62,8 +62,7 @@ export const AistockV11ExecutionConsole: React.FC = () => {
     const nextState = !dualLockEnabled;
     setDualLockEnabled(nextState);
     if (!nextState && selectedMode === "LIVE") {
-      setSelectedMode("PAPER");
-      v11ExecutionEngine.setTradingMode("PAPER", false);
+      v11ExecutionEngine.setTradingMode("LIVE", false);
     } else {
       v11ExecutionEngine.setTradingMode(selectedMode, nextState);
     }
@@ -72,6 +71,13 @@ export const AistockV11ExecutionConsole: React.FC = () => {
   const currentState = engineStatus.stateMachine.currentState;
   const activePosition = engineStatus.activePosition;
   const riskMetrics = engineStatus.riskMetrics;
+  const realizedPnL = riskMetrics.dailyRealizedPnLKRW || 0;
+  const unrealizedPnL = activePosition?.unrealizedPnLAmt || 0;
+  const todayPnL = realizedPnL + unrealizedPnL;
+  const completedTrades = riskMetrics.totalTradesToday || 0;
+  const winRate = completedTrades > 0
+    ? (riskMetrics.winTradesToday / completedTrades) * 100
+    : null;
 
   return (
     <div className="bg-white border border-zinc-200 rounded-2xl p-4 sm:p-6 shadow-xs space-y-6">
@@ -208,8 +214,8 @@ export const AistockV11ExecutionConsole: React.FC = () => {
             </span>
           </div>
 
-          <div className="grid grid-cols-3 gap-2">
-            {(["PAPER", "DRY_RUN", "LIVE"] as TradingMode[]).map((m) => (
+          <div className="grid grid-cols-2 gap-2">
+            {(["DRY_RUN", "LIVE"] as TradingMode[]).map((m) => (
               <button
                 key={m}
                 onClick={() => handleModeChange(m)}
@@ -221,9 +227,9 @@ export const AistockV11ExecutionConsole: React.FC = () => {
                     : "bg-zinc-800 text-zinc-400 border-zinc-700 hover:text-white"
                 }`}
               >
-                <span>{m === "PAPER" ? "📄 PAPER" : m === "DRY_RUN" ? "🧪 DRY_RUN" : "🔴 LIVE"}</span>
+                <span>{m === "DRY_RUN" ? "🧪 시세+테스트" : "🔴 LIVE 실거래"}</span>
                 <span className="text-[9px] font-normal opacity-80">
-                  {m === "PAPER" ? "가상 모의" : m === "DRY_RUN" ? "시세+테스트" : "실전 계좌"}
+                  {m === "DRY_RUN" ? "주문 전송 없음" : "API 연결 후 주문"}
                 </span>
               </button>
             ))}
@@ -289,8 +295,42 @@ export const AistockV11ExecutionConsole: React.FC = () => {
         </div>
       </div>
 
-      {/* 4. EXECUTION STATE MACHINE LIVE MONITOR & ACTIVE POSITION */}
-      <div className="bg-zinc-950 text-white border-2 border-cyan-500/60 rounded-2xl p-4 sm:p-5 shadow-xl space-y-4">
+      {/* 4. USER-FACING DAILY PROFIT MONITOR */}
+      <section className="bg-white border border-zinc-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4" aria-label="오늘 수익 모니터">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-100 pb-3">
+          <div>
+            <h3 className="text-base font-black text-zinc-900">💰 오늘 수익 모니터</h3>
+            <p className="text-xs text-zinc-500 mt-0.5">실현손익과 현재 보유 종목의 평가손익을 합쳐 보여줍니다.</p>
+          </div>
+          <span className={`px-3 py-1 rounded-full text-xs font-black ${todayPnL >= 0 ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+            오늘 {todayPnL >= 0 ? "수익" : "손실"}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+          {[
+            { label: "오늘 총손익", value: `${todayPnL >= 0 ? "+" : ""}${todayPnL.toLocaleString()}원`, tone: todayPnL >= 0 ? "text-emerald-600" : "text-rose-600" },
+            { label: "확정된 수익/손실", value: `${realizedPnL >= 0 ? "+" : ""}${realizedPnL.toLocaleString()}원`, tone: realizedPnL >= 0 ? "text-emerald-600" : "text-rose-600" },
+            { label: "보유 중 평가손익", value: `${unrealizedPnL >= 0 ? "+" : ""}${unrealizedPnL.toLocaleString()}원`, tone: unrealizedPnL >= 0 ? "text-emerald-600" : "text-rose-600" },
+            { label: "오늘 매매", value: `${completedTrades}건`, tone: "text-zinc-900" },
+            { label: "승 / 패", value: `${riskMetrics.winTradesToday}승 / ${riskMetrics.lossTradesToday}패`, tone: "text-zinc-900" },
+            { label: "승률", value: winRate === null ? "거래 후 표시" : `${winRate.toFixed(1)}%`, tone: winRate !== null && winRate >= 50 ? "text-emerald-600" : "text-zinc-900" }
+          ].map((item) => (
+            <div key={item.label} className="rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+              <span className="block text-[10px] font-bold text-zinc-500">{item.label}</span>
+              <span className={`block mt-1 text-sm font-black font-mono ${item.tone}`}>{item.value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-zinc-500">
+          <span>연속 손실: <strong className="text-amber-600">{riskMetrics.consecutiveLosses}회</strong></span>
+          <span>일일 손실 한도: <strong className="text-rose-600">-300,000원</strong></span>
+          <span>데이터 기준: <strong className="text-zinc-700">{selectedMode === "LIVE" ? "실계좌 API 체결" : "시세+테스트 주문 검증"}</strong></span>
+        </div>
+      </section>
+
+      {/* 5. ACTIVE POSITION + COLLAPSIBLE ENGINE DIAGNOSTICS */}
+      <details className="bg-zinc-950 text-white border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-md space-y-4">
+        <summary className="cursor-pointer text-sm font-black text-cyan-300">상세 엔진 진단 보기 · 주문상태 / Risk Gate ({currentState})</summary>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-800 pb-3">
           <div className="flex items-center gap-3">
             <span className={`p-2.5 rounded-xl ${
@@ -399,9 +439,9 @@ export const AistockV11ExecutionConsole: React.FC = () => {
             현재 보유 중인 자율매매 포지션이 없습니다. (State: {currentState})
           </div>
         )}
-      </div>
+      </details>
 
-      {/* 5. RISK GATE METRICS & REALTIME EXECUTION STREAM LOGS */}
+      {/* 6. RISK GATE METRICS & REALTIME EXECUTION STREAM LOGS */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Risk Metrics */}
         <div className="bg-zinc-50 border border-zinc-200 rounded-2xl p-4 space-y-3">

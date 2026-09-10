@@ -120,10 +120,13 @@ export const MultiModelSecuritiesConsensusModal: React.FC<MultiModelSecuritiesCo
   const [selectedStock, setSelectedStock] = useState({
     symbol: initialSymbol || "005930",
     name: "삼성전자",
-    price: 74800,
-    changePct: +3.45,
+    price: 0,
+    changePct: 0,
     market: "KOREA"
   });
+  const [analysisDataValid, setAnalysisDataValid] = useState(false);
+  const [analysisError, setAnalysisError] = useState("실시간 분석 데이터를 확인하고 있습니다.");
+  const [quantAnalysis, setQuantAnalysis] = useState<any>(null);
 
   const isUS = isUsMarketStock(selectedStock.market, selectedStock.symbol);
   const currentFx = getUsdExchangeRate();
@@ -152,15 +155,7 @@ export const MultiModelSecuritiesConsensusModal: React.FC<MultiModelSecuritiesCo
   };
 
   const [stockCandles, setStockCandles] = useState<any[]>([]);
-  const [stockFundamentals, setStockFundamentals] = useState<any>({
-    per: 14.8,
-    pbr: 1.25,
-    roe: 12.4,
-    debtRatio: 32.5,
-    revenueGrowth: 8.6,
-    operatingMargin: 14.2,
-    marketCap: "실시간 연동"
-  });
+  const [stockFundamentals, setStockFundamentals] = useState<any>({});
 
   const [isLoading, setIsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<"all" | "discussion" | "models" | "radar" | "chart" | "verdict">("all");
@@ -289,15 +284,21 @@ export const MultiModelSecuritiesConsensusModal: React.FC<MultiModelSecuritiesCo
   // Fetch real market price & quant metrics
   const fetchStockAnalysis = async (symbol: string, stockName?: string) => {
     setIsLoading(true);
+    setAnalysisDataValid(false);
+    setQuantAnalysis(null);
+    setAnalysisError("실시간 분석 데이터를 확인하고 있습니다.");
     setShowSuggestions(false);
     setVerdictData(null); // Reset generated synthesis when changing stock
     try {
       const res = await fetch(`/api/quant/matrix/${symbol}`);
       if (res.ok) {
         const qData = await res.json();
-        if (qData && qData.symbol) {
-          const realPrice = qData.price || selectedStock.price;
-          let rawCandles = qData.candles || [];
+        const verifiedCandles = Array.isArray(qData?.candles)
+          ? qData.candles
+          : (Array.isArray(qData?.chartSeries) ? qData.chartSeries.filter((bar: any) => !bar.isForecast) : []);
+        if (qData && qData.symbol && qData.dataValid !== false && qData.price > 0 && verifiedCandles.length >= 20) {
+          const realPrice = qData.price;
+          let rawCandles = verifiedCandles;
 
           if (rawCandles.length > 0) {
             const lastIdx = rawCandles.length - 1;
@@ -307,18 +308,6 @@ export const MultiModelSecuritiesConsensusModal: React.FC<MultiModelSecuritiesCo
               high: Math.max(rawCandles[lastIdx].high || realPrice, realPrice),
               low: Math.min(rawCandles[lastIdx].low || realPrice, realPrice)
             };
-          } else {
-            let p = realPrice * 0.95;
-            for (let i = 20; i >= 1; i--) {
-              const d = new Date(Date.now() - i * 86400000);
-              const dateStr = `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
-              const c = i === 1 ? realPrice : Math.round(p + (Math.random() - 0.45) * realPrice * 0.02);
-              const o = Math.round(p);
-              const h = Math.max(o, c) + Math.round(Math.random() * realPrice * 0.01);
-              const l = Math.min(o, c) - Math.round(Math.random() * realPrice * 0.01);
-              rawCandles.push({ time: dateStr, open: o, high: h, low: l, close: c, volume: 100000 });
-              p = c;
-            }
           }
 
           setStockCandles(rawCandles);
@@ -330,17 +319,20 @@ export const MultiModelSecuritiesConsensusModal: React.FC<MultiModelSecuritiesCo
             market: qData.market || "KOREA"
           });
           setStockFundamentals({
-            per: qData.per || 14.8,
-            pbr: qData.pbr || 1.25,
-            roe: qData.roe || 12.4,
-            debtRatio: qData.debtRatio || 32.5,
-            revenueGrowth: qData.revenueGrowth || 8.6,
-            operatingMargin: qData.operatingMargin || 14.2,
-            marketCap: qData.marketCap || "실시간 대형주"
+            per: qData.per ?? null,
+            pbr: qData.pbr ?? null,
+            roe: qData.roe ?? null,
+            debtRatio: qData.debtRatio ?? null,
+            revenueGrowth: qData.revenueGrowth ?? null,
+            operatingMargin: qData.operatingMargin ?? null,
+            marketCap: qData.marketCap ?? "데이터 없음"
           });
+          setQuantAnalysis(qData);
+          setAnalysisDataValid(true);
           setIsLoading(false);
           return;
         }
+        setAnalysisError(qData?.reason || "검증 가능한 실시간 시세와 20개 이상 OHLCV가 없습니다.");
       }
       
       // Fallback search to resolve real symbol and live quote
@@ -360,6 +352,7 @@ export const MultiModelSecuritiesConsensusModal: React.FC<MultiModelSecuritiesCo
       }
     } catch (e) {
       console.warn("Fetch consensus data error:", e);
+      setAnalysisError("실시간 분석 API 연결에 실패했습니다. 임의 분석은 표시하지 않습니다.");
     } finally {
       setIsLoading(false);
     }
@@ -409,8 +402,11 @@ export const MultiModelSecuritiesConsensusModal: React.FC<MultiModelSecuritiesCo
   };
 
   // Dynamically compute 4 Securities Model Analyses based on the stock price and fundamentals
-  const currentPrice = selectedStock.price || 74800;
+  const currentPrice = selectedStock.price;
   const isGain = selectedStock.changePct >= 0;
+  const verifiedScore = Math.max(0, Math.min(100, Number(quantAnalysis?.score || 0)));
+  const scoreOpinion = (score: number): ModelSecuritiesAnalysis["opinion"] =>
+    score >= 85 ? "강력 매수" : score >= 70 ? "분할 매수" : score >= 55 ? "관망" : "비중 축소";
 
   // Model 1: OrderFlow & SMC Desk
   const model1: ModelSecuritiesAnalysis = {
@@ -428,28 +424,28 @@ export const MultiModelSecuritiesConsensusModal: React.FC<MultiModelSecuritiesCo
       stroke: "#10b981"
     },
     specialty: "실시간 틱 체결 델타, 구조 파괴(BOS), 추세 반전(CHoCH), 불균형 영역(FVG)",
-    opinion: isGain ? "강력 매수" : "분할 매수",
-    confidenceScore: isGain ? 94 : 76,
-    targetPrice: isUS ? Number((currentPrice * 1.085).toFixed(2)) : Math.round(currentPrice * 1.085),
-    stopLossPrice: isUS ? Number((currentPrice * 0.965).toFixed(2)) : Math.round(currentPrice * 0.965),
+    opinion: scoreOpinion(verifiedScore),
+    confidenceScore: verifiedScore,
+    targetPrice: Number(quantAnalysis?.targetPrice1 || 0),
+    stopLossPrice: Number(quantAnalysis?.stopLossPrice || 0),
     entryZone: [
-      isUS ? Number((currentPrice * 0.99).toFixed(2)) : Math.round(currentPrice * 0.99),
-      isUS ? Number((currentPrice * 1.01).toFixed(2)) : Math.round(currentPrice * 1.01)
+      Number(quantAnalysis?.necklinePrice || currentPrice),
+      currentPrice
     ],
     keyBullishReasons: [
-      "5분봉 상에서 상방 구조 파괴(BOS) 확정 및 매도 호가 소진율 78% 돌파",
-      "체결강도 142% 상회 및 시장가 대량 매수 틱(Aggressive Buys) 집중 포착",
-      "직전 저점 유동성 헌팅(SSL Sweep) 완결 후 거래량가중평균(VWAP) 강력 지지"
+      `검증 OHLCV 패턴: ${quantAnalysis?.detectedChartPattern || "NO_PATTERN"}`,
+      `상대거래량(RVOL): ${Number(quantAnalysis?.rvol || 0).toFixed(2)}배`,
+      `VWAP 상태: ${quantAnalysis?.vwapStatus || "NO_DATA"}`
     ],
     keyRiskFactor: "당일 직전 고점 매물대 도달 시 순간적인 차익 실현 출회 가능성",
     weightRatio: 0.30,
     metrics: {
-      volatilityDefense: 76,
-      orderFlowPower: isGain ? 96 : 82,
-      aiPredictionScore: isGain ? 94 : 76,
-      riskRewardRatio: 88,
-      momentumScore: isGain ? 92 : 78,
-      patternCompletion: 82
+      volatilityDefense: verifiedScore,
+      orderFlowPower: Math.min(100, Math.round(Number(quantAnalysis?.rvol || 0) * 20)),
+      aiPredictionScore: verifiedScore,
+      riskRewardRatio: verifiedScore,
+      momentumScore: Number(quantAnalysis?.rsScore || 0),
+      patternCompletion: verifiedScore
     }
   };
 
@@ -469,28 +465,28 @@ export const MultiModelSecuritiesConsensusModal: React.FC<MultiModelSecuritiesCo
       stroke: "#818cf8"
     },
     specialty: "글로벌 뉴스 감성 지수, 테마 대장주 상관도, 외국인/기관 메가 수급 유입",
-    opinion: "강력 매수",
-    confidenceScore: 89,
-    targetPrice: isUS ? Number((currentPrice * 1.115).toFixed(2)) : Math.round(currentPrice * 1.115),
-    stopLossPrice: isUS ? Number((currentPrice * 0.95).toFixed(2)) : Math.round(currentPrice * 0.95),
+    opinion: "관망",
+    confidenceScore: 0,
+    targetPrice: Number(quantAnalysis?.targetPrice1 || 0),
+    stopLossPrice: Number(quantAnalysis?.stopLossPrice || 0),
     entryZone: [
       isUS ? Number((currentPrice * 0.985).toFixed(2)) : Math.round(currentPrice * 0.985),
       isUS ? Number((currentPrice * 1.015).toFixed(2)) : Math.round(currentPrice * 1.015)
     ],
     keyBullishReasons: [
-      "섹터 내 1등 주도주 위상 유지 및 테마 내 상대강도(RS 94) 최상위 랭크",
-      "외국인 + 기관 동시 양매수 유입 및 글로벌 AI/반도체 뉴스 센티먼트 +82점",
-      "재료의 시장 파급력 지수 9.2/10점으로 중기 모멘텀 확장 구간"
+      "뉴스·기관·외국인 원천 데이터 미연결",
+      "검증되지 않은 센티먼트 점수는 계산에서 제외",
+      "실시간 근거 연결 후 활성화"
     ],
     keyRiskFactor: "글로벌 금리 및 나스닥 야간선물 급변동에 따른 갭 하락 리스크",
     weightRatio: 0.25,
     metrics: {
-      volatilityDefense: 72,
-      orderFlowPower: 94,
-      aiPredictionScore: 89,
-      riskRewardRatio: 85,
-      momentumScore: 96,
-      patternCompletion: 78
+      volatilityDefense: 0,
+      orderFlowPower: 0,
+      aiPredictionScore: 0,
+      riskRewardRatio: 0,
+      momentumScore: 0,
+      patternCompletion: 0
     }
   };
 
@@ -510,28 +506,28 @@ export const MultiModelSecuritiesConsensusModal: React.FC<MultiModelSecuritiesCo
       stroke: "#06b6d4"
     },
     specialty: "6대 팩터(모멘텀/수급/밸류/변동성/퀄리티/실적), 손익비(R:R) 최적화",
-    opinion: isGain ? "강력 매수" : "분할 매수",
-    confidenceScore: 88,
-    targetPrice: isUS ? Number((currentPrice * 1.075).toFixed(2)) : Math.round(currentPrice * 1.075),
-    stopLossPrice: isUS ? Number((currentPrice * 0.97).toFixed(2)) : Math.round(currentPrice * 0.97),
+    opinion: scoreOpinion(verifiedScore),
+    confidenceScore: verifiedScore,
+    targetPrice: Number(quantAnalysis?.targetPrice1 || 0),
+    stopLossPrice: Number(quantAnalysis?.stopLossPrice || 0),
     entryZone: [
       isUS ? Number((currentPrice * 0.992).toFixed(2)) : Math.round(currentPrice * 0.992),
       isUS ? Number((currentPrice * 1.008).toFixed(2)) : Math.round(currentPrice * 1.008)
     ],
     keyBullishReasons: [
-      "손익비(Risk-Reward Ratio) 1:2.85로 통계적 기대값이 극대화된 위치",
-      "상대 거래량 배수(RVOL) 3.6배 및 6대 퀀트 퀄리티 복합 스코어 91점 기록",
-      "역사적 변동성 대비 최근 20일 변동성 수렴 후 상방 발산(Squeeze Breakout)"
+      `실시간 퀀트 종합점수: ${verifiedScore}점`,
+      `상대 거래량 배수: ${Number(quantAnalysis?.rvol || 0).toFixed(2)}배`,
+      `ATR 기반 목표/손절: ${formatPrice(quantAnalysis?.targetPrice1)} / ${formatPrice(quantAnalysis?.stopLossPrice)}`
     ],
     keyRiskFactor: "목표가 도달 전 20일 이평선 지지 실패 시 손절 프로토콜 엄격 적용 필수",
     weightRatio: 0.25,
     metrics: {
-      volatilityDefense: 92,
-      orderFlowPower: 84,
-      aiPredictionScore: 88,
-      riskRewardRatio: 95,
-      momentumScore: 82,
-      patternCompletion: 80
+      volatilityDefense: verifiedScore,
+      orderFlowPower: Math.min(100, Math.round(Number(quantAnalysis?.rvol || 0) * 20)),
+      aiPredictionScore: verifiedScore,
+      riskRewardRatio: verifiedScore,
+      momentumScore: Number(quantAnalysis?.rsScore || 0),
+      patternCompletion: verifiedScore
     }
   };
 
@@ -551,28 +547,28 @@ export const MultiModelSecuritiesConsensusModal: React.FC<MultiModelSecuritiesCo
       stroke: "#f59e0b"
     },
     specialty: "다중 타임프레임 차트 패턴, 엘리어트 상승 3파동 추정, 매물대 지지 분석",
-    opinion: isGain ? "강력 매수" : "관망",
-    confidenceScore: isGain ? 86 : 68,
-    targetPrice: isUS ? Number((currentPrice * 1.10).toFixed(2)) : Math.round(currentPrice * 1.10),
-    stopLossPrice: isUS ? Number((currentPrice * 0.96).toFixed(2)) : Math.round(currentPrice * 0.96),
+    opinion: scoreOpinion(verifiedScore),
+    confidenceScore: verifiedScore,
+    targetPrice: Number(quantAnalysis?.targetPrice2 || quantAnalysis?.targetPrice1 || 0),
+    stopLossPrice: Number(quantAnalysis?.stopLossPrice || 0),
     entryZone: [
       isUS ? Number((currentPrice * 0.988).toFixed(2)) : Math.round(currentPrice * 0.988),
       isUS ? Number((currentPrice * 1.012).toFixed(2)) : Math.round(currentPrice * 1.012)
     ],
     keyBullishReasons: [
-      "일봉 상 컵앤핸들(Cup & Handle) 패턴 상단 목선(Neckline) 안착 돌파",
-      "5일/20일/60일 이동평균선 완전 정배열 완성 및 하방 지지선 견고",
-      "상승 N자형 파동의 1차 목표치까지 상방 매물 공백 구간 확인"
+      `차트 패턴: ${quantAnalysis?.detectedChartPattern || "NO_PATTERN"}`,
+      `캔들 패턴: ${quantAnalysis?.detectedCandlePattern || "NO_PATTERN"}`,
+      `상대강도 점수: ${Number(quantAnalysis?.rsScore || 0)}점`
     ],
     keyRiskFactor: "돌파 실패 후 박스권 하단으로의 되돌림 시 장기 횡보 가능성",
     weightRatio: 0.20,
     metrics: {
-      volatilityDefense: 80,
-      orderFlowPower: 78,
-      aiPredictionScore: isGain ? 86 : 68,
-      riskRewardRatio: 82,
-      momentumScore: 88,
-      patternCompletion: 96
+      volatilityDefense: verifiedScore,
+      orderFlowPower: Math.min(100, Math.round(Number(quantAnalysis?.rvol || 0) * 20)),
+      aiPredictionScore: verifiedScore,
+      riskRewardRatio: verifiedScore,
+      momentumScore: Number(quantAnalysis?.rsScore || 0),
+      patternCompletion: quantAnalysis?.detectedChartPattern && quantAnalysis.detectedChartPattern !== "NO_PATTERN" ? verifiedScore : 0
     }
   };
 
@@ -699,6 +695,37 @@ export const MultiModelSecuritiesConsensusModal: React.FC<MultiModelSecuritiesCo
   };
 
   if (!isOpen) return null;
+
+  if (!analysisDataValid) {
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-zinc-950/85 p-4 backdrop-blur-sm">
+        <div className="w-full max-w-lg rounded-2xl border border-zinc-700 bg-zinc-900 p-6 text-white shadow-2xl">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-black">AI 4모델 리서치 데이터 확인</h2>
+              <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+                {isLoading ? "실시간 시세와 OHLCV 근거 데이터를 불러오는 중입니다." : analysisError}
+              </p>
+            </div>
+            <button onClick={onClose} aria-label="닫기" className="rounded-lg bg-zinc-800 p-2 text-zinc-300 hover:text-white">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          <div className="mt-5 rounded-xl border border-amber-800/60 bg-amber-950/30 p-3 text-xs text-amber-200">
+            검증된 가격·거래량·차트가 없으면 목표가, 신뢰도, 매수 결론을 만들지 않습니다.
+          </div>
+          <button
+            type="button"
+            disabled={isLoading}
+            onClick={() => fetchStockAnalysis(selectedStock.symbol, selectedStock.name)}
+            className="mt-4 w-full rounded-xl bg-cyan-600 px-4 py-2.5 text-sm font-black text-white disabled:opacity-50"
+          >
+            {isLoading ? "확인 중…" : "실시간 데이터 다시 확인"}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/90 backdrop-blur-md animate-fade-in">

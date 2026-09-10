@@ -15,6 +15,7 @@
     "test:python": "python3 -m unittest discover -s tests/python -p 'test_*.py'",
     "clean": "rm -rf dist build server.js",
     "audit:fake-data": "node scripts/check-no-fake-production-data-v4.mjs",
+    "audit:live-dashboards": "node scripts/check-truthful-live-dashboards.mjs",
     "audit:boundaries": "node scripts/check-production-import-boundaries.mjs",
     "audit:buttons": "node scripts/check-production-buttons.mjs",
     "verify:live:kis": "node scripts/verify-kis-live-deployment.mjs",

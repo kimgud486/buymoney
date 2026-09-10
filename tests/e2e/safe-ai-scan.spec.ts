@@ -23,7 +23,8 @@ test.describe("Current unified AI trading safety E2E", () => {
 
     await expect(page.getByText(/안전 잠금 중/).first()).toBeVisible();
     await expect(page.getByText(/이중 승인 해제 시에만 실제 증권사 매수 주문이 실행됩니다/).first()).toBeVisible();
-    await expect(page.getByText(/현재:\s*PAPER/).first()).toBeVisible();
+    await expect(page.getByText(/현재:\s*DRY_RUN/).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: /PAPER/ })).toHaveCount(0);
   });
 
   test("removed legacy Safe AI launcher stays unmounted", async ({ page }) => {

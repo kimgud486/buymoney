@@ -3,9 +3,9 @@
 
 import { ExecutionStateMachine, OrderState, TradingMode, OrderSignal, PositionContext, StateMachineStatus } from "./ExecutionStateMachine";
 import { ExecutionRiskEngine, RiskConfig, RiskMetrics, RiskEvaluationResult } from "./ExecutionRiskEngine";
-import { KISBrokerAdapter, KISOrderResult, KISPosition, KISBalance } from "./KISBrokerAdapter";
+import { KISBalance } from "./KISBrokerAdapter";
 import { AdaptiveExitDecisionEngine, MarketBarSnapshot } from "./AdaptiveExitDecisionEngine";
-import { SafeKISBrokerAdapter } from "./SafeKISBrokerAdapter";
+import { SafeKISBrokerAdapter, OrderResultV12 } from "./SafeKISBrokerAdapter";
 
 export interface ExecutionEngineLog {
   id: string;
@@ -30,17 +30,17 @@ export interface AutonomousEngineStatus {
 export class AutonomousExecutionEngineV11 {
   private stateMachine: ExecutionStateMachine;
   private riskEngine: ExecutionRiskEngine;
-  private kisAdapter: KISBrokerAdapter;
+  private kisAdapter: SafeKISBrokerAdapter;
   private isEngineRunning: boolean = false;
   private logs: ExecutionEngineLog[] = [];
   private totalExecutionsToday: number = 0;
   private evaluationInterval: any = null;
   private listeners: Array<(status: AutonomousEngineStatus) => void> = [];
 
-  constructor(initialMode: TradingMode = "PAPER") {
+  constructor(initialMode: TradingMode = "DRY_RUN") {
     this.stateMachine = new ExecutionStateMachine(initialMode);
     this.riskEngine = new ExecutionRiskEngine();
-    this.kisAdapter = new KISBrokerAdapter();
+    this.kisAdapter = new SafeKISBrokerAdapter(initialMode, false);
 
     this.addLog("INFO", "v11 Autonomous Execution Engine 초기화 완료", `실행 모드: ${initialMode} | KIS Broker Adapter 및 Risk Gate 가동 준비 완료`);
 
@@ -100,6 +100,7 @@ export class AutonomousExecutionEngineV11 {
   // Set Mode & Dual-Lock for LIVE
   public setTradingMode(mode: TradingMode, enableLiveDualLock: boolean = false) {
     this.stateMachine.setTradingMode(mode, enableLiveDualLock);
+    this.kisAdapter.setMode(mode, enableLiveDualLock);
     this.addLog("INFO", "거래 모드 변경", `모드: ${mode} | LIVE 실거래 이중 잠금: ${enableLiveDualLock ? "🟢 해제 (실거래 가능)" : "🔒 잠금 (실거래 차단)"}`);
   }
 
@@ -220,11 +221,11 @@ export class AutonomousExecutionEngineV11 {
       const isLive = this.stateMachine.isLiveExecutionPermitted();
       this.addLog(
         "BUY_EXEC",
-        `🚀 [${isLive ? "LIVE 실거래" : "PAPER 모의"}] BUY 주문 제출`,
+        `🚀 [${isLive ? "LIVE 실거래" : "시세+테스트"}] BUY 주문 ${isLive ? "제출" : "검증"}`,
         `종목: ${candidate.name} (${candidate.symbol}) | 수량: ${qty}주 | 가격: ${(candidate.price ?? 0).toLocaleString()}원`
       );
 
-      const orderResult: KISOrderResult = await this.kisAdapter.placeOrder({
+      const orderResult: OrderResultV12 = await this.kisAdapter.placeOrder({
         symbol: candidate.symbol,
         name: candidate.name,
         market: candidate.market,
@@ -334,7 +335,7 @@ export class AutonomousExecutionEngineV11 {
     this.addLog("EXIT_AI", "📉 Adaptive Exit AI SELL 시그널 포착", reason);
 
     try {
-      const orderResult: KISOrderResult = await this.kisAdapter.placeOrder({
+      const orderResult: OrderResultV12 = await this.kisAdapter.placeOrder({
         symbol: position.symbol,
         name: position.name,
         market: position.market,

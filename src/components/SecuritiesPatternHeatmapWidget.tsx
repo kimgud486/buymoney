@@ -217,6 +217,23 @@ export const INITIAL_SECURITIES_HEATMAP_DATA: SecuritiesHeatmapItem[] = [
   }
 ];
 
+const clearUnverifiedResearchFields = (item: SecuritiesHeatmapItem): SecuritiesHeatmapItem => ({
+  ...item,
+  stateCategory: "OVERBOUGHT_CAUTION",
+  stateTitle: "분석 데이터 없음",
+  patternName: "NO_DATA",
+  confidenceScore: 0,
+  samsungTarget: undefined,
+  miraeTarget: undefined,
+  nhTarget: undefined,
+  kbTarget: undefined,
+  consensusTarget: 0,
+  consensusUpsidePct: 0,
+  brokerOpinion: "HOLD",
+  rvol: 0,
+  smcStructure: "NO_DATA"
+});
+
 // Subcomponent for individual Heatmap card with PricePulse integration
 const HeatmapCardItem: React.FC<{
   item: SecuritiesHeatmapItem;
@@ -277,19 +294,19 @@ const HeatmapCardItem: React.FC<{
       {/* 4 Major Broker Consensus Target */}
       <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-2 space-y-1 font-mono text-[11px]">
         <div className="flex justify-between text-zinc-400">
-          <span>4대 증권사 목표가:</span>
-          <span className="text-indigo-300 font-bold">{formatPrice(item.consensusTarget, item.market)}</span>
+          <span>AI 분석 목표가:</span>
+          <span className="text-indigo-300 font-bold">{item.consensusTarget > 0 ? formatPrice(item.consensusTarget, item.market) : "데이터 없음"}</span>
         </div>
         <div className="flex justify-between items-center">
           <span className="text-zinc-500 text-[10px]">목표 상승여력:</span>
-          <span className="text-emerald-400 font-bold">+{item.consensusUpsidePct}%</span>
+          <span className="text-emerald-400 font-bold">{item.consensusTarget > 0 ? `${item.consensusUpsidePct >= 0 ? "+" : ""}${item.consensusUpsidePct}%` : "—"}</span>
         </div>
       </div>
 
       {/* SMC Pattern & Confidence */}
       <div className="flex items-center justify-between text-[10px] font-mono text-zinc-400 pt-1 border-t border-slate-800/80">
         <span className="truncate max-w-[130px]" title={item.patternName}>{item.patternName}</span>
-        <span className="text-amber-300 font-bold">신뢰도 {item.confidenceScore}%</span>
+        <span className="text-amber-300 font-bold">{item.confidenceScore > 0 ? `신뢰도 ${item.confidenceScore}%` : "검증 대기"}</span>
       </div>
     </div>
   );
@@ -302,12 +319,12 @@ export const SecuritiesPatternHeatmapWidget: React.FC = () => {
       const saved = localStorage.getItem("custom_securities_heatmap_v2");
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed.map(clearUnverifiedResearchFields);
       }
     } catch (e) {
       console.warn("Failed to load saved heatmap:", e);
     }
-    return INITIAL_SECURITIES_HEATMAP_DATA;
+    return INITIAL_SECURITIES_HEATMAP_DATA.map(clearUnverifiedResearchFields);
   });
 
   const [selectedMarket, setSelectedMarket] = useState<"ALL" | "KOREA" | "US" | "UPBIT">("ALL");
@@ -379,44 +396,10 @@ export const SecuritiesPatternHeatmapWidget: React.FC = () => {
               if (data && data.price > 0) {
                 const livePrice = data.price;
                 const liveChange = data.changePct !== undefined ? data.changePct : item.changePct;
-                const isUS = item.market === "US";
-
-                // Dynamically calculate realistic 4 broker targets based on live price
-                const samsungTar = item.samsungTarget && Math.abs(item.samsungTarget - livePrice) < livePrice * 0.8
-                  ? item.samsungTarget 
-                  : (isUS ? Math.round(livePrice * 1.22) : Math.round(livePrice * 1.22 / 100) * 100);
-
-                const miraeTar = item.miraeTarget && Math.abs(item.miraeTarget - livePrice) < livePrice * 0.8
-                  ? item.miraeTarget
-                  : (isUS ? Math.round(livePrice * 1.25) : Math.round(livePrice * 1.25 / 100) * 100);
-
-                const nhTar = item.nhTarget && Math.abs(item.nhTarget - livePrice) < livePrice * 0.8
-                  ? item.nhTarget
-                  : (isUS ? Math.round(livePrice * 1.20) : Math.round(livePrice * 1.20 / 100) * 100);
-
-                const kbTar = item.kbTarget && Math.abs(item.kbTarget - livePrice) < livePrice * 0.8
-                  ? item.kbTarget
-                  : (isUS ? Math.round(livePrice * 1.24) : Math.round(livePrice * 1.24 / 100) * 100);
-
-                const consensusTar = isUS 
-                  ? Math.round((samsungTar + miraeTar + nhTar + kbTar) / 4)
-                  : Math.round(((samsungTar + miraeTar + nhTar + kbTar) / 4) / 100) * 100;
-
-                const liveUpside = Number((((consensusTar - livePrice) / livePrice) * 100).toFixed(1));
-                const opinion: "STRONG_BUY" | "BUY" | "HOLD" | "REDUCE" = 
-                  liveUpside >= 20 ? "STRONG_BUY" : liveUpside >= 5 ? "BUY" : liveUpside >= -10 ? "HOLD" : "REDUCE";
-
                 return {
-                  ...item,
+                  ...clearUnverifiedResearchFields(item),
                   currentPrice: livePrice,
-                  changePct: liveChange,
-                  samsungTarget: samsungTar,
-                  miraeTarget: miraeTar,
-                  nhTarget: nhTar,
-                  kbTarget: kbTar,
-                  consensusTarget: consensusTar,
-                  consensusUpsidePct: liveUpside,
-                  brokerOpinion: opinion
+                  changePct: liveChange
                 };
               }
             }
@@ -489,26 +472,12 @@ export const SecuritiesPatternHeatmapWidget: React.FC = () => {
         return;
       }
 
-      const fetchedPrice = data.price || (realMarket === "KOREA" ? 50000 : realMarket === "US" ? 150 : 100000000);
+      const fetchedPrice = Number(data.price || 0);
+      if (!(fetchedPrice > 0)) {
+        alert("검증된 실시간 시세가 없어 종목을 추가하지 않았습니다.");
+        return;
+      }
       const fetchedChangePct = data.changePct !== undefined ? data.changePct : 0;
-
-      const isUS = realMarket === "US";
-      const multiplier = isUS ? 1.25 : 1.22;
-      const consensusTar = isUS ? Math.round(fetchedPrice * multiplier) : Math.round(fetchedPrice * multiplier / 100) * 100;
-
-      const categories: StateChangeCategory[] = [
-        "RALLY_IMMINENT", "TREND_REVERSAL", "ACCUMULATION_DONE", "SUSTAINED_UPTREND", "LIQUIDITY_SPIKE"
-      ];
-      const randomCat = categories[Math.floor(Math.random() * categories.length)];
-
-      const categoryTitleMap: Record<StateChangeCategory, string> = {
-        "RALLY_IMMINENT": "상승 임박 🔥",
-        "TREND_REVERSAL": "추세 반전 🔄",
-        "ACCUMULATION_DONE": "매집 완료 📦",
-        "SUSTAINED_UPTREND": "상승 지속 📈",
-        "LIQUIDITY_SPIKE": "수급 폭발 ⚡",
-        "OVERBOUGHT_CAUTION": "과매수 주의 📉"
-      };
 
       const newItem: SecuritiesHeatmapItem = {
         symbol: realSymbol,
@@ -516,19 +485,15 @@ export const SecuritiesPatternHeatmapWidget: React.FC = () => {
         market: realMarket,
         currentPrice: fetchedPrice,
         changePct: fetchedChangePct,
-        stateCategory: randomCat,
-        stateTitle: categoryTitleMap[randomCat],
-        patternName: "AI Pattern Confirmation",
-        confidenceScore: Math.floor(88 + Math.random() * 10),
-        samsungTarget: isUS ? Math.round(consensusTar * 0.98) : Math.round(consensusTar * 0.98 / 100) * 100,
-        miraeTarget: isUS ? Math.round(consensusTar * 1.02) : Math.round(consensusTar * 1.02 / 100) * 100,
-        nhTarget: isUS ? Math.round(consensusTar * 0.99) : Math.round(consensusTar * 0.99 / 100) * 100,
-        kbTarget: isUS ? Math.round(consensusTar * 1.01) : Math.round(consensusTar * 1.01 / 100) * 100,
-        consensusTarget: consensusTar,
-        consensusUpsidePct: Number((((consensusTar - fetchedPrice) / fetchedPrice) * 100).toFixed(1)),
-        brokerOpinion: "STRONG_BUY",
-        rvol: Number((2.5 + Math.random() * 2).toFixed(1)),
-        smcStructure: "Volume Breakout + Demand Support"
+        stateCategory: "OVERBOUGHT_CAUTION",
+        stateTitle: "분석 데이터 없음",
+        patternName: "NO_DATA",
+        confidenceScore: 0,
+        consensusTarget: 0,
+        consensusUpsidePct: 0,
+        brokerOpinion: "HOLD",
+        rvol: 0,
+        smcStructure: "NO_DATA"
       };
 
       setItems(prev => [newItem, ...prev]);
@@ -629,7 +594,7 @@ export const SecuritiesPatternHeatmapWidget: React.FC = () => {
           </div>
           <div>
             <h3 className="text-base font-black text-white flex items-center gap-2">
-              <span>4대 증권사 컨센서스 & AI 상태 변화 실시간 히트맵</span>
+              <span>AI 4모델 상태 변화 히트맵</span>
               <span className="bg-indigo-500/20 text-indigo-300 text-[10px] px-2 py-0.5 rounded border border-indigo-400/40 font-mono">
                 DYNAMIC LIVE TICKERS
               </span>
@@ -653,7 +618,7 @@ export const SecuritiesPatternHeatmapWidget: React.FC = () => {
           <button
             onClick={() => {
               localStorage.removeItem("custom_securities_heatmap_v2");
-              setItems(INITIAL_SECURITIES_HEATMAP_DATA);
+              setItems(INITIAL_SECURITIES_HEATMAP_DATA.map(clearUnverifiedResearchFields));
               setTimeout(() => refreshLiveQuotes(), 100);
             }}
             className="flex items-center space-x-1 px-2.5 py-1.5 bg-slate-900 border border-rose-900/60 hover:border-rose-500 rounded-lg text-xs font-mono text-rose-300 transition cursor-pointer"
@@ -845,7 +810,7 @@ export const SecuritiesPatternHeatmapWidget: React.FC = () => {
                 <Building2 className="h-6 w-6 text-indigo-400" />
                 <div>
                   <h3 className="text-lg font-black text-white">
-                    [{activeDetailItem.name}] 4대 증권사 컨센서스 심층 리포트
+                    [{activeDetailItem.name}] AI 4모델 분석 상세
                   </h3>
                   <p className="text-xs text-zinc-400 font-mono">
                     종목코드: {activeDetailItem.symbol} | 현재가: {formatPrice(activeDetailItem.currentPrice, activeDetailItem.market)}
@@ -853,35 +818,8 @@ export const SecuritiesPatternHeatmapWidget: React.FC = () => {
                 </div>
               </div>
 
-              {/* Individual Brokers Target List */}
-              <div className="grid grid-cols-2 gap-3 font-mono text-xs">
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1">
-                  <div className="text-zinc-400">삼성증권 리서치</div>
-                  <div className="text-sm font-bold text-indigo-300">
-                    {activeDetailItem.samsungTarget ? formatPrice(activeDetailItem.samsungTarget, activeDetailItem.market) : "N/A"}
-                  </div>
-                </div>
-
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1">
-                  <div className="text-zinc-400">미래에셋증권</div>
-                  <div className="text-sm font-bold text-indigo-300">
-                    {activeDetailItem.miraeTarget ? formatPrice(activeDetailItem.miraeTarget, activeDetailItem.market) : "N/A"}
-                  </div>
-                </div>
-
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1">
-                  <div className="text-zinc-400">NH투자증권</div>
-                  <div className="text-sm font-bold text-indigo-300">
-                    {activeDetailItem.nhTarget ? formatPrice(activeDetailItem.nhTarget, activeDetailItem.market) : "N/A"}
-                  </div>
-                </div>
-
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1">
-                  <div className="text-zinc-400">KB증권</div>
-                  <div className="text-sm font-bold text-indigo-300">
-                    {activeDetailItem.kbTarget ? formatPrice(activeDetailItem.kbTarget, activeDetailItem.market) : "N/A"}
-                  </div>
-                </div>
+              <div className="rounded-xl border border-amber-800/60 bg-amber-950/30 p-3 text-xs text-amber-200">
+                외부 증권사 원문 목표가가 연결되지 않아 증권사별 숫자를 표시하지 않습니다.
               </div>
 
               {/* Summary */}
@@ -889,18 +827,18 @@ export const SecuritiesPatternHeatmapWidget: React.FC = () => {
                 <div className="flex justify-between items-center text-white font-bold">
                   <span>통합 평균 목표가:</span>
                   <span className="text-base text-emerald-400 font-black">
-                    {formatPrice(activeDetailItem.consensusTarget, activeDetailItem.market)}
+                    {activeDetailItem.consensusTarget > 0 ? formatPrice(activeDetailItem.consensusTarget, activeDetailItem.market) : "데이터 없음"}
                   </span>
                 </div>
                 <div className="flex justify-between items-center text-zinc-300">
                   <span>예상 평균 상승여력:</span>
                   <span className={`font-extrabold ${dynamicUpside >= 0 ? "text-emerald-300" : "text-rose-400"}`}>
-                    {dynamicUpside >= 0 ? `+${dynamicUpside}%` : `${dynamicUpside}%`}
+                    {activeDetailItem.consensusTarget > 0 ? (dynamicUpside >= 0 ? `+${dynamicUpside}%` : `${dynamicUpside}%`) : "—"}
                   </span>
                 </div>
                 <div className="flex justify-between items-center text-zinc-300">
                   <span>종합 투자의견:</span>
-                  <span className={opinionColor}>{dynamicOpinion}</span>
+                  <span className={opinionColor}>{activeDetailItem.consensusTarget > 0 ? dynamicOpinion : "분석 대기"}</span>
                 </div>
               </div>
 

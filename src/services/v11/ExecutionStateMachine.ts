@@ -49,13 +49,13 @@ export class ExecutionStateMachine {
   private currentState: OrderState = "IDLE";
   private activePosition: PositionContext | null = null;
   private lastSignal: OrderSignal | null = null;
-  private mode: TradingMode = "PAPER";
+  private mode: TradingMode = "DRY_RUN";
   private liveTradingEnabled: boolean = false; // Dual-lock requirement for LIVE
   private cooldownEndsAt: number | null = null;
   private lockReason: string | null = null;
   private listeners: Array<(status: StateMachineStatus) => void> = [];
 
-  constructor(initialMode: TradingMode = "PAPER") {
+  constructor(initialMode: TradingMode = "DRY_RUN") {
     this.mode = initialMode;
   }
 
@@ -221,5 +221,4 @@ export class ExecutionStateMachine {
   }
 }
 
-export const globalExecutionStateMachine = new ExecutionStateMachine();
-
+export const globalExecutionStateMachine = new ExecutionStateMachine("DRY_RUN");

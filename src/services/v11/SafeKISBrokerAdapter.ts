@@ -41,14 +41,17 @@ export class SafeKISBrokerAdapter {
   private mode: ExecutionModeV12;
   private liveTradingEnabled: boolean;
 
-  constructor(mode: ExecutionModeV12 = "PAPER", liveTradingEnabled: boolean = false) {
+  constructor(mode: ExecutionModeV12 = "DRY_RUN", liveTradingEnabled: boolean = false) {
+    const env = (globalThis as typeof globalThis & {
+      process?: { env?: Record<string, string | undefined> };
+    }).process?.env ?? {};
     this.mode = mode;
     this.liveTradingEnabled = liveTradingEnabled;
     this.credentials = {
-      appKey: process.env.KIS_APPKEY || "",
-      appSecret: process.env.KIS_APPSECRET || "",
-      accountNo: process.env.KIS_CANO || "",
-      productCode: process.env.KIS_ACNT_PRDT_CD || "01",
+      appKey: env.KIS_APPKEY || "",
+      appSecret: env.KIS_APPSECRET || "",
+      accountNo: env.KIS_CANO || "",
+      productCode: env.KIS_ACNT_PRDT_CD || "01",
       isPaperTrading: mode !== "LIVE"
     };
   }
