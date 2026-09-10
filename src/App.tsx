@@ -24,6 +24,7 @@ import { VerifiedPatternStatusPanel } from "./components/VerifiedPatternStatusPa
 import { VerifiedPatternGuideBridge } from "./components/VerifiedPatternGuideBridge";
 import { BuyHoldSystemStatusPanel } from "./components/BuyHoldSystemStatusPanel";
 import { RevenueSystemRoadmap } from "./components/RevenueSystemRoadmap";
+import { MainScreenKoreanText } from "./components/MainScreenKoreanText";
 import { evaluateVerifiedSignal, type VerifiedSignalResult } from "./scanner/verifiedSignalEngine";
 
 type VerifiedPatternSelection = {
@@ -141,6 +142,7 @@ function MainLayout() {
 
   return (
     <div className="min-h-screen bg-white text-slate-800 flex flex-col font-sans relative">
+      <MainScreenKoreanText />
       <RealtimeMarketStreamManager />
 
       <ErrorBoundary>
