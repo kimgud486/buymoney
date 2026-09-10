@@ -278,7 +278,7 @@ export const AllMarketRadar: React.FC = () => {
           const found = results.filter((row) => row.status === "SIGNAL");
           if (found.length) {
             setSignals((previous) => {
-              const merged = new Map(previous.map((row) => [`${row.market}:${row.symbol}`, row]));
+              const merged = new Map<string, RadarRow>(previous.map((row) => [`${row.market}:${row.symbol}`, row] as [string, RadarRow]));
               for (const row of found) merged.set(`${row.market}:${row.symbol}`, row);
               return Array.from(merged.values()).sort((a, b) => rank(b) - rank(a)).slice(0, MAX_SIGNAL_ROWS);
             });
