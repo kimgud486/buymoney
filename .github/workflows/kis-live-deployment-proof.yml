@@ -1,0 +1,32 @@
+name: KIS Live Deployment Proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      live_url:
+        description: "HTTPS URL of the deployed BUYMONEY service"
+        required: true
+        type: string
+      symbol:
+        description: "6-digit Korean stock code used for proof"
+        required: true
+        default: "005930"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify-kis-live-deployment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify live KIS environment proof
+        env:
+          BUYMONEY_LIVE_URL: ${{ inputs.live_url }}
+          BUYMONEY_PROOF_SYMBOL: ${{ inputs.symbol }}
+        run: node scripts/verify-kis-live-deployment.mjs
