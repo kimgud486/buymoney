@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
   ChevronDown,
@@ -18,18 +18,6 @@ import {
   ScannerDecision,
   VerifiedSignalResult,
 } from "../scanner/verifiedSignalEngine";
-
-/**
- * BuyMoney merged scanner, server-first discovery edition.
- *
- * Stage 1: the server scans the registered KR/US/UPBIT universe with verified
- * live data and returns only the strongest PRECHECK candidates.
- * Stage 2: the browser performs the expensive seven-timeframe verification
- * only for that shortlist, then exposes the existing LONG/SHORT review flow.
- *
- * This removes the old browser-side 36-symbol cap without turning the browser
- * into a request fan-out engine. No synthetic fallback candidate is created.
- */
 
 export type ScanMarket = "KOREA" | "US" | "BTC";
 export type TradeDirection = "LONG" | "SHORT" | "WAIT";
@@ -116,6 +104,8 @@ type EntryDialogState = {
 };
 
 const BATCH_SIZE = 2;
+const FAST_PATTERN_REFRESH_MS = 1500;
+const FAST_PATTERN_BATCH_SIZE = 3;
 
 const TIMEFRAMES: Array<{ key: TimeframeKey; api: string; role: string }> = [
   { key: "1m", api: "1m", role: "진입 직전 움직임" },
@@ -126,6 +116,8 @@ const TIMEFRAMES: Array<{ key: TimeframeKey; api: string; role: string }> = [
   { key: "60m", api: "1H", role: "큰 방향 확인" },
   { key: "D", api: "D", role: "하루 큰 추세" },
 ];
+
+const FAST_TIMEFRAMES = TIMEFRAMES.filter((tf) => tf.key === "1m" || tf.key === "3m" || tf.key === "5m");
 
 function formatPrice(value: number, market: ScanMarket): string {
   if (!Number.isFinite(value) || value <= 0) return "-";
@@ -363,6 +355,83 @@ async function fetchVerifiedCandidate(base: UniverseItem): Promise<ScannedStockI
   };
 }
 
+async function refreshFastPatternFrames(item: ScannedStockItem): Promise<ScannedStockItem | null> {
+  const results = await Promise.all(FAST_TIMEFRAMES.map(async (tf) => {
+    const verified = await fetchOneFrame(item.symbol, tf);
+    if (!verified) return null;
+    const shortScore = shortScoreFrom(verified.result);
+    return {
+      timeframe: tf.key,
+      label: `${tf.key}봉`,
+      role: tf.role,
+      score: verified.result.direction === "BEARISH" ? shortScore : longScoreFrom(verified.result),
+      direction: verified.result.direction,
+      pattern: verified.result.pattern,
+      reasons: verified.result.reasons,
+      metrics: verified.result.metrics,
+      payload: verified.payload,
+      result: verified.result,
+    };
+  }));
+  const valid = results.filter((v): v is NonNullable<typeof v> => v !== null);
+  if (!valid.length) return null;
+
+  const replacement = new Map(valid.map((v) => [v.timeframe, v]));
+  const mergedFrames: TimeframeScan[] = item.timeframes.map((frame) => {
+    const next = replacement.get(frame.timeframe);
+    if (!next) return frame;
+    const { payload: _payload, result: _result, ...scanFrame } = next;
+    return scanFrame;
+  });
+  valid.forEach((v) => {
+    if (!mergedFrames.some((f) => f.timeframe === v.timeframe)) {
+      const { payload: _payload, result: _result, ...scanFrame } = v;
+      mergedFrames.push(scanFrame);
+    }
+  });
+
+  const scores = chooseDirection(mergedFrames);
+  const direction = scores.direction;
+  const aiScore = direction === "SHORT" ? scores.shortScore : scores.longScore;
+  const mainFastPattern = valid.filter((v) => v.pattern !== "NONE").sort((a, b) => b.score - a.score)[0];
+  const anchor = valid.find((v) => v.timeframe === "5m") || valid.find((v) => v.timeframe === "3m") || valid[0];
+  const currentPrice = Number(anchor.payload?.currentPrice) > 0 ? Number(anchor.payload.currentPrice) : item.currentPrice;
+  const short = direction === "SHORT";
+  const atr = Math.max(anchor.result.metrics.atr, currentPrice * 0.008);
+  const entryLow = short ? currentPrice : Math.min(anchor.result.entryLow, currentPrice);
+  const entryHigh = short ? currentPrice + atr * 0.25 : Math.max(anchor.result.entryHigh, currentPrice);
+  const stopLoss = short ? currentPrice + atr * 1.2 : anchor.result.stopLoss;
+  const target1 = short ? Math.max(0, currentPrice - atr * 2) : anchor.result.target1;
+  const target2 = short ? Math.max(0, currentPrice - atr * 3) : anchor.result.target2;
+  const alignedFast = valid.filter((v) => direction === "LONG" ? v.direction === "BULLISH" : direction === "SHORT" ? v.direction === "BEARISH" : false).length;
+
+  return {
+    ...item,
+    currentPrice,
+    aiScore,
+    longScore: scores.longScore,
+    shortScore: scores.shortScore,
+    direction,
+    decision: direction === "LONG" && aiScore >= 82 ? "BUY_APPROVED" : "BUY_WATCH",
+    rvol: Number(anchor.result.metrics.rvol.toFixed(2)),
+    signalLabel: mainFastPattern ? `실시간 ${mainFastPattern.label} ${patternLabel(mainFastPattern.pattern)}` : `실시간 1·3·5분 방향 ${direction}`,
+    entryLow,
+    bestEntry: entryHigh,
+    entryZone: `${formatPlainPrice(entryLow, item.market)} ~ ${formatPlainPrice(entryHigh, item.market)}`,
+    stopLoss,
+    targetPrice: target1,
+    targetPrice2: target2,
+    reasons: [
+      `1·3·5분봉 중 ${alignedFast}개가 지금 ${direction === "LONG" ? "상승" : direction === "SHORT" ? "하락" : "대기"} 방향이에요.`,
+      ...(anchor.result.reasons || []).slice(0, 3).map(easyReason),
+    ],
+    failedChecks: anchor.result.failedChecks,
+    scannedAt: new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+    verifiedBars: anchor.result.evaluatedBars,
+    timeframes: mergedFrames,
+  };
+}
+
 function canPlaceShort(item: ScannedStockItem): boolean {
   return item.market !== "BTC";
 }
@@ -371,6 +440,9 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
   const app = useApp() as any;
   const { addToast, requestTradeConfirmation } = app;
   const [stocks, setStocks] = useState<ScannedStockItem[]>([]);
+  const stocksRef = useRef<ScannedStockItem[]>([]);
+  const fastDirtySymbolsRef = useRef<Set<string>>(new Set());
+  const fastRefreshBusyRef = useRef(false);
   const [isLoading, setIsLoading] = useState(true);
   const [scanProgress, setScanProgress] = useState({ done: 0, total: 0 });
   const [serverScannedTotal, setServerScannedTotal] = useState(0);
@@ -382,6 +454,8 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [activeChartModalStock, setActiveChartModalStock] = useState<{ symbol: string; name: string } | null>(null);
   const [entryDialog, setEntryDialog] = useState<EntryDialogState | null>(null);
+
+  useEffect(() => { stocksRef.current = stocks; }, [stocks]);
 
   const runVerifiedScan = useCallback(async () => {
     setIsLoading(true);
@@ -418,6 +492,7 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
     const timer = window.setInterval(runVerifiedScan, 60_000);
     return () => window.clearInterval(timer);
   }, [isAutoScanActive, runVerifiedScan]);
+
   useEffect(() => {
     const unsubscribe = realtimeMarketFeedService.subscribe((quotesMap) => {
       if (!isAutoScanActive) return;
@@ -426,6 +501,7 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
         const quote = quotesMap.get(item.symbol) || quotesMap.get(key) || quotesMap.get(`KRW-${key}`);
         if (!quote || !(Number(quote.price) > 0) || Number(quote.price) === item.currentPrice) return item;
         const nextPrice = Number(quote.price);
+        fastDirtySymbolsRef.current.add(item.symbol);
         return {
           ...item,
           prevPrice: item.currentPrice,
@@ -436,6 +512,31 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
       }));
     });
     return unsubscribe;
+  }, [isAutoScanActive]);
+
+  useEffect(() => {
+    if (!isAutoScanActive) return;
+    const timer = window.setInterval(async () => {
+      if (fastRefreshBusyRef.current || fastDirtySymbolsRef.current.size === 0) return;
+      fastRefreshBusyRef.current = true;
+      const symbols = Array.from(fastDirtySymbolsRef.current).slice(0, FAST_PATTERN_BATCH_SIZE);
+      symbols.forEach((symbol) => fastDirtySymbolsRef.current.delete(symbol));
+      try {
+        const current = stocksRef.current;
+        const refreshed = await Promise.all(symbols.map(async (symbol) => {
+          const item = current.find((candidate) => candidate.symbol === symbol);
+          return item ? refreshFastPatternFrames(item) : null;
+        }));
+        const bySymbol = new Map(refreshed.filter((item): item is ScannedStockItem => item !== null).map((item) => [item.symbol, item]));
+        if (bySymbol.size > 0) {
+          setStocks((previous) => previous.map((item) => bySymbol.get(item.symbol) || item));
+          setLastScanAt(new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+        }
+      } finally {
+        fastRefreshBusyRef.current = false;
+      }
+    }, FAST_PATTERN_REFRESH_MS);
+    return () => window.clearInterval(timer);
   }, [isAutoScanActive]);
 
   const filteredStocks = useMemo(
@@ -513,7 +614,7 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
               <span className="text-[10px] font-bold text-rose-400">SHORT {shortCount}</span>
             </div>
             <div className="text-[10px] text-slate-400">
-              서버 전체 {serverScannedTotal.toLocaleString()}종목 → 상위후보 7시간봉 정밀검사 / 국내 · 미국 · 업비트 / 마지막 {lastScanAt}
+              가격 틱 즉시 · 1/3/5분 패턴 약 1.5초 재평가 · 전체 7시간봉 60초 정밀검사 / 마지막 {lastScanAt}
             </div>
           </div>
         </div>
@@ -556,13 +657,13 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span className="font-black text-xs truncate">{item.name}</span>
-                          <span className={`text-[10px] font-black ${directionClass}`}>{item.direction}</span>
+                          <span className={`text-[10px] font-black ${directionClass}`}>{item.direction === "LONG" ? "↑ 상승" : item.direction === "SHORT" ? "↓ 하락" : "• 대기"}</span>
                           <span className="text-[10px] font-black text-cyan-400">AI {item.aiScore}</span>
                         </div>
                         <div className="mt-0.5 text-[10px] text-slate-400 truncate">📈 {item.signalLabel}</div>
                       </div>
                       <div className="text-right shrink-0">
-                        <div className="font-mono text-xs font-black">{formatPrice(item.currentPrice, item.market)}</div>
+                        <div className={`font-mono text-xs font-black ${item.flashState === "UP" ? "text-emerald-400" : item.flashState === "DOWN" ? "text-rose-400" : ""}`}>{formatPrice(item.currentPrice, item.market)}</div>
                         <div className={`text-[10px] font-bold ${item.changePct >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{item.changePct >= 0 ? "+" : ""}{item.changePct.toFixed(2)}%</div>
                       </div>
                       {expanded ? <ChevronUp className="h-4 w-4 text-cyan-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}
