@@ -8,9 +8,6 @@ import {
   RefreshCw,
   ShieldCheck,
   Star,
-  Target,
-  TrendingDown,
-  TrendingUp,
   X,
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
@@ -23,12 +20,15 @@ import {
 } from "../scanner/verifiedSignalEngine";
 
 /**
- * BuyMoney merged scanner
+ * BuyMoney merged scanner, server-first discovery edition.
  *
- * Existing open-source chart stack is preserved. The project already uses
- * TradingView Lightweight Charts (Apache-2.0) in the realtime chart layer.
- * This board focuses on verified OHLCV -> indicator/pattern -> entry flow and
- * opens the existing chart modal instead of creating a second chart system.
+ * Stage 1: the server scans the registered KR/US/UPBIT universe with verified
+ * live data and returns only the strongest PRECHECK candidates.
+ * Stage 2: the browser performs the expensive seven-timeframe verification
+ * only for that shortlist, then exposes the existing LONG/SHORT review flow.
+ *
+ * This removes the old browser-side 36-symbol cap without turning the browser
+ * into a request fan-out engine. No synthetic fallback candidate is created.
  */
 
 export type ScanMarket = "KOREA" | "US" | "BTC";
@@ -98,6 +98,13 @@ type UniverseItem = {
   tradeValueText: string;
 };
 
+type ServerDiscovery = {
+  candidates: UniverseItem[];
+  totalScanned: number;
+  dataStatus: string;
+  scannedAt: string;
+};
+
 type EntryStep = "WHY" | "CONFIRM" | "RECHECKING" | "WAIT" | "READY";
 
 type EntryDialogState = {
@@ -108,8 +115,7 @@ type EntryDialogState = {
   message?: string;
 };
 
-const MAX_VERIFY_COUNT = 36;
-const BATCH_SIZE = 4;
+const BATCH_SIZE = 2;
 
 const TIMEFRAMES: Array<{ key: TimeframeKey; api: string; role: string }> = [
   { key: "1m", api: "1m", role: "진입 직전 움직임" },
@@ -123,9 +129,7 @@ const TIMEFRAMES: Array<{ key: TimeframeKey; api: string; role: string }> = [
 
 function formatPrice(value: number, market: ScanMarket): string {
   if (!Number.isFinite(value) || value <= 0) return "-";
-  if (market === "US") {
-    return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
-  }
+  if (market === "US") return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
   return `${Math.round(value).toLocaleString()}원`;
 }
 
@@ -149,12 +153,12 @@ function patternLabel(pattern: string): string {
 
 function easyReason(reason: string): string {
   const text = reason.toUpperCase();
-  if (text.includes("EMA")) return "짧은 평균선이 긴 평균선보다 위에 있어요.";
-  if (text.includes("VWAP")) return "가격이 중요한 평균 가격선 근처에서 힘을 확인했어요.";
-  if (text.includes("MACD")) return "가격의 움직이는 힘이 한쪽으로 모이고 있어요.";
-  if (text.includes("RSI")) return "가격 힘이 너무 뜨겁지도 약하지도 않은지 확인했어요.";
+  if (text.includes("EMA")) return "짧은 평균선과 긴 평균선의 방향을 같이 확인했어요.";
+  if (text.includes("VWAP")) return "가격이 중요한 평균 가격선에서 힘을 받는지 확인했어요.";
+  if (text.includes("MACD")) return "가격의 움직이는 힘이 어느 쪽으로 커지는지 확인했어요.";
+  if (text.includes("RSI")) return "가격 힘이 너무 뜨겁거나 너무 약하지 않은지 확인했어요.";
   if (text.includes("RVOL") || text.includes("거래량")) return "평소보다 거래가 많이 들어오는지 확인했어요.";
-  if (text.includes("HH/HL") || text.includes("시장구조")) return "고점과 저점의 모양이 어느 방향인지 확인했어요.";
+  if (text.includes("HH/HL") || text.includes("시장구조")) return "고점과 저점이 어느 방향으로 움직이는지 확인했어요.";
   if (text.includes("패턴")) return "그래프에서 반복되는 가격 모양을 찾았어요.";
   return reason;
 }
@@ -183,32 +187,21 @@ function longScoreFrom(result: VerifiedSignalResult): number {
 
 function chooseDirection(frames: TimeframeScan[]): { direction: TradeDirection; longScore: number; shortScore: number } {
   if (!frames.length) return { direction: "WAIT", longScore: 0, shortScore: 0 };
-
   const weights: Record<TimeframeKey, number> = {
-    "1m": 0.6,
-    "3m": 0.8,
-    "5m": 1.2,
-    "15m": 1.4,
-    "30m": 1.4,
-    "60m": 1.7,
-    D: 1.9,
+    "1m": 0.6, "3m": 0.8, "5m": 1.2, "15m": 1.4, "30m": 1.4, "60m": 1.7, D: 1.9,
   };
-
   let bullish = 0;
   let bearish = 0;
   let total = 0;
-
   frames.forEach((frame) => {
     const weight = weights[frame.timeframe];
     total += weight;
     if (frame.direction === "BULLISH") bullish += weight;
     if (frame.direction === "BEARISH") bearish += weight;
   });
-
   const longFrameScore = total > 0 ? (bullish / total) * 100 : 0;
   const shortFrameScore = total > 0 ? (bearish / total) * 100 : 0;
   const avgSignalScore = frames.reduce((sum, frame) => sum + frame.score, 0) / frames.length;
-
   const longScore = Math.round(longFrameScore * 0.6 + avgSignalScore * 0.4);
   const shortSignalAvg = frames.reduce((sum, frame) => {
     const proxy: VerifiedSignalResult = {
@@ -225,23 +218,53 @@ function chooseDirection(frames: TimeframeScan[]): { direction: TradeDirection; 
       reasons: frame.reasons,
       failedChecks: [],
       metrics: frame.metrics,
-      entryLow: 0, entryHigh: 0, stopLoss: 0, target1: 0, target2: 0, riskReward: 0, evaluatedBars: 0,
+      entryLow: 0,
+      entryHigh: 0,
+      stopLoss: 0,
+      target1: 0,
+      target2: 0,
+      riskReward: 0,
+      evaluatedBars: 0,
     };
     return sum + shortScoreFrom(proxy);
   }, 0) / frames.length;
   const shortScore = Math.round(shortFrameScore * 0.6 + shortSignalAvg * 0.4);
-
   const bigFrames = frames.filter((f) => f.timeframe === "D" || f.timeframe === "60m" || f.timeframe === "30m");
   const bigBull = bigFrames.filter((f) => f.direction === "BULLISH").length;
   const bigBear = bigFrames.filter((f) => f.direction === "BEARISH").length;
-
-  if (longScore >= 67 && longScore >= shortScore + 8 && bigBull >= Math.min(2, bigFrames.length)) {
-    return { direction: "LONG", longScore, shortScore };
-  }
-  if (shortScore >= 67 && shortScore >= longScore + 8 && bigBear >= Math.min(2, bigFrames.length)) {
-    return { direction: "SHORT", longScore, shortScore };
-  }
+  if (longScore >= 67 && longScore >= shortScore + 8 && bigBull >= Math.min(2, bigFrames.length)) return { direction: "LONG", longScore, shortScore };
+  if (shortScore >= 67 && shortScore >= longScore + 8 && bigBear >= Math.min(2, bigFrames.length)) return { direction: "SHORT", longScore, shortScore };
   return { direction: "WAIT", longScore, shortScore };
+}
+
+async function fetchServerDiscovery(): Promise<ServerDiscovery> {
+  const response = await fetch("/api/explainable-scanner?market=ALL&aiExplain=true", { cache: "no-store" });
+  if (!response.ok) throw new Error(`SERVER_DISCOVERY_HTTP_${response.status}`);
+  const payload = await response.json();
+  if (!payload?.success || payload?.authority !== "REAL_PRECHECK_ONLY" || payload?.finalAuthority !== "SERVER_V20_FINAL_REQUIRED") {
+    throw new Error("SERVER_DISCOVERY_AUTHORITY_INVALID");
+  }
+  const rows = Array.isArray(payload.topIdeas) ? payload.topIdeas : [];
+  const candidates = rows.flatMap((idea: any): UniverseItem[] => {
+    const symbol = String(idea?.symbol || "").trim();
+    const price = Number(idea?.price);
+    if (!symbol || !(price > 0)) return [];
+    return [{
+      symbol,
+      name: String(idea?.name || symbol),
+      market: marketFromRaw(symbol, idea?.market),
+      price,
+      changePct: Number(idea?.changePct) || 0,
+      volumeText: Number(idea?.rvol) > 0 ? `RVOL ${Number(idea.rvol).toFixed(2)}x` : "실시간 검증",
+      tradeValueText: `서버 PRECHECK ${Math.round(Number(idea?.score) || 0)}점`,
+    }];
+  });
+  return {
+    candidates,
+    totalScanned: Math.max(0, Number(payload.totalScanned) || 0),
+    dataStatus: String(payload.dataStatus || "NO_DATA"),
+    scannedAt: String(payload.scannedAt || ""),
+  };
 }
 
 async function fetchOneFrame(symbol: string, tf: typeof TIMEFRAMES[number]): Promise<{ payload: any; result: VerifiedSignalResult } | null> {
@@ -280,24 +303,16 @@ async function fetchVerifiedCandidate(base: UniverseItem): Promise<ScannedStockI
       result,
     };
   }));
-
   const valid = results.filter((item): item is NonNullable<typeof item> => item !== null);
   if (!valid.length) return null;
-
   const timeframes: TimeframeScan[] = valid.map(({ payload: _payload, result: _result, ...frame }) => frame);
   const directionScores = chooseDirection(timeframes);
   if (directionScores.direction === "WAIT" && Math.max(directionScores.longScore, directionScores.shortScore) < 62) return null;
-
-  const anchor = valid.find((v) => v.timeframe === "5m")
-    || valid.find((v) => v.timeframe === "15m")
-    || valid.find((v) => v.timeframe === "D")
-    || valid[0];
-
+  const anchor = valid.find((v) => v.timeframe === "5m") || valid.find((v) => v.timeframe === "15m") || valid.find((v) => v.timeframe === "D") || valid[0];
   const anchorResult = anchor.result;
   const payload = anchor.payload;
   const currentPrice = Number(payload?.currentPrice) > 0 ? Number(payload.currentPrice) : base.price;
   if (!(currentPrice > 0)) return null;
-
   const atr = Math.max(anchorResult.metrics.atr, currentPrice * 0.008);
   const direction = directionScores.direction;
   const isShort = direction === "SHORT";
@@ -307,20 +322,13 @@ async function fetchVerifiedCandidate(base: UniverseItem): Promise<ScannedStockI
   const target1 = isShort ? Math.max(0, currentPrice - atr * 2) : anchorResult.target1;
   const target2 = isShort ? Math.max(0, currentPrice - atr * 3) : anchorResult.target2;
   const aiScore = direction === "SHORT" ? directionScores.shortScore : directionScores.longScore;
-  const mainPattern = timeframes
-    .filter((f) => f.pattern !== "NONE")
-    .sort((a, b) => b.score - a.score)[0];
-
-  const alignedFrames = timeframes.filter((f) =>
-    direction === "LONG" ? f.direction === "BULLISH" : direction === "SHORT" ? f.direction === "BEARISH" : false,
-  );
-
+  const mainPattern = timeframes.filter((f) => f.pattern !== "NONE").sort((a, b) => b.score - a.score)[0];
+  const alignedFrames = timeframes.filter((f) => direction === "LONG" ? f.direction === "BULLISH" : direction === "SHORT" ? f.direction === "BEARISH" : false);
   const directionText = direction === "LONG" ? "위로 가는 힘" : direction === "SHORT" ? "아래로 가는 힘" : "방향 대기";
   const reasons = [
     `${alignedFrames.length}개 시간봉에서 ${directionText}을 확인했어요.`,
     ...(anchorResult.reasons || []).slice(0, 3).map(easyReason),
   ];
-
   return {
     id: `${base.market}_${base.symbol}`,
     symbol: base.symbol,
@@ -356,20 +364,17 @@ async function fetchVerifiedCandidate(base: UniverseItem): Promise<ScannedStockI
 }
 
 function canPlaceShort(item: ScannedStockItem): boolean {
-  // Upbit spot has no native short order. Analysis remains available.
   return item.market !== "BTC";
 }
 
-export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> = ({
-  onSelectStock,
-  isWhiteTheme = false,
-}) => {
+export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> = ({ onSelectStock, isWhiteTheme = false }) => {
   const app = useApp() as any;
   const { addToast, requestTradeConfirmation } = app;
-
   const [stocks, setStocks] = useState<ScannedStockItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [scanProgress, setScanProgress] = useState({ done: 0, total: 0 });
+  const [serverScannedTotal, setServerScannedTotal] = useState(0);
+  const [scanError, setScanError] = useState<string | null>(null);
   const [selectedMarketFilter, setSelectedMarketFilter] = useState<"ALL" | ScanMarket>("ALL");
   const [isAutoScanActive, setIsAutoScanActive] = useState(true);
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -378,97 +383,41 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
   const [activeChartModalStock, setActiveChartModalStock] = useState<{ symbol: string; name: string } | null>(null);
   const [entryDialog, setEntryDialog] = useState<EntryDialogState | null>(null);
 
-  const loadUniverse = useCallback(async (): Promise<UniverseItem[]> => {
-    const map = new Map<string, UniverseItem>();
-
-    try {
-      const response = await fetch("/api/realtime/small-mid-cap-universe", { cache: "no-store" });
-      if (response.ok) {
-        const json = await response.json();
-        if (json?.success && Array.isArray(json.data)) {
-          json.data.forEach((d: any) => {
-            const price = Number(d?.price);
-            if (!d?.symbol || !(price > 0)) return;
-            map.set(String(d.symbol), {
-              symbol: String(d.symbol),
-              name: d.name || d.realStockName || String(d.symbol),
-              market: "KOREA",
-              price,
-              changePct: Number(d.changePct) || 0,
-              changeAmount: Number(d.changePrice) || 0,
-              volumeText: d.volumeText || `${Number(d.volume || 0).toLocaleString()}주`,
-              tradeValueText: d.tradingValue ? `${d.tradingValue}억` : d.marketCapText || "실시간",
-            });
-          });
-        }
-      }
-    } catch (error) {
-      console.warn("[MergedScanner] Korea universe load failed", error);
-    }
-
-    try {
-      const response = await fetch("/api/stocks", { cache: "no-store" });
-      if (response.ok) {
-        const rows = await response.json();
-        if (Array.isArray(rows)) {
-          rows.forEach((s: any) => {
-            const symbol = String(s?.symbol || "");
-            const price = Number(s?.price);
-            if (!symbol || !(price > 0)) return;
-            const market = marketFromRaw(symbol, s.market);
-            map.set(`${market}:${symbol}`, {
-              symbol,
-              name: s.name || symbol,
-              market,
-              price,
-              changePct: Number(s.changePct) || 0,
-              changeAmount: Number(s.change) || 0,
-              volumeText: String(s.volume || "실시간"),
-              tradeValueText: String(s.marketCap || s.tradeValue || "실시간"),
-            });
-          });
-        }
-      }
-    } catch (error) {
-      console.warn("[MergedScanner] all-market universe load failed", error);
-    }
-
-    return Array.from(map.values())
-      .sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct))
-      .slice(0, MAX_VERIFY_COUNT);
-  }, []);
-
   const runVerifiedScan = useCallback(async () => {
     setIsLoading(true);
+    setScanError(null);
     setScanProgress({ done: 0, total: 0 });
     try {
-      const universe = await loadUniverse();
+      const discovery = await fetchServerDiscovery();
+      setServerScannedTotal(discovery.totalScanned);
+      const universe = discovery.candidates;
       setScanProgress({ done: 0, total: universe.length });
       const verified: ScannedStockItem[] = [];
-
       for (let offset = 0; offset < universe.length; offset += BATCH_SIZE) {
         const batch = universe.slice(offset, offset + BATCH_SIZE);
         const results = await Promise.all(batch.map(fetchVerifiedCandidate));
         verified.push(...results.filter((item): item is ScannedStockItem => item !== null));
         setScanProgress({ done: Math.min(offset + batch.length, universe.length), total: universe.length });
       }
-
       verified.sort((a, b) => b.aiScore - a.aiScore);
       setStocks(verified);
       setLastScanAt(new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+    } catch (error) {
+      console.warn("[MergedScanner] server-wide discovery failed", error);
+      setStocks([]);
+      setServerScannedTotal(0);
+      setScanError("서버 전체 스캔 결과를 확인하지 못했어요. 가짜 후보는 만들지 않고 기다립니다.");
     } finally {
       setIsLoading(false);
     }
-  }, [loadUniverse]);
+  }, []);
 
   useEffect(() => { runVerifiedScan(); }, [runVerifiedScan]);
-
   useEffect(() => {
     if (!isAutoScanActive) return;
     const timer = window.setInterval(runVerifiedScan, 60_000);
     return () => window.clearInterval(timer);
   }, [isAutoScanActive, runVerifiedScan]);
-
   useEffect(() => {
     const unsubscribe = realtimeMarketFeedService.subscribe((quotesMap) => {
       if (!isAutoScanActive) return;
@@ -493,12 +442,13 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
     () => stocks.filter((item) => selectedMarketFilter === "ALL" || item.market === selectedMarketFilter),
     [stocks, selectedMarketFilter],
   );
+  const longCount = stocks.filter((s) => s.direction === "LONG").length;
+  const shortCount = stocks.filter((s) => s.direction === "SHORT").length;
 
   const openChart = (item: ScannedStockItem) => {
     if (onSelectStock) onSelectStock(item.symbol, item.market);
     else setActiveChartModalStock({ symbol: item.symbol, name: item.name });
   };
-
   const addFavorite = async (item: ScannedStockItem) => {
     const fn = app.addToWatchlist || app.addWatchlist;
     if (typeof fn === "function") {
@@ -506,11 +456,9 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
       addToast?.({ type: "INFO", title: "관심종목 등록", message: `${item.name}을 관심종목에 넣었어요.` });
     }
   };
-
   const startDirectionReview = (item: ScannedStockItem, direction: "LONG" | "SHORT") => {
     setEntryDialog({ item, direction, step: "WHY", amount: "1000000" });
   };
-
   const recheckAndRequestOrder = async () => {
     if (!entryDialog) return;
     const { item, direction } = entryDialog;
@@ -519,41 +467,26 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
       setEntryDialog({ ...entryDialog, step: "WAIT", message: "살 금액을 먼저 입력해 주세요." });
       return;
     }
-
     if (direction === "SHORT" && !canPlaceShort(item)) {
       setEntryDialog({ ...entryDialog, step: "WAIT", message: "업비트 현물은 SHORT 실제 주문을 바로 할 수 없어요. SHORT 분석만 보여드려요." });
       return;
     }
-
     setEntryDialog({ ...entryDialog, step: "RECHECKING" });
-
     const fresh = await fetchOneFrame(item.symbol, TIMEFRAMES.find((tf) => tf.key === "5m")!);
     if (!fresh) {
       setEntryDialog({ ...entryDialog, step: "WAIT", message: "지금 가격을 다시 확인하지 못했어요. 주문하지 않고 기다립니다." });
       return;
     }
-
     const freshPrice = Number(fresh.payload?.currentPrice) || fresh.result.metrics.close;
     const freshDirection = fresh.result.direction;
     const longOk = direction === "LONG" && freshDirection === "BULLISH" && freshPrice >= item.entryLow && freshPrice <= item.bestEntry * 1.003;
     const shortOk = direction === "SHORT" && freshDirection === "BEARISH" && freshPrice >= item.entryLow * 0.997 && freshPrice <= item.bestEntry;
-
     if (!longOk && !shortOk) {
-      setEntryDialog({
-        ...entryDialog,
-        item: { ...item, currentPrice: freshPrice },
-        step: "WAIT",
-        message: "좋은 가격 자리에서 벗어났거나 방향이 달라졌어요. 쫓아가지 않고 기다립니다.",
-      });
+      setEntryDialog({ ...entryDialog, item: { ...item, currentPrice: freshPrice }, step: "WAIT", message: "좋은 가격 자리에서 벗어났거나 방향이 달라졌어요. 쫓아가지 않고 기다립니다." });
       return;
     }
-
-    const qty = item.market === "BTC"
-      ? Number((amount / freshPrice).toFixed(8))
-      : Math.max(1, Math.floor(amount / freshPrice));
-
+    const qty = item.market === "BTC" ? Number((amount / freshPrice).toFixed(8)) : Math.max(1, Math.floor(amount / freshPrice));
     setEntryDialog({ ...entryDialog, item: { ...item, currentPrice: freshPrice }, step: "READY" });
-
     if (typeof requestTradeConfirmation === "function") {
       await requestTradeConfirmation({
         symbol: item.symbol,
@@ -568,9 +501,6 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
     }
   };
 
-  const longCount = stocks.filter((s) => s.direction === "LONG").length;
-  const shortCount = stocks.filter((s) => s.direction === "SHORT").length;
-
   return (
     <div className={`rounded-xl border transition-all ${isWhiteTheme ? "bg-white border-slate-200 text-slate-800" : "bg-[#091424] border-[#162942] text-slate-100"}`}>
       <div className={`px-3 py-2 flex flex-wrap items-center justify-between gap-2 border-b ${isWhiteTheme ? "border-slate-200 bg-slate-50" : "border-[#162942] bg-[#070f1c]"}`}>
@@ -582,10 +512,11 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
               <span className="text-[10px] font-bold text-emerald-400">LONG {longCount}</span>
               <span className="text-[10px] font-bold text-rose-400">SHORT {shortCount}</span>
             </div>
-            <div className="text-[10px] text-slate-400">국내 · 미국 · 업비트 / 1·3·5·15·30·60분·일봉 / 마지막 {lastScanAt}</div>
+            <div className="text-[10px] text-slate-400">
+              서버 전체 {serverScannedTotal.toLocaleString()}종목 → 상위후보 7시간봉 정밀검사 / 국내 · 미국 · 업비트 / 마지막 {lastScanAt}
+            </div>
           </div>
         </div>
-
         <div className="flex items-center gap-1.5">
           {(["ALL", "KOREA", "US", "BTC"] as const).map((market) => (
             <button key={market} type="button" onClick={() => setSelectedMarketFilter(market)} className={`px-2 py-1 rounded text-[10px] font-bold ${selectedMarketFilter === market ? "bg-cyan-600 text-white" : "bg-slate-500/10 text-slate-400"}`}>
@@ -608,10 +539,10 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
         <div className="p-2.5">
           {isLoading && (
             <div className="mb-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-[11px] text-cyan-400">
-              AI가 그래프 모양을 보고 있어요. {scanProgress.total ? `${scanProgress.done}/${scanProgress.total}` : "종목을 불러오는 중"}
+              서버가 전체 시장을 먼저 훑고, 좋은 후보만 깊게 보고 있어요. {scanProgress.total ? `${scanProgress.done}/${scanProgress.total}` : "서버 PRECHECK 중"}
             </div>
           )}
-
+          {scanError && !isLoading && <div className="mb-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-400">{scanError}</div>}
           {!isLoading && filteredStocks.length === 0 ? (
             <div className="py-8 text-center text-xs text-slate-400">지금 조건에 맞는 종목이 없어요. 억지로 추천하지 않습니다.</div>
           ) : (
@@ -636,15 +567,12 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
                       </div>
                       {expanded ? <ChevronUp className="h-4 w-4 text-cyan-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}
                     </button>
-
                     {expanded && (
                       <div className={`border-t p-3 ${isWhiteTheme ? "border-slate-200 bg-slate-50/70" : "border-slate-700/40 bg-black/10"}`}>
                         <div className="grid gap-2 md:grid-cols-2">
                           <div className="rounded-lg bg-slate-500/10 p-2.5">
                             <div className="text-xs font-black">🤖 왜 포착했나요?</div>
-                            <div className="mt-2 space-y-1 text-[11px]">
-                              {item.reasons.slice(0, 4).map((reason, index) => <div key={index}>✓ {reason}</div>)}
-                            </div>
+                            <div className="mt-2 space-y-1 text-[11px]">{item.reasons.slice(0, 4).map((reason, index) => <div key={index}>✓ {reason}</div>)}</div>
                           </div>
                           <div className="rounded-lg bg-slate-500/10 p-2.5">
                             <div className="text-xs font-black">🎯 AI가 보고 있는 가격</div>
@@ -656,7 +584,6 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
                             </div>
                           </div>
                         </div>
-
                         <div className="mt-2 rounded-lg border border-slate-500/20 overflow-hidden">
                           <div className="px-2 py-1.5 text-[11px] font-black">📊 시간별 그래프 모양</div>
                           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7">
@@ -674,20 +601,11 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
                             })}
                           </div>
                         </div>
-
                         <div className="mt-2 flex flex-wrap gap-2">
-                          <button type="button" onClick={() => startDirectionReview(item, "LONG")} className="px-3 py-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-black">
-                            🟢 LONG 분석
-                          </button>
-                          <button type="button" onClick={() => startDirectionReview(item, "SHORT")} className="px-3 py-2 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-400 text-xs font-black">
-                            🔴 SHORT 분석
-                          </button>
-                          <button type="button" onClick={() => openChart(item)} className="px-3 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-black">
-                            <BarChart3 className="inline h-3.5 w-3.5 mr-1" />그래프 보기
-                          </button>
-                          <button type="button" onClick={() => addFavorite(item)} className="px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-black">
-                            <Star className="inline h-3.5 w-3.5 mr-1" />관심종목
-                          </button>
+                          <button type="button" onClick={() => startDirectionReview(item, "LONG")} className="px-3 py-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-black">🟢 LONG 분석</button>
+                          <button type="button" onClick={() => startDirectionReview(item, "SHORT")} className="px-3 py-2 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-400 text-xs font-black">🔴 SHORT 분석</button>
+                          <button type="button" onClick={() => openChart(item)} className="px-3 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-black"><BarChart3 className="inline h-3.5 w-3.5 mr-1" />그래프 보기</button>
+                          <button type="button" onClick={() => addFavorite(item)} className="px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-black"><Star className="inline h-3.5 w-3.5 mr-1" />관심종목</button>
                         </div>
                       </div>
                     )}
@@ -709,7 +627,6 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
               </div>
               <button type="button" onClick={() => setEntryDialog(null)} className="p-1 text-slate-400"><X className="h-4 w-4" /></button>
             </div>
-
             {entryDialog.step === "WHY" && (
               <>
                 <div className="mt-4 rounded-xl bg-slate-500/10 p-3">
@@ -720,12 +637,9 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
                   </div>
                 </div>
                 <div className="mt-3 text-[11px] text-slate-400">이 버튼은 아직 주문하지 않습니다. 설명을 읽고 다음 버튼을 눌러야 진입 확인 단계로 갑니다.</div>
-                <button type="button" onClick={() => setEntryDialog({ ...entryDialog, step: "CONFIRM" })} className={`mt-4 w-full py-3 rounded-xl font-black text-sm ${entryDialog.direction === "LONG" ? "bg-emerald-600 text-white" : "bg-rose-600 text-white"}`}>
-                  {entryDialog.direction} 진입 살펴보기
-                </button>
+                <button type="button" onClick={() => setEntryDialog({ ...entryDialog, step: "CONFIRM" })} className={`mt-4 w-full py-3 rounded-xl font-black text-sm ${entryDialog.direction === "LONG" ? "bg-emerald-600 text-white" : "bg-rose-600 text-white"}`}>{entryDialog.direction} 진입 살펴보기</button>
               </>
             )}
-
             {entryDialog.step === "CONFIRM" && (
               <>
                 <div className="mt-4 text-center text-lg font-black">{entryDialog.direction} 진입하시겠습니까?</div>
@@ -745,7 +659,6 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
                 </div>
               </>
             )}
-
             {entryDialog.step === "RECHECKING" && (
               <div className="py-10 text-center">
                 <RefreshCw className="h-7 w-7 mx-auto animate-spin text-cyan-400" />
@@ -753,7 +666,6 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
                 <div className="mt-1 text-xs text-slate-400">가격을 쫓아가서 사지 않도록 마지막으로 확인합니다.</div>
               </div>
             )}
-
             {(entryDialog.step === "WAIT" || entryDialog.step === "READY") && (
               <div className="py-6 text-center">
                 {entryDialog.step === "WAIT" ? <Clock3 className="h-8 w-8 mx-auto text-amber-400" /> : <ShieldCheck className="h-8 w-8 mx-auto text-emerald-400" />}
@@ -765,10 +677,7 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
           </div>
         </div>
       )}
-
-      {activeChartModalStock && (
-        <StockCandleChartModal symbol={activeChartModalStock.symbol} name={activeChartModalStock.name} onClose={() => setActiveChartModalStock(null)} />
-      )}
+      {activeChartModalStock && <StockCandleChartModal symbol={activeChartModalStock.symbol} name={activeChartModalStock.name} onClose={() => setActiveChartModalStock(null)} />}
     </div>
   );
 };
