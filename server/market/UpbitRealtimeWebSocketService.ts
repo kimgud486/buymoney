@@ -46,6 +46,7 @@ export interface UpbitRealtimeStatus {
 type UpbitTickerMessage = {
   type?: string;
   code?: string;
+  market?: string;
   trade_price?: number;
   trade_volume?: number;
   acc_trade_volume?: number;
@@ -263,7 +264,7 @@ export class UpbitRealtimeWebSocketService {
     raw: UpbitTickerMessage,
     source: CryptoNormalizedTick["source"],
   ): CryptoNormalizedTick | null {
-    const pair = raw.code as UpbitMarketCode | undefined;
+    const pair = (raw.code ?? raw.market) as UpbitMarketCode | undefined;
     const price = raw.trade_price;
     const providerTimestamp = raw.trade_timestamp ?? raw.timestamp;
 
