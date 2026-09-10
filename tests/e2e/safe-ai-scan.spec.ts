@@ -9,9 +9,11 @@ async function openCurrentDashboard(page: import("@playwright/test").Page) {
 test.describe("Current unified AI trading safety E2E", () => {
   test.describe.configure({ retries: 0 });
 
-  test("unified dashboard mounts current account and scanner controls", async ({ page }) => {
+  test("unified dashboard mounts current account, scanner and operational truth controls", async ({ page }) => {
     await openCurrentDashboard(page);
 
+    await expect(page.getByTestId("operational-truth-monitor-v20")).toBeVisible();
+    await expect(page.getByTestId("operational-gate-state")).toBeVisible();
     await expect(page.getByRole("heading", { name: "AI AUTO TRADING" })).toBeVisible();
     await expect(page.getByTestId("open-holdings")).toBeVisible();
     await expect(page.getByTestId("open-explainable-scanner")).toBeVisible();
