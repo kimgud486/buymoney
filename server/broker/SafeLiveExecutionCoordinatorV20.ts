@@ -2,6 +2,7 @@ import { KISBrokerGatewayV121 } from "./KISBrokerGatewayV121";
 import { validateLiveOrderReadiness, type LiveOrderIntent } from "./KISLiveOrderReadiness";
 import type { KISLiveAccountTruth } from "./KISLiveAccountTruthV212";
 import { PersistentOrderJournalV20 } from "../../src/execution/PersistentOrderJournalV20";
+import { livePositionRuntimeService } from "../../src/trading/LivePositionRuntimeService";
 import { brokerExecutionRuntimeBridgeV20 } from "../v20/BrokerExecutionRuntimeBridgeV20";
 
 export interface LiveExecutionAuthorization {
@@ -146,13 +147,35 @@ export class SafeLiveExecutionCoordinatorV20 {
 
     const market = entry.market === "KR" ? "KOREA" : entry.market === "US" ? "US" : "BTC";
     const fill = await this.gateway.checkFillStatus(orderId, entry.symbol, market, false);
+    const previousFilledQuantity = Math.max(0, Number(entry.filledQuantity) || 0);
+    const nextFilledQuantity = Math.max(previousFilledQuantity, Number(fill.filledQty) || 0);
 
     this.journal.updateOrder(orderId, {
       status: fill.status,
-      filledQuantity: fill.filledQty,
-      averageFillPrice: fill.filledAvgPrice > 0 ? fill.filledAvgPrice : null,
+      filledQuantity: nextFilledQuantity,
+      averageFillPrice: fill.filledAvgPrice > 0 ? fill.filledAvgPrice : entry.averageFillPrice,
       updatedAt: Date.now()
     });
+
+    // WebSocket execution notices are primary. Polling is the recovery path.
+    // If polling discovers fill quantity that has not yet reached the runtime,
+    // apply only the positive delta so duplicate broker/websocket delivery cannot
+    // double-count position quantity.
+    const fillDelta = nextFilledQuantity - previousFilledQuantity;
+    if (fillDelta > 0 && fill.filledAvgPrice > 0) {
+      const positionId = brokerExecutionRuntimeBridgeV20.getMappedPositionId(orderId);
+      if (positionId) {
+        livePositionRuntimeService.onBrokerExecutionNotice(positionId, {
+          noticeId: `POLL:${orderId}:${nextFilledQuantity}`,
+          symbol: entry.symbol,
+          side: entry.side,
+          execQty: fillDelta,
+          execPrice: fill.filledAvgPrice,
+          remainingQty: Math.max(0, entry.quantity - nextFilledQuantity),
+          timestamp: Date.now()
+        });
+      }
+    }
 
     return {
       accepted: fill.status === "FILLED" || fill.status === "PARTIAL" || fill.status === "PENDING",
