@@ -3,12 +3,13 @@
 // Real Data Only - Zero Synthetic Fallback - Provenance & Evidence Driven
 // ----------------------------------------------------------------------
 
-import { getAllStocks, LiveStockItem } from "../data/stockUniverse";
+import { LiveStockItem } from "../data/stockUniverse";
 import { realtimeMarketFeedService, requireLiveData } from "./realtimeMarketFeedService";
 import { realCandleStore } from "./RealCandleStore";
 import { IndicatorTruthEngine } from "./IndicatorTruthEngine";
 import { PatternTruthEngineV192 } from "./PatternTruthEngineV192";
 import { Candle } from "./StructureBrain";
+import { getExchangeMasterUniverseV20 } from "./ExchangeMasterUniverseSyncV20";
 
 export type UsExchange = "NASDAQ" | "NYSE" | "AMEX" | "UNKNOWN";
 
@@ -335,7 +336,10 @@ export class GlobalRealtimeScannerV192 {
 }
 
 /**
- * Top-level Scan Execution Function for AI Hot List V19.2
+ * Top-level Scan Execution Function for AI Hot List V19.2.
+ * Exchange master metadata is refreshed on the server and cached for six hours.
+ * Missing external master providers fail closed to the existing registered universe;
+ * they never create prices, candles or BUY evidence.
  */
 export async function scanGlobalRealtimeHotListV192(options?: {
   marketFilter?: "ALL" | "KOREA" | "US" | "UPBIT" | "BTC" | "CRYPTO";
@@ -351,7 +355,8 @@ export async function scanGlobalRealtimeHotListV192(options?: {
   const minObjectivePct = options?.minObjectivePct ?? options?.minYield ?? 0;
   const minSetupScore = options?.minSetupScore ?? 50;
 
-  const allStocks = getAllStocks();
+  const universe = await getExchangeMasterUniverseV20();
+  const allStocks = universe.liveStocks;
 
   const krStocks = allStocks.filter(s => s.market === "KOSPI" || s.market === "KOSDAQ");
   const usStocks = allStocks.filter(s => s.market === "US");
