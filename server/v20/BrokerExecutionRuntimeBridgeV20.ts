@@ -24,7 +24,16 @@ export class BrokerExecutionRuntimeBridgeV20 {
   }
 
   public registerOrderToPosition(orderId: string, positionId: string): void {
-    this.orderToPositionMap.set(orderId, positionId);
+    const normalizedOrderId = String(orderId || "").trim();
+    const normalizedPositionId = String(positionId || "").trim();
+    if (!normalizedOrderId || !normalizedPositionId) {
+      throw new Error("INVALID_ORDER_POSITION_MAPPING");
+    }
+    this.orderToPositionMap.set(normalizedOrderId, normalizedPositionId);
+  }
+
+  public getMappedPositionId(orderId: string): string | undefined {
+    return this.orderToPositionMap.get(String(orderId || "").trim());
   }
 
   public startBridge(): void {
@@ -47,12 +56,21 @@ export class BrokerExecutionRuntimeBridgeV20 {
   public routeNoticeToRuntime(parsed: ParsedExecutionNotice): boolean {
     if (!parsed || parsed.execQty <= 0 || !parsed.isExecuted) return false;
 
-    let positionId = this.orderToPositionMap.get(parsed.orderId);
+    let positionId = this.orderToPositionMap.get(String(parsed.orderId || "").trim());
 
     if (!positionId) {
-      const allPositions = livePositionRuntimeService.getAllPositions();
-      const match = allPositions.find((p) => p.symbol === parsed.symbol && p.state !== "CLOSED");
-      if (match) positionId = match.positionId;
+      const normalizedSymbol = String(parsed.symbol || "").trim().toUpperCase();
+      const candidates = livePositionRuntimeService.getAllPositions().filter(
+        (p) => String(p.symbol || "").trim().toUpperCase() === normalizedSymbol && p.state !== "CLOSED"
+      );
+
+      // Fail closed on ambiguity. A symbol-only fallback is safe only when exactly one live position exists.
+      if (candidates.length === 1) {
+        positionId = candidates[0].positionId;
+      } else if (candidates.length > 1) {
+        console.error(`[BrokerExecutionRuntimeBridgeV20] Ambiguous fill routing for ${parsed.symbol}; ${candidates.length} live positions exist.`);
+        return false;
+      }
     }
 
     if (!positionId) {
