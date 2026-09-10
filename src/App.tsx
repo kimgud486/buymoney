@@ -14,6 +14,7 @@ import RealtimeHubStatusStrip from "./components/trading/RealtimeHubStatusStrip"
 import OperationalTruthMonitorV20 from "./components/trading/OperationalTruthMonitorV20";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MainScreenKoreanText } from "./components/MainScreenKoreanText";
+import { v11ExecutionEngine } from "./components/AistockV11ExecutionConsole";
 
 function MainLayout() {
   const [isConsensusModalOpen, setIsConsensusModalOpen] = useState<boolean>(false);
@@ -27,6 +28,11 @@ function MainLayout() {
     } catch (e) {
       // ignore
     }
+
+    // Production-only policy: refresh/re-entry always returns the execution
+    // console to LIVE mode. This selects LIVE but intentionally keeps the
+    // independent dual-lock closed, so a page refresh never authorizes an order.
+    v11ExecutionEngine.setTradingMode("LIVE", false);
 
     document.body.style.overflow = "";
     document.body.style.position = "";
