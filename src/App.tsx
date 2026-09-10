@@ -13,6 +13,7 @@ import { MasterAiAutoTradingDashboard } from "./components/trading/MasterAiAutoT
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MainScreenKoreanText } from "./components/MainScreenKoreanText";
 import { ProductionTruthMonitor } from "./components/ProductionTruthMonitor";
+import { v11ExecutionEngine } from "./components/AistockV11ExecutionConsole";
 
 function MainLayout() {
   const [isConsensusModalOpen, setIsConsensusModalOpen] = useState<boolean>(false);
@@ -27,6 +28,25 @@ function MainLayout() {
       // ignore
     }
 
+    // Production-only UI policy: refresh/re-entry always returns the execution
+    // console to LIVE mode. This selects LIVE but intentionally keeps the
+    // independent dual-lock closed, so a page refresh never authorizes an order.
+    v11ExecutionEngine.setTradingMode("LIVE", false);
+
+    // Remove legacy DRY_RUN/test-mode controls from the rendered production UI.
+    // The observer also covers dashboard sections that mount after App.
+    const removeLegacyTestModeControls = () => {
+      document.querySelectorAll("button").forEach((button) => {
+        const label = button.textContent?.replace(/\s+/g, " ").trim() ?? "";
+        if (label.includes("시세+테스트") || label.includes("시세 + 테스트")) {
+          button.remove();
+        }
+      });
+    };
+    removeLegacyTestModeControls();
+    const modeControlObserver = new MutationObserver(removeLegacyTestModeControls);
+    modeControlObserver.observe(document.body, { childList: true, subtree: true });
+
     document.body.style.overflow = "";
     document.body.style.position = "";
     document.documentElement.style.overflow = "";
@@ -39,6 +59,7 @@ function MainLayout() {
 
     window.addEventListener("open-consensus-modal", handleOpenConsensus);
     return () => {
+      modeControlObserver.disconnect();
       window.removeEventListener("open-consensus-modal", handleOpenConsensus);
     };
   }, []);
