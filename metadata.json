@@ -2,5 +2,7 @@
   "name": "AISTOCK 24",
   "description": "국내·해외 주식 및 가상자산 실시간 시세·차트·패턴·기술지표 기반 분석 플랫폼.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

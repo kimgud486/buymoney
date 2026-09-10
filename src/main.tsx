@@ -36,22 +36,31 @@ import App from "./App.tsx";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import "./index.css";
 
-// Register Service Worker for PWA offline capabilities and installation
+// Service Worker management: Unregister in iframe/dev mode to prevent iframe preview cache issues
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    try {
-      navigator.serviceWorker
-        .register("/sw.js")
-        .then((reg) => {
-          console.log("[PWA] Service Worker registered:", reg?.scope);
-        })
-        .catch((err) => {
-          console.warn("[PWA] Service Worker registration skipped:", err);
-        });
-    } catch (e) {
-      console.warn("[PWA] Service Worker init:", e);
-    }
-  });
+  if (import.meta.env.DEV || window.self !== window.top) {
+    // Unregister active service workers in iframe or dev mode to prevent stale cache/blank preview
+    navigator.serviceWorker.getRegistrations().then((registrations) => {
+      for (const reg of registrations) {
+        reg.unregister().catch(() => {});
+      }
+    }).catch(() => {});
+  } else {
+    window.addEventListener("load", () => {
+      try {
+        navigator.serviceWorker
+          .register("/sw.js")
+          .then((reg) => {
+            console.log("[PWA] Service Worker registered:", reg?.scope);
+          })
+          .catch((err) => {
+            console.warn("[PWA] Service Worker registration skipped:", err);
+          });
+      } catch (e) {
+        console.warn("[PWA] Service Worker init:", e);
+      }
+    });
+  }
 }
 
 createRoot(document.getElementById("root")!).render(
