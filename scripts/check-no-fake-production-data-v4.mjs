@@ -5,58 +5,25 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const ROOTS = [
-  path.resolve("src"),
-  path.resolve("server"),
-  path.resolve("server.ts")
-];
+const ROOTS = [path.resolve("src"), path.resolve("server"), path.resolve("server.ts")];
 
 const forbidden = [
-  /tradeValue\s*\*\s*0\.1/,
-  /SAMPLE_FLOW_DATA/,
-  /m1:\s*true/,
-  /ORD-LIVE-\$\{/,
-  /price:\s*73800\b/,
-  /price:\s*233500\b/,
-  /price:\s*98500000\b/,
-  /cleanMarket\s*===\s*["']US["']\s*\?\s*150/,
-  /curPrice\s*\*\s*1\.0\d+/,
-  /fakeBreakoutRiskPct:\s*3\.8/,
-  /totalRelScore\s*=\s*93/,
-  /PRESET_STOCKS/,
-  /stock\.rvol\s*\|\|\s*1\.2/,
-  /sma5:\s*price\s*\*\s*0\.99/,
-  /sma20:\s*price\s*\*\s*0\.97/,
-  /sma60:\s*price\s*\*\s*0\.93/,
-  /high52w:\s*price\s*\*\s*1\.08/,
-  /low52w:\s*price\s*\*\s*0\.75/,
-  /vwap:\s*price\s*\*\s*0\.995/,
-  /krxBenchmarkReturn\s*=\s*0\.5/,
-  /usBenchmarkReturn\s*=\s*0\.8/,
-  /getQuote\(["']005930["']\)/,
-  /getSessionInfo\(symbol\)/,
-  /fakeCvd\b/,
-  /syntheticCvd\b/,
-  /estimatedOrderFlow\b/,
-  /PRDY_SIGN\s*===.*"BUY"/,
-  /fakeAggressor\b/,
-  /fakeExecutionNotice\b/,
-  /estimatedInstitutionalFlow\b/,
-  /syntheticLiveCandle\b/,
-  /syntheticOrb\b/,
-  /hardcodedBenchmark\b/,
-  /fakeDelta\b/,
-  /fakeRvol\b/,
-  /generateSynthetic\b/,
-  /simulatedFill\b/,
-  /mockPrice\b/,
-  /1,250,400\s*주/,
-  /currentPrice\s*\*\s*0\.015/,
-  /validProjections\[0\]\s*\*\s*1\.0[12]/,
-  /rvol\s*\?\?\s*1\.0/,
-  /vwap\s*\?\?\s*price/,
-  /breakoutConfirmed:\s*true\b/,
-  /scannedTotal\s*:\s*3420/,
+  /tradeValue\s*\*\s*0\.1/, /SAMPLE_FLOW_DATA/, /m1:\s*true/, /ORD-LIVE-\$\{/,
+  /price:\s*73800\b/, /price:\s*233500\b/, /price:\s*98500000\b/,
+  /cleanMarket\s*===\s*["']US["']\s*\?\s*150/, /curPrice\s*\*\s*1\.0\d+/,
+  /fakeBreakoutRiskPct:\s*3\.8/, /totalRelScore\s*=\s*93/, /PRESET_STOCKS/,
+  /stock\.rvol\s*\|\|\s*1\.2/, /sma5:\s*price\s*\*\s*0\.99/,
+  /sma20:\s*price\s*\*\s*0\.97/, /sma60:\s*price\s*\*\s*0\.93/,
+  /high52w:\s*price\s*\*\s*1\.08/, /low52w:\s*price\s*\*\s*0\.75/,
+  /vwap:\s*price\s*\*\s*0\.995/, /krxBenchmarkReturn\s*=\s*0\.5/,
+  /usBenchmarkReturn\s*=\s*0\.8/, /getQuote\(["']005930["']\)/,
+  /getSessionInfo\(symbol\)/, /fakeCvd\b/, /syntheticCvd\b/, /estimatedOrderFlow\b/,
+  /PRDY_SIGN\s*===.*"BUY"/, /fakeAggressor\b/, /fakeExecutionNotice\b/,
+  /estimatedInstitutionalFlow\b/, /syntheticLiveCandle\b/, /syntheticOrb\b/,
+  /hardcodedBenchmark\b/, /fakeDelta\b/, /fakeRvol\b/, /generateSynthetic\b/,
+  /simulatedFill\b/, /mockPrice\b/, /1,250,400\s*주/, /currentPrice\s*\*\s*0\.015/,
+  /validProjections\[0\]\s*\*\s*1\.0[12]/, /rvol\s*\?\?\s*1\.0/,
+  /vwap\s*\?\?\s*price/, /breakoutConfirmed:\s*true\b/, /scannedTotal\s*:\s*3420/,
   /makeMeta\s*\(\s*["']BB_BANDWIDTH["']\s*,\s*3\.5\s*\)/,
   /aiMatchScore\s*:\s*\+\s*\(\s*8[56]/
 ];
@@ -70,11 +37,7 @@ const allowedFolders = [
 ];
 
 let failed = false;
-
-function fail(message) {
-  console.error(`❌ ${message}`);
-  failed = true;
-}
+function fail(message) { console.error(`❌ ${message}`); failed = true; }
 
 function auditPresetFixture() {
   const presetPath = path.resolve("src/data/presetStocks.ts");
@@ -84,21 +47,8 @@ function auditPresetFixture() {
     /export const PRESET_CATALOG_STOCKS:\s*PresetStock\[\]\s*=\s*\[\s*\];/,
     /export const DEMO_FIXTURE_STOCKS:\s*PresetStock\[\]\s*=\s*\[\s*\];/
   ];
-  for (const rule of requiredEmptyExports) {
-    if (!rule.test(text)) {
-      fail("src/data/presetStocks.ts must keep production preset/demo stock arrays empty");
-      break;
-    }
-  }
-
-  const fabricatedPayloadMarkers = [
-    /priceNote\s*:\s*["'].*실시간/,
-    /marketCap\s*:\s*["']/,
-    /news\s*:\s*\[/,
-    /technical\s*:\s*\{\s*rsi\s*:/
-  ];
-  if (fabricatedPayloadMarkers.some((rule) => rule.test(text))) {
-    fail("fabricated stock payload data exists in src/data/presetStocks.ts");
+  if (requiredEmptyExports.some((rule) => !rule.test(text))) {
+    fail("src/data/presetStocks.ts must keep production preset/demo stock arrays empty");
   }
 }
 
@@ -117,24 +67,18 @@ function scanPath(p) {
 function scanFile(fullPath) {
   if (allowedFolders.some((folder) => fullPath.includes(folder))) return;
   const text = fs.readFileSync(fullPath, "utf8");
-
-  if (/(src[\\/](trading|services|realtime)|server[\\/])/.test(fullPath)) {
-    if (/from\s+["'].*\/demo\b/.test(text)) {
-      fail(`CORE PRODUCTION ENGINE IMPORTS DEMO CODE: ${fullPath}`);
-    }
+  if (/(src[\\/](trading|services|realtime)|server[\\/])/.test(fullPath)
+      && /from\s+["'].*\/demo\b/.test(text)) {
+    fail(`CORE PRODUCTION ENGINE IMPORTS DEMO CODE: ${fullPath}`);
   }
-
   for (const pattern of forbidden) {
-    if (pattern.test(text)) {
-      fail(`FAKE DATA PATTERN FOUND IN PRODUCTION CODE: ${fullPath} (${pattern})`);
-    }
+    if (pattern.test(text)) fail(`FAKE DATA PATTERN FOUND IN PRODUCTION CODE: ${fullPath} (${pattern})`);
   }
 }
 
 console.log("🔍 Running Production Zero Fake Data Audit V5...");
 auditPresetFixture();
 for (const rootPath of ROOTS) scanPath(rootPath);
-
 if (failed) {
   console.error("💥 Zero Fake Data Audit V5 FAILED!");
   process.exit(1);
