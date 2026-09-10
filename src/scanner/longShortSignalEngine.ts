@@ -6,6 +6,16 @@ import {
 
 export type LongShortDirection = "LONG" | "SHORT" | "WAIT";
 
+export interface LongShortTradePlan {
+  entry: number | null;
+  stop: number | null;
+  tp1: number | null;
+  tp2: number | null;
+  tp3: number | null;
+  riskRewardTp1: number | null;
+  source: "ATR_VWAP_VERIFIED" | "NO_VERIFIED_PLAN";
+}
+
 export interface LongShortSignal {
   direction: LongShortDirection;
   longStrength: number;
@@ -20,6 +30,7 @@ export interface LongShortSignal {
   currentPrice: number;
   reasons: string[];
   warnings: string[];
+  plan: LongShortTradePlan;
   source: VerifiedSignalResult;
 }
 
@@ -64,6 +75,63 @@ function fiveBarMomentum(candles: ScannerCandle[]): number {
 
 function clamp(value: number, min = 0, max = 100): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function noPlan(): LongShortTradePlan {
+  return {
+    entry: null,
+    stop: null,
+    tp1: null,
+    tp2: null,
+    tp3: null,
+    riskRewardTp1: null,
+    source: "NO_VERIFIED_PLAN",
+  };
+}
+
+function buildTradePlan(
+  direction: LongShortDirection,
+  source: VerifiedSignalResult,
+  matchedPatterns: number,
+): LongShortTradePlan {
+  if (direction === "WAIT" || matchedPatterns <= 0) return noPlan();
+
+  const entry = finite(source.metrics.close);
+  const atr = finite(source.metrics.atr);
+  const vwap = finite(source.metrics.vwap);
+  if (entry <= 0 || atr <= 0) return noPlan();
+
+  if (direction === "LONG") {
+    const atrStop = entry - atr;
+    const vwapStop = vwap > 0 ? vwap - atr * 0.25 : atrStop;
+    const stop = Math.min(atrStop, vwapStop);
+    const risk = entry - stop;
+    if (risk <= 0) return noPlan();
+    return {
+      entry,
+      stop,
+      tp1: entry + risk * 1.5,
+      tp2: entry + risk * 2.5,
+      tp3: entry + risk * 4,
+      riskRewardTp1: 1.5,
+      source: "ATR_VWAP_VERIFIED",
+    };
+  }
+
+  const atrStop = entry + atr;
+  const vwapStop = vwap > 0 ? vwap + atr * 0.25 : atrStop;
+  const stop = Math.max(atrStop, vwapStop);
+  const risk = stop - entry;
+  if (risk <= 0) return noPlan();
+  return {
+    entry,
+    stop,
+    tp1: entry - risk * 1.5,
+    tp2: entry - risk * 2.5,
+    tp3: entry - risk * 4,
+    riskRewardTp1: 1.5,
+    source: "ATR_VWAP_VERIFIED",
+  };
 }
 
 /**
@@ -236,6 +304,7 @@ export function evaluateLongShortSignal(inputCandles: unknown[]): LongShortSigna
     currentPrice: m.close,
     reasons,
     warnings: warnings.slice(0, 5),
+    plan: buildTradePlan(direction, source, matchedPatterns),
     source,
   };
 }

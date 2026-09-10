@@ -24,6 +24,7 @@ interface RadarSignal extends LongShortSignal {
   symbol: string;
   name: string;
   market: "KOREA" | "US";
+  timeframe: "5m";
   detectedAt: number;
 }
 
@@ -31,10 +32,17 @@ const INITIAL_CONCURRENCY = 6;
 const TICK_RECHECK_COOLDOWN_MS = 45_000;
 const MIN_TICK_ACTIVITY_PCT = 0.25;
 const MAX_VISIBLE_HISTORY = 12;
+const LIVE_TIMEFRAME = "5m" as const;
+const LIVE_CANDLE_COUNT = 90;
 
 function num(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+function formatPrice(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "-";
+  return new Intl.NumberFormat("ko-KR", { maximumFractionDigits: value < 1000 ? 2 : 0 }).format(value);
 }
 
 async function fetchFullStockUniverse(): Promise<UniverseItem[]> {
@@ -85,21 +93,22 @@ async function fetchFullStockUniverse(): Promise<UniverseItem[]> {
 
 async function analyzeSymbol(item: UniverseItem): Promise<RadarSignal | null> {
   const response = await fetch(
-    `/api/market/realtime-candles?symbol=${encodeURIComponent(item.symbol)}&timeframe=D&count=90`,
+    `/api/market/realtime-candles?symbol=${encodeURIComponent(item.symbol)}&timeframe=${LIVE_TIMEFRAME}&count=${LIVE_CANDLE_COUNT}`,
     { cache: "no-store" },
   );
   if (!response.ok) return null;
   const json = await response.json();
-  if (!Array.isArray(json?.candles)) return null;
+  if (!Array.isArray(json?.candles) || json.candles.length < 56) return null;
 
   const signal = evaluateLongShortSignal(json.candles);
-  if (!signal || signal.direction === "WAIT") return null;
+  if (!signal || signal.direction === "WAIT" || signal.plan.source !== "ATR_VWAP_VERIFIED") return null;
 
   return {
     ...signal,
     symbol: item.symbol,
     name: String(json?.name || item.name || item.symbol),
     market: item.market,
+    timeframe: LIVE_TIMEFRAME,
     detectedAt: Date.now(),
   };
 }
@@ -153,7 +162,7 @@ export const RealtimeLongShortRadar: React.FC = () => {
   }, []);
 
   const publish = useCallback((signal: RadarSignal) => {
-    const alertKey = `${signal.direction}:${Math.round(Math.max(signal.longStrength, signal.shortStrength))}:${signal.matchedPatterns}`;
+    const alertKey = `${signal.direction}:${Math.round(Math.max(signal.longStrength, signal.shortStrength))}:${signal.matchedPatterns}:${Math.round(signal.plan.entry || 0)}`;
     if (lastAlertRef.current.get(signal.symbol) === alertKey) return;
     lastAlertRef.current.set(signal.symbol, alertKey);
 
@@ -245,7 +254,8 @@ export const RealtimeLongShortRadar: React.FC = () => {
           <span className="text-slate-400">
             전체 종목 {universeSize || "-"} · 초기대조 {scanned}/{universeSize || "-"} ({progress}%)
           </span>
-          <span className="text-slate-500">등록 패턴은 종목별 실제 캔들에서 평가 · 강신호 이후 실시간 틱으로 재검증</span>
+          <span className="rounded-md bg-indigo-400/10 px-2 py-0.5 font-black text-indigo-300">LIVE {LIVE_TIMEFRAME}</span>
+          <span className="text-slate-500">실시간 틱 감지 → 5분봉 재분석 → 패턴 확인 → ATR/VWAP 실행계획 검증</span>
           <button
             type="button"
             onClick={() => setRunning((value) => !value)}
@@ -273,7 +283,7 @@ export const RealtimeLongShortRadar: React.FC = () => {
       </div>
 
       {latest && (
-        <div className="fixed right-3 top-20 z-[120] w-[min(94vw,430px)] rounded-3xl border border-slate-700 bg-slate-950/95 p-5 text-white shadow-2xl backdrop-blur-xl">
+        <div className="fixed right-3 top-20 z-[120] w-[min(94vw,470px)] rounded-3xl border border-slate-700 bg-slate-950/95 p-5 text-white shadow-2xl backdrop-blur-xl">
           <button
             type="button"
             aria-label="신호 닫기"
@@ -284,7 +294,7 @@ export const RealtimeLongShortRadar: React.FC = () => {
           </button>
 
           <div className="flex items-center gap-2 text-xs font-black tracking-[0.16em] text-indigo-300">
-            <BellRing size={15} /> AI SIGNAL DETECTED
+            <BellRing size={15} /> V21 LIVE SIGNAL · {latest.timeframe}
           </div>
           <div className="mt-2 flex items-end justify-between gap-3">
             <div>
@@ -306,6 +316,17 @@ export const RealtimeLongShortRadar: React.FC = () => {
             <span className="font-black text-indigo-300">{latest.confidenceLabel}</span>
           </div>
 
+          <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+            <PlanLevel label="ENTRY" value={latest.plan.entry} />
+            <PlanLevel label="STOP" value={latest.plan.stop} />
+            <PlanLevel label="TP1" value={latest.plan.tp1} />
+            <PlanLevel label="TP2" value={latest.plan.tp2} />
+          </div>
+          <div className="mt-2 flex items-center justify-between rounded-xl border border-emerald-400/20 bg-emerald-400/5 px-3 py-2 text-[11px]">
+            <span className="font-bold text-emerald-300">TP3 {formatPrice(latest.plan.tp3)}</span>
+            <span className="text-slate-400">R:R TP1 {latest.plan.riskRewardTp1?.toFixed(1) || "-"}:1 · ATR/VWAP VERIFIED</span>
+          </div>
+
           <div className="mt-3 text-[11px] text-slate-400">
             패턴 등록 {latest.registeredPatterns} · 평가 {latest.evaluatedPatterns} · 현재 일치 {latest.matchedPatterns}
             <span className="ml-2">상승 {latest.bullishPatterns} / 하락 {latest.bearishPatterns}</span>
@@ -319,7 +340,7 @@ export const RealtimeLongShortRadar: React.FC = () => {
 
           <div className="mt-4 flex gap-2 rounded-xl border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-[10px] leading-relaxed text-amber-200/80">
             <ShieldAlert size={14} className="mt-0.5 shrink-0" />
-            LONG/SHORT %는 과거·현재 기술 신호의 상대 우세도이며 실제 수익 확률을 보장하지 않습니다. 주문은 자동 전송하지 않습니다.
+            LONG/SHORT는 5분봉 기술 신호의 상대 우세도입니다. SHORT는 기술적 하락 신호이며 실제 공매도 가능 여부를 뜻하지 않습니다. 주문은 자동 전송하지 않습니다.
           </div>
         </div>
       )}
@@ -337,6 +358,13 @@ const Strength: React.FC<{ label: string; value: number; active: boolean }> = ({
   </div>
 );
 
+const PlanLevel: React.FC<{ label: string; value: number | null }> = ({ label, value }) => (
+  <div className="rounded-xl border border-slate-800 bg-slate-900 p-2">
+    <div className="text-[9px] font-black text-slate-500">{label}</div>
+    <div className="mt-0.5 truncate font-black text-slate-100">{formatPrice(value)}</div>
+  </div>
+);
+
 const SignalMiniCard: React.FC<{ signal: RadarSignal }> = ({ signal }) => (
   <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-2.5">
     <div className="flex items-center justify-between gap-2">
@@ -345,9 +373,10 @@ const SignalMiniCard: React.FC<{ signal: RadarSignal }> = ({ signal }) => (
         {signal.direction}
       </span>
     </div>
-    <div className="mt-1 text-[10px] text-slate-500">{signal.symbol}</div>
+    <div className="mt-1 text-[10px] text-slate-500">{signal.symbol} · {signal.timeframe}</div>
     <div className="mt-1 text-[11px] text-slate-300">
       L {signal.longStrength.toFixed(0)}% / S {signal.shortStrength.toFixed(0)}% · 패턴 {signal.matchedPatterns}
     </div>
+    <div className="mt-1 text-[10px] text-slate-500">진입 {formatPrice(signal.plan.entry)} · 손절 {formatPrice(signal.plan.stop)}</div>
   </div>
 );
