@@ -12,8 +12,10 @@ import {
 import { useApp } from "../../context/AppContext";
 import { LiveMarketQuote, realtimeMarketFeedService } from "../../services/realtimeMarketFeedService";
 import { RealtimeScannerTileBoard } from "../RealtimeScannerTileBoard";
+import { TransactionHistory } from "../TransactionHistory";
 import { VerifiedAiOpportunityScanner } from "../VerifiedAiOpportunityScanner";
 import { VerifiedIntradaySignalPanel } from "../VerifiedIntradaySignalPanel";
+import { AiHighVolatilityAlertSystem } from "./AiHighVolatilityAlertSystem";
 import { BotStatusDashboard } from "./BotStatusDashboard";
 
 type NavId = "new" | "history" | "watch" | "portfolio" | "scanner" | "alerts";
@@ -235,10 +237,10 @@ export default function StockGPTFeaturePanels({ activeNav, quotes, onSelectQuote
     return (
       <section className="mt-6 rounded-2xl border border-slate-800 bg-[#08111d]/96 p-5 shadow-2xl" data-testid="stock-gpt-history-panel">
         <div className="flex items-center gap-2 text-base font-black"><History className="h-5 w-5 text-violet-300" />이전 분석·의사결정 기록</div>
-        <p className="mt-1 text-xs text-slate-500">가짜 대화기록을 만들지 않고 기존 의사결정 로그 중 실제 저장된 항목만 표시합니다.</p>
+        <p className="mt-1 text-xs text-slate-500">가짜 대화기록을 만들지 않고 기존 의사결정 로그와 실제 주문·체결 원장을 그대로 다시 연결합니다.</p>
         <div className="mt-4 space-y-2">
           {decisionLogs.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-slate-800 py-12 text-center text-sm text-slate-500">저장된 실제 분석 기록이 없습니다.</div>
+            <div className="rounded-xl border border-dashed border-slate-800 py-8 text-center text-sm text-slate-500">저장된 실제 분석 기록이 없습니다.</div>
           ) : (
             [...decisionLogs].slice(-30).reverse().map((log: any, index: number) => (
               <div key={log.id || `${log.timestamp}-${index}`} className="rounded-xl border border-slate-800 bg-[#07101b] p-3">
@@ -251,6 +253,10 @@ export default function StockGPTFeaturePanels({ activeNav, quotes, onSelectQuote
             ))
           )}
         </div>
+
+        <div className="mt-5 overflow-hidden rounded-xl border border-slate-700 bg-white text-slate-900" data-testid="stock-gpt-transaction-history">
+          <TransactionHistory />
+        </div>
       </section>
     );
   }
@@ -258,7 +264,7 @@ export default function StockGPTFeaturePanels({ activeNav, quotes, onSelectQuote
   return (
     <section className="mt-6 rounded-2xl border border-slate-800 bg-[#08111d]/96 p-5 shadow-2xl" data-testid="stock-gpt-alerts-panel">
       <div className="flex items-center gap-2 text-base font-black"><Bell className="h-5 w-5 text-amber-300" />알림 기록</div>
-      <p className="mt-1 text-xs text-slate-500">브로커 연결 오류, 위험 차단, 실제 의사결정 로그만 모아서 보여줍니다.</p>
+      <p className="mt-1 text-xs text-slate-500">브로커 연결 오류, 위험 차단, 검증 LIVE 변동성 경보만 모아서 보여줍니다.</p>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         <div className="rounded-xl border border-slate-800 bg-[#07101b] p-4">
@@ -290,8 +296,17 @@ export default function StockGPTFeaturePanels({ activeNav, quotes, onSelectQuote
           </div>
         ))}
         {blockedSymbolDetails.length === 0 && Object.values(brokerApiError || {}).every((value) => !value) && (
-          <div className="rounded-xl border border-dashed border-slate-800 py-10 text-center text-sm text-slate-500">현재 기록된 위험 알림이 없습니다.</div>
+          <div className="rounded-xl border border-dashed border-slate-800 py-8 text-center text-sm text-slate-500">현재 기록된 브로커/위험 차단 알림이 없습니다.</div>
         )}
+      </div>
+
+      <div className="mt-5" data-testid="stock-gpt-live-volatility-alerts">
+        <AiHighVolatilityAlertSystem
+          onSelectStock={(symbol) => {
+            const quote = getQuote(symbol);
+            if (quote) onSelectQuote(quote, quote.name || symbol);
+          }}
+        />
       </div>
     </section>
   );
