@@ -4,24 +4,31 @@ import { LiveDataIntegrityGate } from "./LiveDataIntegrityGate";
 
 type TickListener = (tick: LiveTick) => void;
 
-function parseKoreanVolume(value?: string): number {
-  if (!value) return 0;
+type RegisteredMarket = "KOSPI" | "KOSDAQ" | "UPBIT" | "US";
 
-  const text = value.replace(/,/g, "").trim();
+const normalizeSymbol = (symbol: string): string => String(symbol || "").trim().toUpperCase();
 
-  const eok = text.match(/([\d.]+)\s*억/);
-  if (eok) {
-    return Math.round(Number(eok[1]) * 100_000_000);
-  }
+const determineMarket = (symbol: string): RegisteredMarket => {
+  const normalized = normalizeSymbol(symbol);
+  if (normalized.startsWith("KRW-")) return "UPBIT";
+  if (["BTC", "ETH", "SOL", "XRP", "DOGE"].includes(normalized)) return "UPBIT";
+  if (/^\d{6}$/.test(normalized)) return "KOSPI";
+  return "US";
+};
 
-  const man = text.match(/([\d.]+)\s*만/);
-  if (man) {
-    return Math.round(Number(man[1]) * 10_000);
-  }
+const normalizeFeedSource = (
+  source: string | null | undefined,
+): "KIS_REALTIME_WS" | "US_BROKER_WS" | "NAVER_POLLING" => {
+  if (source === "KIS_REALTIME_WS") return "KIS_REALTIME_WS";
+  if (source === "US_BROKER_WS") return "US_BROKER_WS";
 
-  const raw = text.match(/[\d.]+/);
-  return raw ? Math.round(Number(raw[0])) : 0;
-}
+  // The current LiveTick union predates Upbit/API_STOCKS source labels.
+  // Keep those authentic but non-websocket feeds in the delayed bucket.
+  return "NAVER_POLLING";
+};
+
+const isStrictRealtimeSource = (source: string | null | undefined): boolean =>
+  source === "KIS_REALTIME_WS" || source === "US_BROKER_WS" || source === "UPBIT_WS" || source === "SERVER_STREAM";
 
 export class RealTimeMarketFeedManager {
   private static instance: RealTimeMarketFeedManager;
@@ -45,39 +52,51 @@ export class RealTimeMarketFeedManager {
 
   private initFeedBridge() {
     realtimeMarketFeedService.subscribe((quotesMap) => {
-      quotesMap.forEach((quote, symbol) => {
+      quotesMap.forEach((quote, rawSymbol) => {
+        const symbol = normalizeSymbol(rawSymbol);
         const symbolListeners = this.listeners.get(symbol);
 
         if (!symbolListeners?.size) return;
-
-        if (quote.price == null || quote.price <= 0) return;
+        if (quote.price == null || !Number.isFinite(quote.price) || quote.price <= 0) return;
 
         const now = Date.now();
         const tickTs = quote.providerTimestamp || quote.receivedAt || now;
+        const originalSource = quote.source;
+        const source = normalizeFeedSource(originalSource);
+        const strictRealtime = isStrictRealtimeSource(originalSource);
+        const quality: FeedQuality = strictRealtime ? "BROKER_REALTIME" : "POLLING_DELAYED";
 
-        const source = (quote.source || "KIS_REALTIME_WS") as "KIS_REALTIME_WS" | "US_BROKER_WS" | "NAVER_POLLING";
-        const quality: FeedQuality = source === "KIS_REALTIME_WS" || source === "US_BROKER_WS" ? "BROKER_REALTIME" : "POLLING_DELAYED";
+        if (strictRealtime) {
+          // Strict broker/exchange streams must pass the execution-grade integrity gate.
+          const validation = this.integrityGate.validate(
+            {
+              symbol,
+              price: quote.price,
+              timestamp: tickTs,
+              source: originalSource || source,
+              receivedAt: now,
+            },
+            5000,
+          );
 
-        // Pass through LiveDataIntegrityGate
-        const validation = this.integrityGate.validate(
-          {
-            symbol,
-            price: quote.price,
-            timestamp: tickTs,
-            source,
-            receivedAt: now
-          },
-          5000
-        );
-
-        if (!validation.valid) {
-          console.warn(`[LiveDataIntegrityGate] Rejected tick for ${symbol}: ${validation.reason}`);
-          return;
+          if (!validation.valid) {
+            console.warn(`[LiveDataIntegrityGate] Rejected realtime tick for ${symbol}: ${validation.reason}`);
+            return;
+          }
+        } else {
+          // Verified polling/public API data is still useful for chart display and analysis.
+          // Do not run it through the strict websocket-only gate, otherwise every NAVER,
+          // UPBIT public ticker and API_STOCKS update is rejected as NON_REAL_DATA_SOURCE.
+          // It remains explicitly POLLING_DELAYED so downstream execution gates stay locked.
+          const receivedAt = quote.receivedAt || now;
+          const ageMs = Math.max(0, now - receivedAt);
+          if (quote.isVerified !== true || ageMs > 15_000) {
+            return;
+          }
         }
 
         const accumulatedVolume = quote.volume || 0;
         const previousAccumulatedVolume = this.lastAccumulatedVolume.get(symbol);
-
         const incrementalVolume =
           previousAccumulatedVolume === undefined
             ? 0
@@ -99,7 +118,7 @@ export class RealTimeMarketFeedManager {
           source,
           quality,
           isRealtime: quality === "BROKER_REALTIME",
-          isDelayed: quality === "POLLING_DELAYED"
+          isDelayed: quality === "POLLING_DELAYED",
         };
 
         symbolListeners.forEach((listener) => listener(tick));
@@ -108,31 +127,34 @@ export class RealTimeMarketFeedManager {
   }
 
   public subscribe(symbol: string, listener: TickListener): () => void {
-    if (!this.listeners.has(symbol)) {
-      this.listeners.set(symbol, new Set());
+    const normalized = normalizeSymbol(symbol);
+    if (!normalized) return () => {};
+
+    if (!this.listeners.has(normalized)) {
+      this.listeners.set(normalized, new Set());
     }
 
-    this.listeners.get(symbol)!.add(listener);
+    this.listeners.get(normalized)!.add(listener);
 
-    realtimeMarketFeedService.registerSymbol(symbol);
+    // Important: KRW-BTC style symbols were previously auto-detected as KOSPI,
+    // which meant the Upbit ticker was never registered and charts stayed NO_DATA.
+    realtimeMarketFeedService.registerSymbol(normalized, determineMarket(normalized));
 
     return () => {
-      const listeners = this.listeners.get(symbol);
-
+      const listeners = this.listeners.get(normalized);
       if (!listeners) return;
 
       listeners.delete(listener);
-
       if (listeners.size === 0) {
-        this.listeners.delete(symbol);
+        this.listeners.delete(normalized);
       }
     };
   }
 
   public emitCustomTick(tick: LiveTick) {
-    this.listeners.get(tick.symbol)?.forEach((listener) => listener(tick));
+    const symbol = normalizeSymbol(tick.symbol);
+    this.listeners.get(symbol)?.forEach((listener) => listener({ ...tick, symbol }));
   }
 }
 
 export const realTimeMarketFeedManager = RealTimeMarketFeedManager.getInstance();
-
