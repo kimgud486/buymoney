@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Brain,
@@ -19,6 +19,11 @@ import {
 
 type ScanMarket = "ALL" | "KOREA" | "US" | "BTC";
 type ExecutionState = "WAITING" | "SUBMITTING" | "EXECUTED" | "SKIPPED" | "FAILED";
+
+type SafeAiAutotradeLauncherProps = {
+  onSelectSymbolForChart?: (symbol: string) => void;
+  onConfirmOrderApproval?: (candidate: EnsembleEvaluationResult) => void;
+};
 
 interface ScannerResponse {
   success?: boolean;
@@ -47,6 +52,8 @@ const MARKET_LABEL: Record<ScanMarket, string> = {
 
 const MAX_SCAN_AGE_MS = 5 * 60 * 1000;
 const MAX_FUTURE_CLOCK_SKEW_MS = 60 * 1000;
+const AUTO_SCAN_INTERVAL_MS = 15_000;
+const SAME_SYMBOL_ORDER_COOLDOWN_MS = 60_000;
 
 const evaluateScanFreshness = (scannedAt?: string): ScanFreshnessResult => {
   if (!scannedAt) return { isFresh: false, reason: "스캐너 응답 시각이 없어 실시간성을 확인할 수 없습니다." };
@@ -85,7 +92,7 @@ const formatPrice = (value: number, market: EnsembleEvaluationResult["market"]):
 const getAutoOrderQty = (candidate: EnsembleEvaluationResult): number => {
   const price = candidate.entryPrice > 0 ? candidate.entryPrice : candidate.entryHigh;
   if (!Number.isFinite(price) || price <= 0) return 0;
-  if (candidate.market === "BTC") return Number((5000 / price).toFixed(8));
+  if (candidate.market === "BTC") return Number((5500 / price).toFixed(8));
   if (candidate.market === "US") return 0.0001;
   return 1;
 };
@@ -93,7 +100,10 @@ const getAutoOrderQty = (candidate: EnsembleEvaluationResult): number => {
 const mapMarket = (market: EnsembleEvaluationResult["market"]): "KOREA" | "US" | "BTC" =>
   market === "BTC" ? "BTC" : market === "US" ? "US" : "KOREA";
 
-export const SafeAiAutotradeLauncher: React.FC = () => {
+export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = ({
+  onSelectSymbolForChart,
+  onConfirmOrderApproval,
+}) => {
   const {
     setSelectedSymbol,
     addToast,
@@ -104,12 +114,15 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
 
   const [market, setMarket] = useState<ScanMarket>("ALL");
   const [isScanning, setIsScanning] = useState(false);
+  const [autoScanEnabled, setAutoScanEnabled] = useState(false);
   const [results, setResults] = useState<EnsembleEvaluationResult[]>([]);
   const [selectedCandidate, setSelectedCandidate] = useState<EnsembleEvaluationResult | null>(null);
   const [scanError, setScanError] = useState("");
   const [scanFreshnessWarning, setScanFreshnessWarning] = useState("");
   const [scannedAt, setScannedAt] = useState("");
   const [executionUi, setExecutionUi] = useState<Record<string, CandidateExecutionUi>>({});
+  const scanInFlightRef = useRef(false);
+  const lastOrderAttemptRef = useRef<Map<string, number>>(new Map());
 
   const reviewReadyCount = useMemo(
     () => results.filter((result) => result.decision === "REVIEW_READY").length,
@@ -131,7 +144,7 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
     resetScanView();
   };
 
-  const executeVerifiedCandidates = async (
+  const executeVerifiedCandidates = useCallback(async (
     ranked: EnsembleEvaluationResult[],
     freshness: ScanFreshnessResult,
   ) => {
@@ -139,11 +152,21 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
 
     if (!freshness.isFresh || ready.length === 0) return;
 
+    if (!autoScanEnabled) {
+      ready.forEach((candidate) => {
+        setExecutionUi((prev) => ({
+          ...prev,
+          [candidate.symbol]: { state: "WAITING", message: "자동감시가 OFF라 분석만 했습니다. 자동감시 ON에서만 주문 안전검사를 시작합니다." },
+        }));
+      });
+      return;
+    }
+
     if (profile?.autoTradingEnabled === false) {
       ready.forEach((candidate) => {
         setExecutionUi((prev) => ({
           ...prev,
-          [candidate.symbol]: { state: "SKIPPED", message: "자율매매 설정이 꺼져 있어 주문하지 않았습니다." },
+          [candidate.symbol]: { state: "SKIPPED", message: "프로필의 자율매매 설정이 꺼져 있어 주문하지 않았습니다." },
         }));
       });
       return;
@@ -160,6 +183,16 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
     }
 
     for (const candidate of ready) {
+      const now = Date.now();
+      const previousAttemptAt = lastOrderAttemptRef.current.get(candidate.symbol) || 0;
+      if (now - previousAttemptAt < SAME_SYMBOL_ORDER_COOLDOWN_MS) {
+        setExecutionUi((prev) => ({
+          ...prev,
+          [candidate.symbol]: { state: "SKIPPED", message: "같은 종목 반복매수를 막기 위해 60초 재주문 대기 중입니다." },
+        }));
+        continue;
+      }
+
       const qty = getAutoOrderQty(candidate);
       if (qty <= 0 || candidate.entryPrice <= 0) {
         setExecutionUi((prev) => ({
@@ -169,6 +202,7 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
         continue;
       }
 
+      lastOrderAttemptRef.current.set(candidate.symbol, now);
       setExecutionUi((prev) => ({
         ...prev,
         [candidate.symbol]: { state: "SUBMITTING", message: "실주문 안전검사 중" },
@@ -197,6 +231,8 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
           [candidate.symbol]: { state: success ? "EXECUTED" : "SKIPPED", message },
         }));
 
+        if (success) onConfirmOrderApproval?.(candidate);
+
         addToast({
           type: success ? "SUCCESS" : "WARNING",
           title: success ? `⚡ AI 자율매매 주문 접수 · ${candidate.name}` : `🛡️ AI 자율매매 주문 보류 · ${candidate.name}`,
@@ -211,13 +247,14 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
         addToast({ type: "ERROR", title: `AI 자율매매 실패 · ${candidate.name}`, message });
       }
     }
-  };
+  }, [addToast, autoScanEnabled, executeTrade, isKillSwitchActive, onConfirmOrderApproval, profile?.autoTradingEnabled]);
 
-  const runScan = async (targetMarket: ScanMarket = market) => {
+  const runScan = useCallback(async (targetMarket: ScanMarket = market) => {
+    if (scanInFlightRef.current) return;
+    scanInFlightRef.current = true;
     setIsScanning(true);
     setScanError("");
     setScanFreshnessWarning("");
-    setExecutionUi({});
 
     try {
       const response = await fetch(
@@ -251,31 +288,38 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
         addToast({
           type: ready.length > 0 ? "SUCCESS" : "INFO",
           title: `✨ 스캔 종목 발견 · ${first.name}`,
-          message: `${first.symbol} · 점수 ${first.ensembleScore}/100 · ${ready.length > 0 ? "자동매매 조건 확인 중" : "관찰 후보"}`,
+          message: `${first.symbol} · 점수 ${first.ensembleScore}/100 · ${ready.length > 0 ? (autoScanEnabled ? "자동매매 조건 확인 중" : "자동감시 OFF · 분석만") : "관찰 후보"}`,
         });
         window.dispatchEvent(new CustomEvent("safe-ai-scan-results-ready", {
           detail: { symbol: first.symbol, name: first.name },
         }));
-      } else {
-        addToast("현재 검증 가능한 스캔 후보가 없습니다.", "INFO");
       }
 
       await executeVerifiedCandidates(ranked, freshness);
     } catch (error: any) {
       const message = error?.message || "AI 스캔 중 오류가 발생했습니다.";
-      setResults([]);
-      setSelectedCandidate(null);
-      setScannedAt("");
-      setScanFreshnessWarning("");
       setScanError(message);
       addToast(message, "ERROR");
     } finally {
+      scanInFlightRef.current = false;
       setIsScanning(false);
     }
-  };
+  }, [addToast, autoScanEnabled, executeVerifiedCandidates, market]);
+
+  useEffect(() => {
+    if (!autoScanEnabled) return;
+
+    void runScan(market);
+    const timer = window.setInterval(() => {
+      void runScan(market);
+    }, AUTO_SCAN_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
+  }, [autoScanEnabled, market, runScan]);
 
   const selectForDetail = (candidate: EnsembleEvaluationResult) => {
     setSelectedSymbol(candidate.symbol);
+    onSelectSymbolForChart?.(candidate.symbol);
     window.dispatchEvent(new CustomEvent("verified-ai-candidate-selected", { detail: { symbol: candidate.symbol } }));
     addToast(`${candidate.name}(${candidate.symbol}) 스캔 상세를 메인 차트에서 엽니다.`, "INFO");
   };
@@ -302,9 +346,11 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-lg font-black text-white">스캔 AI 자율매매</h2>
-                <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-black tracking-wide text-emerald-300">LIVE_RESTRICTED · AUTO EXECUTION</span>
+                <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black tracking-wide ${autoScanEnabled ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : "border-slate-600 bg-slate-800 text-slate-300"}`}>
+                  {autoScanEnabled ? "LIVE_RESTRICTED · AUTO 15s" : "SCAN ONLY · AUTO OFF"}
+                </span>
               </div>
-              <p className="mt-1 text-xs leading-relaxed text-slate-400">실시간 스캔 → 앙상블 검증 → 실시간성 확인 → 기존 실주문 안전 게이트 → 조건 통과 후보만 자동 주문</p>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400">자동감시 ON → 15초마다 스캔 → 앙상블 검증 → 실시간성 확인 → 기존 실주문 안전 게이트 → 조건 통과 후보만 주문 검사</p>
             </div>
           </div>
 
@@ -314,9 +360,18 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
                 <button key={item} type="button" data-testid={`safe-ai-market-${item.toLowerCase()}`} onClick={() => changeMarket(item)} aria-pressed={market === item} className={`rounded-lg px-3 py-1.5 text-xs font-bold transition ${market === item ? "bg-cyan-600 text-white" : "text-slate-400 hover:bg-slate-900 hover:text-white"}`}>{MARKET_LABEL[item]}</button>
               ))}
             </div>
+            <button
+              type="button"
+              data-testid="safe-ai-auto-toggle"
+              onClick={() => setAutoScanEnabled((prev) => !prev)}
+              aria-pressed={autoScanEnabled}
+              className={`rounded-xl border px-3 py-2.5 text-xs font-black transition ${autoScanEnabled ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-200" : "border-slate-700 bg-slate-900 text-slate-300 hover:border-cyan-500/40"}`}
+            >
+              자동감시 {autoScanEnabled ? "ON" : "OFF"}
+            </button>
             <button type="button" data-testid="safe-ai-autotrade-launcher" onClick={() => void runScan(market)} disabled={isScanning} className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 px-4 py-2.5 text-sm font-black text-white shadow-lg shadow-cyan-950/40 transition hover:from-cyan-500 hover:to-blue-500 disabled:cursor-wait disabled:opacity-60">
               {isScanning ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Crosshair className="h-4 w-4" />}
-              {isScanning ? "스캔 + 안전검사 중" : "스캔 AI 자율매매 실행"}
+              {isScanning ? "스캔 + 안전검사 중" : "지금 한 번 스캔"}
               <Zap className="h-4 w-4 text-amber-200" />
             </button>
           </div>
@@ -326,6 +381,7 @@ export const SafeAiAutotradeLauncher: React.FC = () => {
           <div className="flex flex-wrap gap-4 text-slate-400">
             <span>최근 스캔: <strong className="text-slate-200">{scannedAt || "-"}</strong></span>
             <span>자동매매 후보: <strong className="text-emerald-300">{reviewReadyCount}</strong></span>
+            <span>반복주문 방지: <strong className="text-cyan-300">종목별 60초</strong></span>
           </div>
           <div className="flex items-center gap-1.5 font-bold text-emerald-300"><ShieldCheck className="h-3.5 w-3.5" />실시간성 · API · 잔고 · 장시간 · 킬스위치 검사를 통과해야 주문합니다.</div>
         </div>
