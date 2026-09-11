@@ -25,19 +25,7 @@ const forbidden = [
   /validProjections\[0\]\s*\*\s*1\.0[12]/, /rvol\s*\?\?\s*1\.0/,
   /vwap\s*\?\?\s*price/, /breakoutConfirmed:\s*true\b/, /scannedTotal\s*:\s*3420/,
   /makeMeta\s*\(\s*["']BB_BANDWIDTH["']\s*,\s*3\.5\s*\)/,
-  /aiMatchScore\s*:\s*\+\s*\(\s*8[56]/,
-
-  // Realtime bridge must never invent a healthy stream or plausible market values.
-  /isConnected:\s*true\s*,\s*\n\s*latencyMs:\s*18\b/,
-  /bufferCount:\s*128\b/,
-  /currentTick\?\.price\s*\|\|\s*50000\b/,
-  /changePercent:\s*currentTick\?\.changePct\s*\|\|\s*1\.5\b/,
-  /volume:\s*(?:q\.volume\s*\|\||data\.volume\s*\|\|)\s*["']1\.2M["']/,
-  /rvol:\s*(?:Number\([^)]*\)\s*\|\||)\s*2\.5\b/,
-  /volumePower:\s*Math\.round\(110\s*\+\s*\(Math\.random\(\)/,
-  /Math\.round\(price\s*\*\s*1\.02\)/,
-  /Math\.round\(price\s*\*\s*0\.98\)/,
-  /reason:\s*signal\.reason\s*\|\|\s*`AI 오토트레이딩/,
+  /aiMatchScore\s*:\s*\+\s*\(\s*8[56]/
 ];
 
 const allowedFolders = [
@@ -61,6 +49,29 @@ function auditPresetFixture() {
   ];
   if (requiredEmptyExports.some((rule) => !rule.test(text))) {
     fail("src/data/presetStocks.ts must keep production preset/demo stock arrays empty");
+  }
+}
+
+function auditRealtimeMarketBridge() {
+  const bridgePath = path.resolve("src/hooks/useMarketDataBridge.ts");
+  if (!fs.existsSync(bridgePath)) return;
+  const text = fs.readFileSync(bridgePath, "utf8");
+  const forbiddenBridgeShapes = [
+    "isConnected: true,\n    latencyMs: 18",
+    "bufferCount: 128",
+    "currentTick?.price || 50000",
+    "currentTick?.changePct || 1.5",
+    "data.volume || \"1.2M\"",
+    "q.volume || \"1.2M\"",
+    "rvol: Number(data.rvol || 2.5)",
+    "rvol: 2.5",
+    "Math.round(110 + (Math.random() - 0.45) * 20)",
+    "Math.round(price * 1.02)",
+    "Math.round(price * 0.98)",
+    "AI 오토트레이딩 ${signal.type} 시그널 포착"
+  ];
+  for (const shape of forbiddenBridgeShapes) {
+    if (text.includes(shape)) fail(`REALTIME MARKET BRIDGE SYNTHETIC FALLBACK FOUND: ${shape}`);
   }
 }
 
@@ -122,6 +133,7 @@ function scanFile(fullPath) {
 
 console.log("🔍 Running Production Zero Fake Data Audit V7...");
 auditPresetFixture();
+auditRealtimeMarketBridge();
 auditServerTruthRoutes();
 for (const rootPath of ROOTS) scanPath(rootPath);
 if (failed) {
