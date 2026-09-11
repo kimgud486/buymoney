@@ -18,6 +18,10 @@ import {
   ScannerDecision,
   VerifiedSignalResult,
 } from "../scanner/verifiedSignalEngine";
+import {
+  buildElementaryScanExplanation,
+  type ElementaryScanExplanation,
+} from "../scanner/elementaryScanExplanation";
 
 /**
  * BuyMoney merged scanner, server-first discovery edition.
@@ -27,8 +31,9 @@ import {
  * Stage 2: the browser performs the expensive seven-timeframe verification
  * only for that shortlist, then exposes the existing LONG/SHORT review flow.
  *
- * This removes the old browser-side 36-symbol cap without turning the browser
- * into a request fan-out engine. No synthetic fallback candidate is created.
+ * The capture list also reuses the verified 5-minute candles to show an
+ * elementary-school-level explanation and real pattern-history statistics.
+ * No synthetic fallback candidate or fabricated hit-rate is created.
  */
 
 export type ScanMarket = "KOREA" | "US" | "BTC";
@@ -80,6 +85,7 @@ export interface ScannedStockItem {
   isRealtimeLinked: boolean;
   verifiedBars: number;
   timeframes: TimeframeScan[];
+  easyExplanation: ElementaryScanExplanation | null;
 }
 
 interface RealtimeScannerTileBoardProps {
@@ -269,8 +275,11 @@ async function fetchServerDiscovery(): Promise<ServerDiscovery> {
 
 async function fetchOneFrame(symbol: string, tf: typeof TIMEFRAMES[number]): Promise<{ payload: any; result: VerifiedSignalResult } | null> {
   try {
+    // 5분봉은 과거 패턴 적중 통계를 계산할 수 있도록 더 긴 실제 이력을 받습니다.
+    // 다른 시간봉은 기존 70개를 유지해 스캐너 요청량이 과도하게 커지지 않게 합니다.
+    const count = tf.key === "5m" ? 220 : 70;
     const response = await fetch(
-      `/api/market/realtime-candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(tf.api)}&count=70`,
+      `/api/market/realtime-candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(tf.api)}&count=${count}`,
       { cache: "no-store" },
     );
     if (!response.ok) return null;
@@ -329,6 +338,11 @@ async function fetchVerifiedCandidate(base: UniverseItem): Promise<ScannedStockI
     `${alignedFrames.length}개 시간봉에서 ${directionText}을 확인했어요.`,
     ...(anchorResult.reasons || []).slice(0, 3).map(easyReason),
   ];
+
+  const easySource = valid.find((v) => v.timeframe === "5m") || anchor;
+  const easyCandles = Array.isArray(easySource.payload?.candles) ? easySource.payload.candles : [];
+  const easyExplanation = buildElementaryScanExplanation(easyCandles, base.market);
+
   return {
     id: `${base.market}_${base.symbol}`,
     symbol: base.symbol,
@@ -360,6 +374,7 @@ async function fetchVerifiedCandidate(base: UniverseItem): Promise<ScannedStockI
     isRealtimeLinked: true,
     verifiedBars: anchorResult.evaluatedBars,
     timeframes,
+    easyExplanation,
   };
 }
 
@@ -546,20 +561,24 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
           {!isLoading && filteredStocks.length === 0 ? (
             <div className="py-8 text-center text-xs text-slate-400">지금 조건에 맞는 종목이 없어요. 억지로 추천하지 않습니다.</div>
           ) : (
-            <div className="space-y-1.5 max-h-[430px] overflow-y-auto">
+            <div className="space-y-1.5 max-h-[560px] overflow-y-auto">
               {filteredStocks.map((item) => {
                 const expanded = expandedId === item.id;
                 const directionClass = item.direction === "LONG" ? "text-emerald-400" : item.direction === "SHORT" ? "text-rose-400" : "text-amber-400";
+                const easy = item.easyExplanation;
+                const easyStatusClass = easy?.status === "BUY_CHANCE" ? "text-emerald-400" : easy?.status === "RISK" ? "text-rose-400" : "text-amber-400";
                 return (
                   <div key={item.id} className={`rounded-xl border ${expanded ? "border-cyan-500/40" : isWhiteTheme ? "border-slate-200" : "border-slate-700/50"}`}>
                     <button type="button" onClick={() => setExpandedId(expanded ? null : item.id)} className="w-full p-2.5 text-left flex items-center justify-between gap-3">
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <span className="font-black text-xs truncate">{item.name}</span>
                           <span className={`text-[10px] font-black ${directionClass}`}>{item.direction}</span>
                           <span className="text-[10px] font-black text-cyan-400">AI {item.aiScore}</span>
+                          {easy && <span className={`text-[10px] font-black ${easyStatusClass}`}>{easy.statusLabel}</span>}
                         </div>
                         <div className="mt-0.5 text-[10px] text-slate-400 truncate">📈 {item.signalLabel}</div>
+                        {easy && <div className="mt-1 text-[10px] font-semibold text-slate-400 truncate">👦 {easy.oneLineSummary}</div>}
                       </div>
                       <div className="text-right shrink-0">
                         <div className="font-mono text-xs font-black">{formatPrice(item.currentPrice, item.market)}</div>
@@ -569,10 +588,65 @@ export const RealtimeScannerTileBoard: React.FC<RealtimeScannerTileBoardProps> =
                     </button>
                     {expanded && (
                       <div className={`border-t p-3 ${isWhiteTheme ? "border-slate-200 bg-slate-50/70" : "border-slate-700/40 bg-black/10"}`}>
+                        {easy && (
+                          <div className="mb-2 rounded-xl border border-cyan-500/25 bg-cyan-500/5 p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="text-xs font-black">👦 아주 쉽게 설명하면</div>
+                              <div className={`text-xs font-black ${easyStatusClass}`}>{easy.statusLabel}</div>
+                            </div>
+                            {item.direction === "SHORT" && (
+                              <div className="mt-1 text-[10px] text-slate-400">※ 아래 쉬운 설명은 현물 매수 기준이에요. SHORT 방향은 위의 SHORT 점수와 시간봉을 함께 봐요.</div>
+                            )}
+                            <div className="mt-2 grid gap-2 md:grid-cols-2 text-[11px]">
+                              <div className="rounded-lg bg-slate-500/10 p-2.5">
+                                <div className="font-black">🤔 지금 사도 돼요?</div>
+                                <div className="mt-1 text-slate-400">{easy.buyNowText}</div>
+                              </div>
+                              <div className="rounded-lg bg-slate-500/10 p-2.5">
+                                <div className="font-black">🟢 언제 살 기회를 봐요?</div>
+                                <div className="mt-1 text-slate-400">{easy.whenToWatchText}</div>
+                              </div>
+                              <div className="rounded-lg bg-slate-500/10 p-2.5">
+                                <div className="font-black">🔴 언제 사면 안 돼요?</div>
+                                <div className="mt-1 text-slate-400">{easy.avoidText}</div>
+                              </div>
+                              <div className="rounded-lg bg-slate-500/10 p-2.5">
+                                <div className="font-black">⚠️ 추격 위험</div>
+                                <div className="mt-1 text-slate-400">{easy.chaseRiskLabel}</div>
+                              </div>
+                            </div>
+                            <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[10px]">
+                              <div className="rounded-lg bg-slate-500/10 p-2"><span className="text-slate-400 block">지지선</span><b>{formatPlainPrice(easy.support, item.market)}</b></div>
+                              <div className="rounded-lg bg-slate-500/10 p-2"><span className="text-slate-400 block">돌파 확인</span><b>{formatPlainPrice(easy.breakoutPrice, item.market)}</b></div>
+                              <div className="rounded-lg bg-slate-500/10 p-2"><span className="text-slate-400 block">위 저항</span><b>{formatPlainPrice(easy.resistance, item.market)}</b></div>
+                              <div className="rounded-lg bg-slate-500/10 p-2"><span className="text-slate-400 block">생각 취소선</span><b className="text-rose-400">{formatPlainPrice(easy.invalidation, item.market)}</b></div>
+                            </div>
+                            <div className="mt-2 rounded-lg border border-slate-500/20 p-2.5 text-[11px]">
+                              <div className="font-black">🧩 이 패턴, 예전에는 어땠어요?</div>
+                              <div className="mt-1 text-slate-400">패턴: {patternLabel(easy.pattern)}</div>
+                              {easy.patternHistory.sufficient ? (
+                                <div className="mt-1 grid grid-cols-2 sm:grid-cols-4 gap-1">
+                                  <span>발견 <b>{easy.patternHistory.sampleCount}번</b></span>
+                                  <span>성공 <b className="text-emerald-400">{easy.patternHistory.successCount}번</b></span>
+                                  <span>실패 <b className="text-rose-400">{easy.patternHistory.failureCount}번</b></span>
+                                  <span>적중률 <b>{easy.patternHistory.hitRate?.toFixed(1)}%</b></span>
+                                  <span>최근 적중률 <b>{easy.patternHistory.recentHitRate?.toFixed(1)}%</b></span>
+                                  <span>성공 평균 <b>{easy.patternHistory.averageGainPct?.toFixed(2)}%</b></span>
+                                  <span>실패 평균 <b>{easy.patternHistory.averageLossPct?.toFixed(2)}%</b></span>
+                                  <span>확인기간 <b>{easy.patternHistory.horizonBars}봉</b></span>
+                                </div>
+                              ) : (
+                                <div className="mt-1 text-amber-400">{easy.patternHistory.message}</div>
+                              )}
+                            </div>
+                            <div className="mt-2 rounded-lg bg-slate-500/10 px-2.5 py-2 text-[11px] font-black">한마디로: {easy.oneLineSummary}</div>
+                          </div>
+                        )}
+
                         <div className="grid gap-2 md:grid-cols-2">
                           <div className="rounded-lg bg-slate-500/10 p-2.5">
                             <div className="text-xs font-black">🤖 왜 포착했나요?</div>
-                            <div className="mt-2 space-y-1 text-[11px]">{item.reasons.slice(0, 4).map((reason, index) => <div key={index}>✓ {reason}</div>)}</div>
+                            <div className="mt-2 space-y-1 text-[11px]">{(easy?.whyFound?.length ? easy.whyFound : item.reasons).slice(0, 4).map((reason, index) => <div key={index}>✓ {reason}</div>)}</div>
                           </div>
                           <div className="rounded-lg bg-slate-500/10 p-2.5">
                             <div className="text-xs font-black">🎯 AI가 보고 있는 가격</div>
