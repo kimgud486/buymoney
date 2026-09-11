@@ -4817,7 +4817,9 @@ maxPositionWeight: Math.min(100, Math.max(1, Number(profile?.maxPositionWeight ?
 
       // Execute buy ONLY IF ALL 5 GATES ARE 100% PASSED AND BALANCE IS SUFFICIENT
       const isFullConsensusApproved = pipelineResult.isApproved && calculatedAiScore >= minRequiredScore && isBalanceSufficient;
-      if (isFullConsensusApproved && (!isRealTradingActive || hasKeys)) {
+      // Legacy 4-second scanner remains analysis-only. SafeAiAutotradeLauncher is the sole new-entry execution authority.
+      const allowLegacyNewEntryExecution = false;
+      if (allowLegacyNewEntryExecution && isFullConsensusApproved && (!isRealTradingActive || hasKeys)) {
         const maxAllocPct = (currentProfile.maxAllocPercentPerPosition || 15) / 100;
         const maxOrderBudget = Math.max(minOrderCost, curBalance * maxAllocPct);
 
