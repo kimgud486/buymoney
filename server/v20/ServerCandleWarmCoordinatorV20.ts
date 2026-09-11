@@ -18,6 +18,7 @@ export interface CandleWarmStatsV20 {
 }
 
 const WARM_TTL_MS = 5 * 60_000;
+const FAILED_WARM_COOLDOWN_MS = 5 * 60_000;
 const MAX_CONCURRENCY = 3;
 const INTRADAY_COUNT = 600;
 const ANALYSIS_COUNT = 70;
@@ -83,6 +84,7 @@ function aggregateOneMinuteToFifteenMinute(oneMinute: Candle[], nowMs = Date.now
 
 class ServerCandleWarmCoordinatorV20 {
   private readonly lastWarm = new Map<string, number>();
+  private readonly failedWarmUntil = new Map<string, number>();
   private stats: CandleWarmStatsV20 = { requested: 0, warmed: 0, failed: 0, derived15m: 0, lastWarmAt: null };
 
   public getStats(): CandleWarmStatsV20 {
@@ -97,6 +99,7 @@ class ServerCandleWarmCoordinatorV20 {
       if (!symbol) continue;
       const key = `${request.market}:${symbol}`;
       if (now - (this.lastWarm.get(key) || 0) < WARM_TTL_MS) continue;
+      if ((this.failedWarmUntil.get(key) || 0) > now) continue;
       unique.set(key, { symbol, market: request.market });
     }
 
@@ -106,17 +109,21 @@ class ServerCandleWarmCoordinatorV20 {
     for (let offset = 0; offset < pending.length; offset += MAX_CONCURRENCY) {
       const chunk = pending.slice(offset, offset + MAX_CONCURRENCY);
       await Promise.all(chunk.map(async (request) => {
+        const key = `${request.market}:${request.symbol}`;
         try {
           const ok = await this.warmOne(request);
           if (ok) {
             this.stats.warmed++;
             this.stats.lastWarmAt = Date.now();
-            this.lastWarm.set(`${request.market}:${request.symbol}`, Date.now());
+            this.lastWarm.set(key, Date.now());
+            this.failedWarmUntil.delete(key);
           } else {
             this.stats.failed++;
+            this.failedWarmUntil.set(key, Date.now() + FAILED_WARM_COOLDOWN_MS);
           }
         } catch {
           this.stats.failed++;
+          this.failedWarmUntil.set(key, Date.now() + FAILED_WARM_COOLDOWN_MS);
         }
       }));
     }
