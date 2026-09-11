@@ -71,3 +71,49 @@ test("ranking places REVIEW_READY before WATCH/NO", () => {
   assert.equal(ranked[0].symbol, "READY");
   assert.equal(ranked[0].decision, "REVIEW_READY");
 });
+
+test("v20 scanner evidence can pass independent ensemble review only with verified complete evidence", () => {
+  const result = OpenSourceSignalEnsemble.evaluateScannerEvidence({
+    symbol: "005930",
+    name: "삼성전자",
+    market: "KR",
+    sourceScore: 92,
+    dataCoveragePct: 100,
+    dataStatus: "REALTIME_VERIFIED",
+    rvol: 2.1,
+    rsi: 61,
+    atrPct: 2.8,
+    hasRelativeStrength: true,
+    hasVwap: true,
+    hasEma20: true,
+    hasPattern: true,
+    trueMtfPassed: true,
+    sourceRecommendation: "BUY_CANDIDATE",
+  });
+  assert.equal(result.decision, "REVIEW_READY");
+  assert.equal(result.liveAutoOrderEnabled, false);
+  assert.equal(result.approvalRequired, true);
+});
+
+test("v20 scanner evidence is downgraded when coverage or true MTF is incomplete", () => {
+  const result = OpenSourceSignalEnsemble.evaluateScannerEvidence({
+    symbol: "AAPL",
+    name: "Apple",
+    market: "US",
+    sourceScore: 90,
+    dataCoveragePct: 64,
+    dataStatus: "REALTIME_VERIFIED",
+    rvol: 2.2,
+    rsi: 58,
+    atrPct: 3.1,
+    hasRelativeStrength: true,
+    hasVwap: true,
+    hasEma20: true,
+    hasPattern: true,
+    trueMtfPassed: false,
+    sourceRecommendation: "BUY_CANDIDATE",
+  });
+  assert.notEqual(result.decision, "REVIEW_READY");
+  assert.ok(result.riskReasons.some((reason) => reason.includes("커버리지")));
+  assert.ok(result.riskReasons.some((reason) => reason.includes("다중시간봉")));
+});
