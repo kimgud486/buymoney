@@ -23,6 +23,20 @@ type DetailState = {
   explanation: ElementaryScanExplanation | null;
 };
 
+type ScanDiagnostic = {
+  universe: number | null;
+  liveQuoteReady: number | null;
+  candle15mReady: number | null;
+  passed: number | null;
+};
+
+const EMPTY_DIAGNOSTIC: ScanDiagnostic = {
+  universe: null,
+  liveQuoteReady: null,
+  candle15mReady: null,
+  passed: null,
+};
+
 const MARKET_BUTTONS: Array<{ value: MarketFilter; label: string; server: "ALL" | "KOREA" | "US" | "UPBIT" }> = [
   { value: "ALL", label: "전체", server: "ALL" },
   { value: "KOREA", label: "국내", server: "KOREA" },
@@ -49,6 +63,37 @@ function riskClass(status: ElementaryScanExplanation["status"]): string {
   return "border-amber-300 bg-amber-50";
 }
 
+function toFiniteCount(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+}
+
+function pickDiagnostic(payload: any, marketFilter: MarketFilter, visibleCount: number): ScanDiagnostic {
+  const diagnostics = payload?.diagnostics || payload?.scanDiagnostics || payload?.scanner?.diagnostics || null;
+  const key = marketFilter === "BTC" ? "UPBIT" : marketFilter;
+  const raw = key === "ALL" ? null : diagnostics?.[key];
+
+  if (raw) {
+    return {
+      universe: toFiniteCount(raw.universe),
+      liveQuoteReady: toFiniteCount(raw.liveQuoteReady),
+      candle15mReady: toFiniteCount(raw.candle15mReady),
+      passed: toFiniteCount(raw.passed) ?? visibleCount,
+    };
+  }
+
+  return {
+    universe: toFiniteCount(payload?.scannedTotal ?? payload?.scannedCount),
+    liveQuoteReady: toFiniteCount(payload?.liveQuoteReady),
+    candle15mReady: toFiniteCount(payload?.candle15mReady),
+    passed: toFiniteCount(payload?.filteredCount) ?? visibleCount,
+  };
+}
+
+function diagnosticText(value: number | null): string {
+  return value == null ? "-" : value.toLocaleString();
+}
+
 /**
  * Production scanner companion panel.
  * It never fabricates candidates or prices. Candidates come from the server
@@ -63,6 +108,7 @@ export const ElementaryScanExplanationPanel: React.FC = () => {
   const [error, setError] = useState("");
   const [scannedAt, setScannedAt] = useState("");
   const [selectedMarket, setSelectedMarket] = useState<MarketFilter>("ALL");
+  const [diagnostic, setDiagnostic] = useState<ScanDiagnostic>(EMPTY_DIAGNOSTIC);
 
   const fetchIdeas = useCallback(async (marketFilter: MarketFilter) => {
     setLoading(true);
@@ -95,10 +141,13 @@ export const ElementaryScanExplanationPanel: React.FC = () => {
           changePct: Number(raw?.changePct) || 0,
         }];
       });
-      setIdeas(nextIdeas.slice(0, 12));
-      setScannedAt(String(payload.scannedAt || ""));
+      const visible = nextIdeas.slice(0, 12);
+      setIdeas(visible);
+      setDiagnostic(pickDiagnostic(payload, marketFilter, visible.length));
+      setScannedAt(String(payload.scannedAt || payload.scanTimestamp || ""));
     } catch (e) {
       setIdeas([]);
+      setDiagnostic(EMPTY_DIAGNOSTIC);
       setError(e instanceof Error ? e.message : "스캔 결과를 불러오지 못했어요.");
     } finally {
       setLoading(false);
@@ -117,6 +166,7 @@ export const ElementaryScanExplanationPanel: React.FC = () => {
       return;
     }
     setSelected(null);
+    setDiagnostic(EMPTY_DIAGNOSTIC);
     setSelectedMarket(market);
   };
 
@@ -135,7 +185,6 @@ export const ElementaryScanExplanationPanel: React.FC = () => {
     }));
 
     try {
-      // 15분봉을 넉넉히 받아 같은 패턴의 과거 발생도 실제 캔들로 비교합니다.
       const response = await fetch(
         `/api/market/realtime-candles?symbol=${encodeURIComponent(idea.symbol)}&timeframe=15m&count=220`,
         { cache: "no-store" },
@@ -160,6 +209,8 @@ export const ElementaryScanExplanationPanel: React.FC = () => {
       }));
     }
   };
+
+  const marketLabel = selectedMarket === "KOREA" ? "국내" : selectedMarket === "US" ? "해외" : selectedMarket === "BTC" ? "업비트" : "전체 시장";
 
   return (
     <section className="w-full px-3 sm:px-5 py-3" data-testid="elementary-scan-explanation-panel">
@@ -201,16 +252,29 @@ export const ElementaryScanExplanationPanel: React.FC = () => {
           </button>
         </div>
 
+        {selectedMarket !== "ALL" && (
+          <div className="px-4 py-3 border-b border-slate-200 bg-slate-50" data-testid="elementary-scan-diagnostic">
+            <div className="text-[11px] font-black text-slate-700 mb-2">{marketLabel} 스캔 상태</div>
+            <div className="grid grid-cols-4 gap-2 text-center">
+              <div className="rounded-lg border border-slate-200 bg-white p-2"><span className="block text-[10px] text-slate-500">전체</span><strong className="text-xs">{diagnosticText(diagnostic.universe)}</strong></div>
+              <div className="rounded-lg border border-slate-200 bg-white p-2"><span className="block text-[10px] text-slate-500">실시간 시세</span><strong className="text-xs">{diagnosticText(diagnostic.liveQuoteReady)}</strong></div>
+              <div className="rounded-lg border border-slate-200 bg-white p-2"><span className="block text-[10px] text-slate-500">15분봉 준비</span><strong className="text-xs">{diagnosticText(diagnostic.candle15mReady)}</strong></div>
+              <div className="rounded-lg border border-slate-200 bg-white p-2"><span className="block text-[10px] text-slate-500">최종 포착</span><strong className="text-xs">{diagnosticText(diagnostic.passed)}</strong></div>
+            </div>
+            {selectedMarket === "KOREA" && !loading && (
+              <p className="mt-2 text-[10px] text-slate-500">
+                국내 종목이 안 보이면 숫자가 줄어드는 구간이 병목입니다. 실시간 시세가 있는데 15분봉 준비가 적으면 서버가 우선 워밍 후 다시 스캔합니다.
+              </p>
+            )}
+          </div>
+        )}
+
         {error ? (
           <div className="p-5 text-sm font-bold text-rose-700 bg-rose-50">⚠️ {error}</div>
         ) : loading && ideas.length === 0 ? (
-          <div className="p-6 text-center text-sm text-slate-500">
-            {selectedMarket === "KOREA" ? "국내" : selectedMarket === "US" ? "해외" : selectedMarket === "BTC" ? "업비트" : "전체 시장"} 실제 스캔 결과를 확인하고 있어요...
-          </div>
+          <div className="p-6 text-center text-sm text-slate-500">{marketLabel} 실제 스캔 결과를 확인하고 있어요...</div>
         ) : ideas.length === 0 ? (
-          <div className="p-6 text-center text-sm text-slate-500">
-            선택한 시장에서 지금 조건을 통과한 실제 스캔 종목이 없어요.
-          </div>
+          <div className="p-6 text-center text-sm text-slate-500">선택한 시장에서 지금 조건을 통과한 실제 스캔 종목이 없어요.</div>
         ) : (
           <div className="divide-y divide-slate-200">
             {ideas.map((idea) => {
@@ -300,9 +364,7 @@ export const ElementaryScanExplanationPanel: React.FC = () => {
                             <p className="text-[10px] text-slate-400 mt-2">완료된 과거 캔들만 사용하며, 같은 봉에서 목표와 위험선이 함께 닿으면 성공으로 세지 않아요.</p>
                           </div>
 
-                          <div className="rounded-xl bg-cyan-50 border border-cyan-200 p-3 text-sm font-black text-cyan-950">
-                            한마디로: {exp.oneLineSummary}
-                          </div>
+                          <div className="rounded-xl bg-cyan-50 border border-cyan-200 p-3 text-sm font-black text-cyan-950">한마디로: {exp.oneLineSummary}</div>
                         </div>
                       ) : null}
                     </div>
