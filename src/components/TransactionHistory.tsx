@@ -1,98 +1,138 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useApp } from "../context/AppContext";
-import { Order, TradeLog } from "../types";
+import { TradeLog } from "../types";
 import { AiTradeHistoryViewer } from "./trading/AiTradeHistoryViewer";
 import { TradeVerificationModal } from "./trading/TradeVerificationModal";
-import { 
-  ClipboardList, 
-  Search, 
-  ArrowRightLeft, 
-  TrendingUp, 
-  TrendingDown, 
-  X, 
-  Download, 
-  Clock, 
-  CheckCircle2, 
-  XCircle, 
+import {
+  ClipboardList,
+  Search,
+  X,
+  Download,
+  Clock,
+  CheckCircle2,
+  XCircle,
   Filter,
-  Zap,
-  Activity,
-  AlertCircle,
-  PlayCircle,
   Sparkles,
   RefreshCw,
   ShieldCheck,
-  BarChart3,
-  Check,
-  FileCheck
+  AlertTriangle,
 } from "lucide-react";
 
+type LedgerAnalysis = {
+  winRatePercent: number | null;
+  evaluatedTradeCount: number;
+  realizedPnl: number | null;
+  totalCapitalTraded: number;
+  aiComplianceScore: number | null;
+  buyVsSellCount: { buy: number; sell: number };
+  insightText: string;
+  riskRecommendation: string;
+  analyzedAt: string;
+};
+
+function finiteNumber(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function verifiedTradePnl(trade: TradeLog): number | null {
+  const net = finiteNumber(trade.netProfit);
+  if (net != null) return net;
+  return finiteNumber(trade.pnl);
+}
+
+function displayMoney(value: number | null): string {
+  if (value == null) return "NO_DATA";
+  return `${value >= 0 ? "+" : "-"}₩${Math.abs(Math.round(value)).toLocaleString("ko-KR")}`;
+}
+
 export const TransactionHistory: React.FC = () => {
-  const { profile, orders, trades, cancelOrder, fillOrder, syncRealAccountBalance, purgeAllMockData, clearAllTrades, clearAllOrders, addToast } = useApp();
+  const {
+    profile,
+    orders,
+    trades,
+    cancelOrder,
+    syncRealAccountBalance,
+    purgeAllMockData,
+    addToast,
+  } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<"AI_RATIONALE" | "TRADES" | "ORDERS">("AI_RATIONALE");
-  
-  // Filtering states
   const [marketFilter, setMarketFilter] = useState<string>("ALL");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedVerifyTrade, setSelectedVerifyTrade] = useState<TradeLog | null>(null);
-
-  // Real-time AI Analysis State
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [aiAnalysisResult, setAiAnalysisResult] = useState<{
-    winRatePercent: number;
-    totalCapitalTraded: number;
-    aiComplianceScore: number;
-    buyVsSellCount: { buy: number; sell: number };
-    insightText: string;
-    riskRecommendation: string;
-    analyzedAt: string;
-  } | null>(null);
-
-  // Syncing state
+  const [aiAnalysisResult, setAiAnalysisResult] = useState<LedgerAnalysis | null>(null);
   const [isSyncingBalance, setIsSyncingBalance] = useState(false);
 
   const handleRunAiAnalysis = () => {
     setIsAnalyzing(true);
-    setTimeout(() => {
-      const buyCount = trades.filter(t => t.side === "BUY").length;
-      const sellCount = trades.filter(t => t.side === "SELL").length;
-      const totalVolume = trades.reduce((acc, t) => acc + (t.quantity * t.price), 0);
-      const randomWinRate = trades.length > 0 ? Math.min(96, 75 + Math.floor(Math.random() * 20)) : 100;
-      const randomCompliance = 94 + Math.floor(Math.random() * 6);
 
-      setAiAnalysisResult({
-        winRatePercent: randomWinRate,
-        totalCapitalTraded: totalVolume,
-        aiComplianceScore: randomCompliance,
-        buyVsSellCount: { buy: buyCount, sell: sellCount },
-        insightText: trades.length > 0
-          ? `[AI 원장 분석 결과] 총 ${trades.length}건의 실거래 체결 내역 중 ${randomCompliance}%가 지정된 AI 리스크 관리 조건 및 골든크로스 모멘텀 신호에 정확히 부합되었습니다. 평균 손익비는 2.4:1로우수하며, 현재 예수금(₩${(profile?.balance ?? 0).toLocaleString()}원) 대비 자산 분산이 안정적입니다.`
-          : "[AI 원장 분석 결과] 현재 등록된 체결 내역이 비어있습니다. AI 자동매매 또는 수동 주문 전송 시 실시간으로 거래 패턴 및 손익 신뢰도가 연산됩니다.",
-        riskRecommendation: "현재 체결 리스크 지표: PASS (정상). 일일 최대 손실 한도(2%) 미만 유지 중.",
-        analyzedAt: new Date().toLocaleTimeString("ko-KR")
-      });
-      setIsAnalyzing(false);
-      addToast({
-        type: "SUCCESS",
-        title: "실시간 거래내역 AI 정밀 분석 완료",
-        message: `체결 승인 신뢰도: ${randomCompliance}% | 원장 및 실시간 잔고 1:1동기화 정상`
-      });
-    }, 600);
+    const buyCount = trades.filter((t) => t.side === "BUY").length;
+    const sellCount = trades.filter((t) => t.side === "SELL").length;
+    const totalCapitalTraded = trades.reduce((sum, trade) => {
+      const quantity = finiteNumber(trade.quantity);
+      const price = finiteNumber(trade.price);
+      if (quantity == null || price == null || quantity < 0 || price < 0) return sum;
+      return sum + quantity * price;
+    }, 0);
+
+    const evaluated = trades
+      .map((trade) => ({ trade, pnl: verifiedTradePnl(trade) }))
+      .filter((row): row is { trade: TradeLog; pnl: number } => row.pnl != null);
+
+    const wins = evaluated.filter((row) => row.pnl > 0).length;
+    const winRatePercent = evaluated.length > 0 ? (wins / evaluated.length) * 100 : null;
+    const realizedPnl = evaluated.length > 0 ? evaluated.reduce((sum, row) => sum + row.pnl, 0) : null;
+
+    const insightText = evaluated.length > 0
+      ? `총 ${trades.length}건의 체결 중 손익 값이 실제로 기록된 ${evaluated.length}건만 평가했습니다. 기록이 없는 체결은 승률 계산에서 제외했습니다.`
+      : trades.length > 0
+        ? `체결 ${trades.length}건은 확인됐지만 검증 가능한 pnl/netProfit 값이 없어 승률과 실현손익은 NO_DATA입니다.`
+        : "체결 내역이 비어 있어 승률과 실현손익은 NO_DATA입니다.";
+
+    setAiAnalysisResult({
+      winRatePercent,
+      evaluatedTradeCount: evaluated.length,
+      realizedPnl,
+      totalCapitalTraded,
+      aiComplianceScore: null,
+      buyVsSellCount: { buy: buyCount, sell: sellCount },
+      insightText,
+      riskRecommendation: "AI 알고리즘 준수율과 일일 손실한도 PASS 여부는 현재 원장 필드만으로 검증할 수 없어 NO_DATA로 표시합니다.",
+      analyzedAt: new Date().toLocaleTimeString("ko-KR"),
+    });
+
+    setIsAnalyzing(false);
+    addToast({
+      type: "SUCCESS",
+      title: "거래 원장 검증 분석 완료",
+      message: evaluated.length > 0
+        ? `손익이 기록된 ${evaluated.length}건만 승률 계산에 사용했습니다.`
+        : "승률 계산에 사용할 검증 손익 데이터가 없어 NO_DATA로 유지합니다.",
+    });
   };
 
   const handleSyncRealBalance = async () => {
     setIsSyncingBalance(true);
     try {
       const res = await syncRealAccountBalance("korea");
+      const balance = finiteNumber(res?.balance);
       addToast({
         type: "SUCCESS",
-        title: "실시간 API 잔고 동기화 완료",
-        message: `한국투자증권(KIS) 실잔고: ${(res.balance ?? 0).toLocaleString()} KRW (통합 대시보드 즉시 반영 완료)`
+        title: "KIS 잔고 동기화 응답 수신",
+        message: balance != null
+          ? `응답 잔고: ${balance.toLocaleString("ko-KR")} KRW`
+          : "잔고 숫자가 검증되지 않아 NO_DATA입니다.",
       });
     } catch (e: any) {
       console.error(e);
+      addToast({
+        type: "ERROR",
+        title: "잔고 동기화 실패",
+        message: e?.message || "KIS 잔고 응답을 확인하지 못했습니다.",
+      });
     } finally {
       setIsSyncingBalance(false);
     }
@@ -106,7 +146,7 @@ export const TransactionHistory: React.FC = () => {
       addToast({
         type: "ERROR",
         title: "초기화 실패",
-        message: e?.message || "모의자산 및 거래내역 삭제 중 오류가 발생했습니다."
+        message: e?.message || "모의자산 및 거래내역 삭제 중 오류가 발생했습니다.",
       });
     }
   };
@@ -114,513 +154,217 @@ export const TransactionHistory: React.FC = () => {
   const handleExportCSV = () => {
     const dataToExport = activeSubTab === "TRADES" ? trades : orders;
     if (dataToExport.length === 0) {
-      addToast({
-        type: "INFO",
-        title: "내보내기 불가",
-        message: "내보낼 데이터 내역이 비어있습니다."
-      });
+      addToast({ type: "INFO", title: "내보내기 불가", message: "내보낼 데이터가 없습니다." });
       return;
     }
 
-    const headers = activeSubTab === "TRADES" 
+    const headers = activeSubTab === "TRADES"
       ? ["ID", "종목코드", "종목명", "시장", "구분", "수량", "단가", "수행전략", "매칭시간"]
       : ["ID", "종목코드", "종목명", "시장", "구분", "수량", "단가", "상태", "접수시간"];
 
-    const rows = dataToExport.map((item: any) => {
-      if (activeSubTab === "TRADES") {
-        return [item.id, item.symbol, item.name, item.market, item.side, item.quantity, item.price, item.strategyName, item.timestamp];
-      } else {
-        return [item.id, item.symbol, item.name, item.market, item.side, item.quantity, item.price, item.status, item.timestamp];
-      }
-    });
+    const escapeCsv = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+    const rows = dataToExport.map((item: any) => activeSubTab === "TRADES"
+      ? [item.id, item.symbol, item.name, item.market, item.side, item.quantity, item.price, item.strategyName, item.timestamp]
+      : [item.id, item.symbol, item.name, item.market, item.side, item.quantity, item.price, item.status, item.timestamp]);
 
-    const csvContent = "\uFEFF" + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+    const csvContent = "\uFEFF" + [headers, ...rows].map((row) => row.map(escapeCsv).join(",")).join("\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `aistock_export_${activeSubTab.toLowerCase()}_${Date.now()}.csv`);
+    link.href = url;
+    link.download = `aistock_export_${activeSubTab.toLowerCase()}_${Date.now()}.csv`;
     document.body.appendChild(link);
     link.click();
-    document.body.removeChild(link);
+    link.remove();
+    URL.revokeObjectURL(url);
   };
 
-  // Status statistics for orders
-  const filledCount = orders.filter(o => o.status === "FILLED").length;
-  const pendingCount = orders.filter(o => o.status === "PENDING").length;
-  const canceledCount = orders.filter(o => o.status === "CANCELED").length;
+  const filledCount = orders.filter((o) => o.status === "FILLED").length;
+  const pendingCount = orders.filter((o) => o.status === "PENDING").length;
+  const canceledCount = orders.filter((o) => o.status === "CANCELED").length;
 
-  // Filter logs logic
-  const filteredTrades = trades.filter(t => {
+  const filteredTrades = useMemo(() => trades.filter((t) => {
     const matchesMarket = marketFilter === "ALL" || t.market === marketFilter;
-    const matchesSearch = searchQuery.trim() === "" || 
-      t.symbol.toLowerCase().includes(searchQuery.toLowerCase()) || 
-      t.name.toLowerCase().includes(searchQuery.toLowerCase());
+    const q = searchQuery.trim().toLowerCase();
+    const matchesSearch = !q || t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q);
     return matchesMarket && matchesSearch;
-  });
+  }), [trades, marketFilter, searchQuery]);
 
-  const filteredOrders = orders.filter(o => {
+  const filteredOrders = useMemo(() => orders.filter((o) => {
     const matchesMarket = marketFilter === "ALL" || o.market === marketFilter;
     const matchesStatus = statusFilter === "ALL" || o.status === statusFilter;
-    const matchesSearch = searchQuery.trim() === "" || 
-      o.symbol.toLowerCase().includes(searchQuery.toLowerCase()) || 
-      o.name.toLowerCase().includes(searchQuery.toLowerCase());
+    const q = searchQuery.trim().toLowerCase();
+    const matchesSearch = !q || o.symbol.toLowerCase().includes(q) || o.name.toLowerCase().includes(q);
     return matchesMarket && matchesStatus && matchesSearch;
-  });
+  }), [orders, marketFilter, statusFilter, searchQuery]);
 
   return (
-    <div className="bg-white border border-zinc-200 p-5 rounded-lg space-y-5" id="transaction-history-terminal">
-      {/* Upper header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-zinc-150 pb-4 gap-4">
+    <div className="space-y-5 rounded-lg border border-zinc-200 bg-white p-5" id="transaction-history-terminal">
+      <div className="flex flex-col justify-between gap-4 border-b border-zinc-200 pb-4 sm:flex-row sm:items-center">
         <div>
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-            <h2 className="text-base font-black text-zinc-900 flex items-center gap-1.5">
-              <ClipboardList className="h-5 w-5 text-zinc-800" />
-              <span>원장 및 체결 거래내역 관제 (Ledger & Trade Terminal)</span>
-            </h2>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-50 text-amber-800 border border-amber-300 flex items-center gap-1">
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                <span>🪙 업비트 24/7 실시간 장시간 가동중</span>
-              </span>
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping"></span>
-                <span>실시간 API 체결원장 동기화 중</span>
-              </span>
-            </div>
-          </div>
-          <p className="text-xs text-zinc-500 mt-0.5 font-medium">
-            업비트 24시간 가상자산 및 한국투자증권(KIS) 실시간 시세/호가 기반 실제 주문 체결 일지입니다. (예수금 ₩{(profile?.balance ?? 0).toLocaleString()}원)
+          <h2 className="flex items-center gap-1.5 text-base font-black text-zinc-900">
+            <ClipboardList className="h-5 w-5" /> 원장 및 체결 거래내역 관제
+          </h2>
+          <p className="mt-1 text-xs text-zinc-500">
+            원장에 실제 기록된 주문·체결만 표시합니다. 현재 앱 잔고: {finiteNumber(profile?.balance) != null ? `₩${Number(profile?.balance).toLocaleString("ko-KR")}` : "NO_DATA"}
           </p>
+          <div className="mt-2 inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-800">
+            <AlertTriangle className="h-3 w-3" /> 브로커 연결 상태를 확인하지 않고 LIVE라고 표시하지 않습니다.
+          </div>
         </div>
 
-        {/* Action Controls */}
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={handleSyncRealBalance}
-            disabled={isSyncingBalance}
-            className="px-3 py-1.5 text-xs bg-emerald-700 hover:bg-emerald-800 active:scale-98 text-white font-bold rounded flex items-center gap-1.5 transition cursor-pointer shadow-xs"
-          >
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={handleSyncRealBalance} disabled={isSyncingBalance} className="flex items-center gap-1.5 rounded bg-emerald-700 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">
             <RefreshCw className={`h-3.5 w-3.5 ${isSyncingBalance ? "animate-spin" : ""}`} />
-            <span>{isSyncingBalance ? "잔고 동기화 중..." : "실시간 API 잔고 새로고침"}</span>
+            {isSyncingBalance ? "잔고 확인 중" : "KIS 잔고 확인"}
           </button>
-
-          <button
-            type="button"
-            onClick={handleRunAiAnalysis}
-            disabled={isAnalyzing}
-            className="px-3.5 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white font-black rounded flex items-center gap-1.5 transition cursor-pointer shadow-xs"
-          >
-            <Sparkles className={`h-3.5 w-3.5 ${isAnalyzing ? "animate-spin" : ""}`} />
-            <span>{isAnalyzing ? "AI 분석 중..." : "거래내역 실시간 AI 분석"}</span>
+          <button type="button" onClick={handleRunAiAnalysis} disabled={isAnalyzing} className="flex items-center gap-1.5 rounded bg-indigo-700 px-3 py-1.5 text-xs font-black text-white disabled:opacity-50">
+            <Sparkles className="h-3.5 w-3.5" /> 원장 검증 분석
           </button>
-
-          <button
-            type="button"
-            onClick={handleExportCSV}
-            className="px-3 py-1.5 text-xs border border-zinc-200 hover:bg-zinc-50 text-zinc-700 hover:text-zinc-900 rounded font-bold transition flex items-center gap-1 cursor-pointer shadow-xs"
-          >
-            <Download className="h-3.5 w-3.5" />
-            <span>CSV 내보내기</span>
+          <button type="button" onClick={handleExportCSV} className="flex items-center gap-1 rounded border border-zinc-200 px-3 py-1.5 text-xs font-bold text-zinc-700">
+            <Download className="h-3.5 w-3.5" /> CSV
           </button>
-
-          <button
-            type="button"
-            onClick={handlePurgeMockTrades}
-            className="px-3 py-1.5 text-xs bg-rose-600 hover:bg-rose-700 text-white font-bold rounded transition flex items-center gap-1 cursor-pointer shadow-xs"
-            title="모의 보유자산 및 가상 매수/매도 주문/체결 데이터 완전 삭제"
-          >
-            <XCircle className="h-3.5 w-3.5" />
-            <span>모의자산/매수매도 내역 삭제</span>
+          <button type="button" onClick={handlePurgeMockTrades} className="flex items-center gap-1 rounded bg-rose-600 px-3 py-1.5 text-xs font-bold text-white">
+            <XCircle className="h-3.5 w-3.5" /> 모의 데이터 삭제
           </button>
         </div>
       </div>
 
-      {/* Real-time AI Analysis Result Box */}
       {aiAnalysisResult && (
-        <div className="bg-gradient-to-r from-indigo-950 via-zinc-900 to-zinc-950 text-white p-4 rounded-xl border border-indigo-500/30 space-y-3 font-sans shadow-md animate-in fade-in duration-200">
-          <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5">
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-indigo-400" />
-              <span className="text-xs font-black tracking-tight text-indigo-200">
-                AI 거래내역 심층 진단 분석 보고서 (Real-time Trade Intelligence)
-              </span>
-              <span className="text-[10px] font-mono text-zinc-400">
-                분석시각: {aiAnalysisResult.analyzedAt}
-              </span>
+        <div className="space-y-3 rounded-xl border border-indigo-500/30 bg-zinc-950 p-4 text-white">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xs font-black text-indigo-200">
+              <Sparkles className="h-4 w-4" /> 거래 원장 검증 보고서
+              <span className="font-mono text-[10px] text-zinc-500">{aiAnalysisResult.analyzedAt}</span>
             </div>
-            <button 
-              onClick={() => setAiAnalysisResult(null)}
-              className="text-zinc-400 hover:text-white text-xs cursor-pointer"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <button type="button" onClick={() => setAiAnalysisResult(null)} className="text-zinc-500 hover:text-white"><X className="h-4 w-4" /></button>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono">
-            <div className="bg-zinc-900/90 p-2.5 rounded border border-zinc-800">
-              <span className="text-[10px] text-zinc-400 block font-sans">AI 알고리즘 준수율</span>
-              <span className="text-sm font-black text-emerald-400">{aiAnalysisResult.aiComplianceScore}%</span>
-            </div>
-            <div className="bg-zinc-900/90 p-2.5 rounded border border-zinc-800">
-              <span className="text-[10px] text-zinc-400 block font-sans">누적 거래 대금</span>
-              <span className="text-sm font-black text-indigo-300">₩{Math.round(aiAnalysisResult.totalCapitalTraded).toLocaleString()}</span>
-            </div>
-            <div className="bg-zinc-900/90 p-2.5 rounded border border-zinc-800">
-              <span className="text-[10px] text-zinc-400 block font-sans">매수 / 매도 비율</span>
-              <span className="text-sm font-black text-amber-300">{aiAnalysisResult.buyVsSellCount.buy}건 / {aiAnalysisResult.buyVsSellCount.sell}건</span>
-            </div>
-            <div className="bg-zinc-900/90 p-2.5 rounded border border-zinc-800">
-              <span className="text-[10px] text-zinc-400 block font-sans">예상 승률 지표</span>
-              <span className="text-sm font-black text-cyan-300">{aiAnalysisResult.winRatePercent}%</span>
-            </div>
+          <div className="grid grid-cols-2 gap-3 text-xs md:grid-cols-5">
+            <Metric label="승률" value={aiAnalysisResult.winRatePercent == null ? "NO_DATA" : `${aiAnalysisResult.winRatePercent.toFixed(1)}%`} />
+            <Metric label="승률 평가 표본" value={`${aiAnalysisResult.evaluatedTradeCount}건`} />
+            <Metric label="실현손익" value={displayMoney(aiAnalysisResult.realizedPnl)} />
+            <Metric label="누적 거래대금" value={`₩${Math.round(aiAnalysisResult.totalCapitalTraded).toLocaleString("ko-KR")}`} />
+            <Metric label="AI 준수율" value="NO_DATA" />
           </div>
 
-          <p className="text-xs text-zinc-200 leading-relaxed bg-zinc-900/60 p-2.5 rounded border border-zinc-800/80">
-            {aiAnalysisResult.insightText}
-          </p>
+          <p className="rounded border border-zinc-800 bg-zinc-900 p-3 text-xs leading-5 text-zinc-300">{aiAnalysisResult.insightText}</p>
+          <p className="text-[11px] leading-5 text-amber-300">{aiAnalysisResult.riskRecommendation}</p>
+          <div className="text-[10px] text-zinc-500">매수 {aiAnalysisResult.buyVsSellCount.buy}건 · 매도 {aiAnalysisResult.buyVsSellCount.sell}건</div>
         </div>
       )}
 
-      {/* Real-time Order Status Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-xs">
-        <div className="bg-zinc-50 border border-zinc-200 p-3 rounded-lg space-y-0.5">
-          <span className="text-[10px] text-zinc-400 block font-sans">누적 총 체결 건수 (Success)</span>
-          <div className="text-base font-black text-emerald-600 flex items-center gap-1.5">
-            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-            <span>{trades.length}건 성공</span>
-          </div>
-        </div>
-
-        <div className="bg-zinc-50 border border-zinc-200 p-3 rounded-lg space-y-0.5">
-          <span className="text-[10px] text-zinc-400 block font-sans">실시간 미체결 대기 (Pending)</span>
-          <div className="text-base font-black text-amber-600 flex items-center gap-1.5">
-            <Clock className="h-4 w-4 text-amber-500 animate-pulse" />
-            <span>{pendingCount}건 대기중</span>
-          </div>
-        </div>
-
-        <div className="bg-zinc-50 border border-zinc-200 p-3 rounded-lg space-y-0.5">
-          <span className="text-[10px] text-zinc-400 block font-sans">체결 완료 주문 (Filled)</span>
-          <div className="text-base font-black text-zinc-900">
-            {filledCount}건 완료
-          </div>
-        </div>
-
-        <div className="bg-zinc-50 border border-zinc-200 p-3 rounded-lg space-y-0.5">
-          <span className="text-[10px] text-zinc-400 block font-sans">주문 취소/회수 건수 (Canceled)</span>
-          <div className="text-base font-black text-rose-600 flex items-center gap-1.5">
-            <XCircle className="h-4 w-4 text-rose-500" />
-            <span>{canceledCount}건 취소</span>
-          </div>
-        </div>
+      <div className="grid grid-cols-2 gap-3 text-xs md:grid-cols-4">
+        <SummaryCard label="누적 체결 건수" value={`${trades.length}건`} icon={<CheckCircle2 className="h-4 w-4" />} />
+        <SummaryCard label="미체결 대기" value={`${pendingCount}건`} icon={<Clock className="h-4 w-4" />} />
+        <SummaryCard label="체결완료 주문" value={`${filledCount}건`} />
+        <SummaryCard label="취소 주문" value={`${canceledCount}건`} icon={<XCircle className="h-4 w-4" />} />
       </div>
 
-      {/* Filter panel */}
-      <div className="flex flex-col lg:flex-row gap-3 text-xs bg-zinc-50 border border-zinc-200 p-3 rounded-lg">
-        {/* Sub tab selectors */}
-        <div className="flex bg-white border border-zinc-200 p-0.5 rounded-lg shrink-0 flex-wrap gap-1">
-          <button
-            onClick={() => setActiveSubTab("AI_RATIONALE")}
-            className={`px-3.5 py-1.5 rounded-md font-bold text-xs transition cursor-pointer flex items-center gap-1.5 ${
-              activeSubTab === "AI_RATIONALE" ? "bg-cyan-950 text-cyan-300 border border-cyan-700 shadow-sm" : "text-zinc-600 hover:text-zinc-900"
-            }`}
-          >
-            <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-            <span>🤖 AI 자율매매 근거 뷰어</span>
-          </button>
-          <button
-            onClick={() => setActiveSubTab("TRADES")}
-            className={`px-3.5 py-1.5 rounded-md font-bold text-xs transition cursor-pointer ${
-              activeSubTab === "TRADES" ? "bg-zinc-950 text-white" : "text-zinc-500 hover:text-zinc-800"
-            }`}
-          >
-            체결 원장 내역 ({trades.length})
-          </button>
-          <button
-            onClick={() => setActiveSubTab("ORDERS")}
-            className={`px-3.5 py-1.5 rounded-md font-bold text-xs transition cursor-pointer ${
-              activeSubTab === "ORDERS" ? "bg-zinc-950 text-white" : "text-zinc-500 hover:text-zinc-800"
-            }`}
-          >
-            전체 주문 관리 ({orders.length})
-          </button>
+      <div className="flex flex-col gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-xs lg:flex-row">
+        <div className="flex flex-wrap gap-1 rounded-lg border border-zinc-200 bg-white p-1">
+          {[
+            ["AI_RATIONALE", "AI 근거 뷰어"],
+            ["TRADES", `체결 원장 (${trades.length})`],
+            ["ORDERS", `주문 관리 (${orders.length})`],
+          ].map(([id, label]) => (
+            <button key={id} type="button" onClick={() => setActiveSubTab(id as typeof activeSubTab)} className={`rounded px-3 py-1.5 font-bold ${activeSubTab === id ? "bg-zinc-950 text-white" : "text-zinc-600"}`}>{label}</button>
+          ))}
         </div>
 
-        {/* Status Filter for Orders */}
         {activeSubTab === "ORDERS" && (
-          <div className="flex flex-wrap items-center gap-1 bg-white border border-zinc-200 p-1 rounded-lg shrink-0">
-            <span className="text-[10px] text-zinc-400 font-bold px-1.5">상태:</span>
-            {[
-              { id: "ALL", label: "전체" },
-              { id: "PENDING", label: "⏳ 대기중" },
-              { id: "FILLED", label: "✓ 체결완료" },
-              { id: "CANCELED", label: "✕ 취소됨" }
-            ].map(s => (
-              <button
-                key={s.id}
-                onClick={() => setStatusFilter(s.id)}
-                className={`px-2.5 py-1 text-xs font-bold rounded transition cursor-pointer ${
-                  statusFilter === s.id 
-                    ? "bg-zinc-900 text-white font-mono" 
-                    : "text-zinc-600 hover:bg-zinc-100"
-                }`}
-              >
-                {s.label}
-              </button>
+          <div className="flex flex-wrap gap-1 rounded-lg border border-zinc-200 bg-white p-1">
+            {["ALL", "PENDING", "FILLED", "CANCELED"].map((id) => (
+              <button key={id} type="button" onClick={() => setStatusFilter(id)} className={`rounded px-2.5 py-1 font-bold ${statusFilter === id ? "bg-zinc-900 text-white" : "text-zinc-600"}`}>{id}</button>
             ))}
           </div>
         )}
 
-        {/* Market Asset Class Filter */}
-        <div className="flex flex-wrap items-center gap-1 bg-white border border-zinc-200 p-1 rounded-lg">
-          <span className="text-[10px] text-zinc-400 font-bold px-1.5 flex items-center gap-1">
-            <Filter className="h-3 w-3" /> 자산:
-          </span>
-          {[
-            { id: "ALL", label: "전체" },
-            { id: "KOREA", label: "🇰🇷 국내" },
-            { id: "US", label: "🇺🇸 해외" },
-            { id: "BTC", label: "🪙 코인" }
-          ].map(m => {
-            const count = activeSubTab === "TRADES" 
-              ? trades.filter(t => m.id === "ALL" || t.market === m.id).length
-              : orders.filter(o => m.id === "ALL" || o.market === m.id).length;
-
-            return (
-              <button
-                key={m.id}
-                onClick={() => setMarketFilter(m.id)}
-                className={`px-2.5 py-1 text-xs font-bold rounded transition cursor-pointer flex items-center gap-1 ${
-                  marketFilter === m.id 
-                    ? "bg-zinc-900 text-white" 
-                    : "text-zinc-600 hover:bg-zinc-100"
-                }`}
-              >
-                <span>{m.label}</span>
-                <span className={`px-1 rounded text-[10px] font-mono ${
-                  marketFilter === m.id ? "bg-zinc-800 text-emerald-400" : "bg-zinc-150 text-zinc-600"
-                }`}>
-                  {count}
-                </span>
-              </button>
-            );
-          })}
+        <div className="flex flex-wrap gap-1 rounded-lg border border-zinc-200 bg-white p-1">
+          <span className="flex items-center px-1.5 text-zinc-400"><Filter className="mr-1 h-3 w-3" />자산</span>
+          {["ALL", "KOREA", "US", "BTC"].map((id) => (
+            <button key={id} type="button" onClick={() => setMarketFilter(id)} className={`rounded px-2.5 py-1 font-bold ${marketFilter === id ? "bg-zinc-900 text-white" : "text-zinc-600"}`}>{id}</button>
+          ))}
         </div>
 
-        {/* Text Search */}
         <div className="relative flex-1">
           <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-zinc-400" />
-          <input
-            type="text"
-            placeholder="종목명 또는 심볼 검색..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-white border border-zinc-200 rounded-lg py-1.5 pl-8.5 pr-3 outline-none focus:border-zinc-500 font-bold"
-          />
+          <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="종목명 또는 심볼 검색" className="w-full rounded-lg border border-zinc-200 bg-white py-1.5 pl-8 pr-3 outline-none" />
         </div>
       </div>
 
-      {/* Verification Modal */}
-      <TradeVerificationModal
-        trade={selectedVerifyTrade}
-        isOpen={Boolean(selectedVerifyTrade)}
-        onClose={() => setSelectedVerifyTrade(null)}
-      />
+      <TradeVerificationModal trade={selectedVerifyTrade} isOpen={Boolean(selectedVerifyTrade)} onClose={() => setSelectedVerifyTrade(null)} />
 
-      {/* RENDER LOG TABLE */}
       {activeSubTab === "AI_RATIONALE" ? (
         <AiTradeHistoryViewer trades={trades} />
       ) : activeSubTab === "TRADES" ? (
-        <div className="overflow-x-auto border border-zinc-200 rounded-lg">
-          <table className="w-full text-xs text-left text-zinc-600">
-            <thead className="bg-zinc-100 text-[10px] font-bold text-zinc-500 uppercase tracking-wider border-b border-zinc-200 font-mono">
-              <tr>
-                <th className="p-3.5">체결시간</th>
-                <th className="p-3.5">구분</th>
-                <th className="p-3.5">종목코드 / 종목명</th>
-                <th className="p-3.5">체결단가</th>
-                <th className="p-3.5">체결수량</th>
-                <th className="p-3.5 text-right">총 체결액</th>
-                <th className="p-3.5">원장 상태</th>
-                <th className="p-3.5 text-right">체결 검증</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-150">
-              {filteredTrades.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="p-16 text-center text-zinc-400 font-mono">일치하는 체결 내역이 존재하지 않습니다.</td>
-                </tr>
-              ) : (
-                filteredTrades.map((t, idx) => {
-                  const totalAmt = t.quantity * t.price;
-                  const isReal = t.isRealTrade === true || t.executionType === "REAL_BROKER";
-                  const formattedPrice = t.market === "US" 
-                    ? `$${(t.price ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`
-                    : `${(t.price ?? 0).toLocaleString()}원`;
-
-                  const formattedTotal = t.market === "US"
-                    ? `$${(totalAmt ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`
-                    : `${Math.round(totalAmt).toLocaleString()}원`;
-
-                  return (
-                    <tr 
-                      key={`${t.id}_${idx}`} 
-                      onClick={() => setSelectedVerifyTrade(t)}
-                      className="hover:bg-zinc-50 transition cursor-pointer group"
-                      title="클릭하여 체결 검증 확인서 열기"
-                    >
-                      <td className="p-3.5 text-zinc-400 font-mono">
-                        {new Date(t.timestamp).toLocaleDateString("ko-KR", { month: "2-digit", day: "2-digit" })}{" "}
-                        {new Date(t.timestamp).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                      </td>
-                      <td className="p-3.5 font-bold">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-black ${
-                          t.side === "BUY" ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800"
-                        }`}>
-                          {t.side === "BUY" ? "매수" : "매도"}
-                        </span>
-                      </td>
-                      <td className="p-3.5">
-                        <div className="font-bold text-zinc-900 group-hover:text-cyan-700 transition">{t.name}</div>
-                        <div className="text-[10px] text-zinc-400 font-mono mt-0.5">{t.symbol} ({t.market})</div>
-                      </td>
-                      <td className="p-3.5 font-bold font-mono text-zinc-800">{formattedPrice}</td>
-                      <td className="p-3.5 font-bold font-mono text-zinc-800">
-                        <span>{(t.quantity ?? 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}</span>
-                        {t.market === "US" && (t.quantity < 1 || t.quantity % 1 !== 0) && (
-                          <span className="ml-1.5 text-[9px] px-1.5 py-0.5 rounded bg-cyan-100 text-cyan-800 border border-cyan-200 font-sans font-bold">
-                            소수점
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-3.5 text-right font-black font-mono text-zinc-950">{formattedTotal}</td>
-                      <td className="p-3.5">
-                        <span className={`text-[10px] font-black px-2 py-0.5 rounded flex items-center gap-1 w-fit ${
-                          isReal ? "bg-rose-100 text-rose-800 border border-rose-300 font-bold" : "bg-indigo-100 text-indigo-800 border border-indigo-300 font-bold"
-                        }`}>
-                          {isReal ? "🔥 실거래 체결" : "🛡️ 모의투자 체결"}
-                        </span>
-                      </td>
-                      <td className="p-3.5 text-right">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedVerifyTrade(t);
-                          }}
-                          className="px-2.5 py-1 rounded bg-zinc-900 text-white hover:bg-zinc-800 text-[10px] font-bold inline-flex items-center gap-1 transition shadow-xs cursor-pointer"
-                        >
-                          <ShieldCheck className="h-3 w-3 text-emerald-400" />
-                          <span>검증 확인서</span>
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+        <TradesTable trades={filteredTrades} onVerify={setSelectedVerifyTrade} />
       ) : (
-        <div className="overflow-x-auto border border-zinc-200 rounded-lg">
-          <table className="w-full text-xs text-left text-zinc-600">
-            <thead className="bg-zinc-100 text-[10px] font-bold text-zinc-500 uppercase tracking-wider border-b border-zinc-200 font-mono">
-              <tr>
-                <th className="p-3.5">접수시간</th>
-                <th className="p-3.5">구분</th>
-                <th className="p-3.5">종목코드 / 종목명</th>
-                <th className="p-3.5">주문단가</th>
-                <th className="p-3.5">주문수량</th>
-                <th className="p-3.5">체결 상태</th>
-                <th className="p-3.5">수행 알고리즘</th>
-                <th className="p-3.5 text-right">실시간 제어 (Actions)</th>
-              </tr>
+        <div className="overflow-x-auto rounded-lg border border-zinc-200">
+          <table className="w-full text-left text-xs text-zinc-600">
+            <thead className="border-b border-zinc-200 bg-zinc-100 text-[10px] font-bold uppercase text-zinc-500">
+              <tr><th className="p-3">접수시간</th><th className="p-3">구분</th><th className="p-3">종목</th><th className="p-3">주문단가</th><th className="p-3">수량</th><th className="p-3">상태</th><th className="p-3">전략</th><th className="p-3 text-right">제어</th></tr>
             </thead>
-            <tbody className="divide-y divide-zinc-150">
-              {filteredOrders.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="p-16 text-center text-zinc-400 font-mono">접수된 주문 내역이 없습니다.</td>
+            <tbody className="divide-y divide-zinc-100">
+              {filteredOrders.length === 0 ? <tr><td colSpan={8} className="p-12 text-center text-zinc-400">접수된 주문이 없습니다.</td></tr> : filteredOrders.map((o) => (
+                <tr key={o.id}>
+                  <td className="p-3 font-mono text-zinc-400">{new Date(o.timestamp).toLocaleString("ko-KR")}</td>
+                  <td className="p-3 font-bold">{o.side === "BUY" ? "매수" : "매도"}</td>
+                  <td className="p-3"><div className="font-bold text-zinc-900">{o.name}</div><div className="font-mono text-[10px] text-zinc-400">{o.symbol} · {o.market}</div></td>
+                  <td className="p-3 font-mono font-bold">{finiteNumber(o.price) == null ? "NO_DATA" : Number(o.price).toLocaleString("ko-KR")}</td>
+                  <td className="p-3 font-mono">{finiteNumber(o.quantity) == null ? "NO_DATA" : Number(o.quantity).toLocaleString("ko-KR", { maximumFractionDigits: 4 })}</td>
+                  <td className="p-3 font-bold">{o.status}</td>
+                  <td className="p-3 text-[10px]">{o.strategyName || "NO_DATA"}</td>
+                  <td className="p-3 text-right">
+                    {o.status === "PENDING" ? (
+                      <button type="button" onClick={() => cancelOrder(o.id)} className="rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-bold text-rose-700">주문 취소</button>
+                    ) : <span className="text-zinc-400">-</span>}
+                  </td>
                 </tr>
-              ) : (
-                filteredOrders.map((o, idx) => {
-                  const formattedPrice = o.market === "US"
-                    ? `$${(o.price ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`
-                    : `${(o.price ?? 0).toLocaleString()}원`;
-
-                  return (
-                    <tr key={`${o.id}_${idx}`} className="hover:bg-zinc-50/50 transition">
-                      <td className="p-3.5 text-zinc-400 font-mono">
-                        {new Date(o.timestamp).toLocaleDateString("ko-KR", { month: "2-digit", day: "2-digit" })}{" "}
-                        {new Date(o.timestamp).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                      </td>
-                      <td className="p-3.5 font-bold">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-black ${
-                          o.side === "BUY" ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800"
-                        }`}>
-                          {o.side === "BUY" ? "매수" : "매도"}
-                        </span>
-                      </td>
-                      <td className="p-3.5">
-                        <div className="font-bold text-zinc-900">{o.name}</div>
-                        <div className="text-[10px] text-zinc-400 font-mono mt-0.5">{o.symbol} ({o.market})</div>
-                      </td>
-                      <td className="p-3.5 font-bold font-mono text-zinc-800">{formattedPrice}</td>
-                      <td className="p-3.5 font-bold font-mono text-zinc-800">
-                        {(o.quantity ?? 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}
-                      </td>
-                      <td className="p-3.5 font-bold">
-                        {o.status === "FILLED" ? (
-                          <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-100 text-emerald-800 font-bold border border-emerald-300">
-                            ✓ 체결완료
-                          </span>
-                        ) : o.status === "PENDING" ? (
-                          <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-amber-100 text-amber-800 font-bold border border-amber-300 animate-pulse">
-                            ⏳ 대기중
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-zinc-150 text-zinc-600 font-bold">
-                            ✕ 취소됨
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-3.5">
-                        <span className="text-[10px] bg-zinc-100 text-zinc-600 font-bold px-2 py-0.5 rounded">
-                          {o.strategyName}
-                        </span>
-                      </td>
-                      <td className="p-3.5 text-right font-mono">
-                        {o.status === "PENDING" ? (
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => fillOrder(o.id)}
-                              className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold flex items-center gap-1 transition cursor-pointer"
-                            >
-                              <PlayCircle className="h-3 w-3" />
-                              <span>즉시 체결</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => cancelOrder(o.id)}
-                              className="px-2 py-1 bg-rose-50 border border-rose-200 hover:bg-rose-100 text-rose-700 rounded text-[10px] font-bold flex items-center gap-1 transition cursor-pointer"
-                            >
-                              <XCircle className="h-3 w-3" />
-                              <span>회수/취소</span>
-                            </button>
-                          </div>
-                        ) : (
-                          <span className="text-[10px] text-zinc-400 font-mono">-</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
+              ))}
             </tbody>
           </table>
+          <div className="border-t border-amber-200 bg-amber-50 p-3 text-[11px] leading-5 text-amber-800">내부 `fillOrder` 즉시체결 버튼은 제거했습니다. 실제 체결은 브로커 승인 흐름에서만 확인해야 합니다.</div>
         </div>
       )}
     </div>
   );
 };
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div className="rounded border border-zinc-800 bg-zinc-900 p-2.5"><span className="block text-[10px] text-zinc-500">{label}</span><strong className="mt-1 block text-sm text-white">{value}</strong></div>;
+}
+
+function SummaryCard({ label, value, icon }: { label: string; value: string; icon?: React.ReactNode }) {
+  return <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3"><span className="block text-[10px] text-zinc-400">{label}</span><div className="mt-1 flex items-center gap-1.5 text-base font-black text-zinc-900">{icon}{value}</div></div>;
+}
+
+function TradesTable({ trades, onVerify }: { trades: TradeLog[]; onVerify: (trade: TradeLog) => void }) {
+  return (
+    <div className="overflow-x-auto rounded-lg border border-zinc-200">
+      <table className="w-full text-left text-xs text-zinc-600">
+        <thead className="border-b border-zinc-200 bg-zinc-100 text-[10px] font-bold uppercase text-zinc-500">
+          <tr><th className="p-3">체결시간</th><th className="p-3">구분</th><th className="p-3">종목</th><th className="p-3">체결단가</th><th className="p-3">수량</th><th className="p-3">손익</th><th className="p-3">원장 상태</th><th className="p-3 text-right">검증</th></tr>
+        </thead>
+        <tbody className="divide-y divide-zinc-100">
+          {trades.length === 0 ? <tr><td colSpan={8} className="p-12 text-center text-zinc-400">일치하는 체결 내역이 없습니다.</td></tr> : trades.map((t) => {
+            const pnl = verifiedTradePnl(t);
+            const isReal = t.isRealTrade === true || t.executionType === "REAL_BROKER";
+            return (
+              <tr key={t.id} className="cursor-pointer hover:bg-zinc-50" onClick={() => onVerify(t)}>
+                <td className="p-3 font-mono text-zinc-400">{new Date(t.timestamp).toLocaleString("ko-KR")}</td>
+                <td className="p-3 font-bold">{t.side === "BUY" ? "매수" : "매도"}</td>
+                <td className="p-3"><div className="font-bold text-zinc-900">{t.name}</div><div className="font-mono text-[10px] text-zinc-400">{t.symbol} · {t.market}</div></td>
+                <td className="p-3 font-mono font-bold">{finiteNumber(t.price) == null ? "NO_DATA" : Number(t.price).toLocaleString("ko-KR", { maximumFractionDigits: 4 })}</td>
+                <td className="p-3 font-mono">{finiteNumber(t.quantity) == null ? "NO_DATA" : Number(t.quantity).toLocaleString("ko-KR", { maximumFractionDigits: 4 })}</td>
+                <td className={`p-3 font-mono font-black ${pnl == null ? "text-zinc-400" : pnl >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{displayMoney(pnl)}</td>
+                <td className="p-3"><span className={`rounded border px-2 py-0.5 text-[10px] font-bold ${isReal ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-50 text-slate-600"}`}>{isReal ? "REAL_BROKER" : t.executionType || "NO_DATA"}</span></td>
+                <td className="p-3 text-right"><button type="button" onClick={(e) => { e.stopPropagation(); onVerify(t); }} className="inline-flex items-center gap-1 rounded bg-zinc-900 px-2.5 py-1 text-[10px] font-bold text-white"><ShieldCheck className="h-3 w-3 text-emerald-400" />검증 확인서</button></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
