@@ -95,9 +95,9 @@ function parsedVolume(value: unknown): number | null {
  * Legacy compatibility service used by older scanner UI code.
  * Production authority remains the verified realtime V19.2/V20 scanner path.
  *
- * Truth rule: a symbol is omitted unless price, volume, RVOL, change and a
- * verified non-stale 15m candle snapshot are all available. Missing evidence
- * never receives a believable default value.
+ * Truth rule: a symbol is omitted unless price, volume, change and a verified
+ * non-stale 15m candle snapshot are available. RVOL and indicators are derived
+ * from those verified candles, never from a fallback constant.
  */
 export class GlobalStockDiscoveryScannerService {
   private static getDynamicUniverse(): GlobalScannedStock[] {
@@ -106,14 +106,12 @@ export class GlobalStockDiscoveryScannerService {
 
     rawStocks.forEach((s, idx) => {
       const price = positiveNumber(s.price);
-      const rvol = positiveNumber(s.rvol);
       const changePct = finiteNumber(s.changeRate);
       const volume = parsedVolume(s.volume);
       const candleSnapshot = realCandleStore.getSnapshot(s.symbol, "15m");
 
       if (
         price == null ||
-        rvol == null ||
         changePct == null ||
         volume == null ||
         !candleSnapshot ||
@@ -126,6 +124,9 @@ export class GlobalStockDiscoveryScannerService {
 
       const candles = candleSnapshot.candles;
       const indicators = IndicatorTruthEngine.computeSnapshot(candles);
+      const rvol = positiveNumber(indicators.rvol);
+      if (rvol == null) return;
+
       const isUs = s.market === "US";
       const isBtc = s.market === "UPBIT";
       const marketType: MarketType = isUs ? "US" : isBtc ? "BTC" : "KOREA";
@@ -215,7 +216,7 @@ export class GlobalStockDiscoveryScannerService {
           totalScore
         },
         catalysts: [
-          `검증된 실시간 가격/거래량`,
+          "검증된 실시간 가격/거래량",
           `RVOL ${rvol.toFixed(2)}배`,
           `15분봉 ${candles.length}개 검증 완료`
         ],
