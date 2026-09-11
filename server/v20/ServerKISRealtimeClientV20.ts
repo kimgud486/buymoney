@@ -6,6 +6,8 @@
 // without pretending one WebSocket can safely hold every symbol at once.
 // ----------------------------------------------------------------------
 
+import fs from "fs";
+import path from "path";
 import WebSocket from "ws";
 import { KISExecutionNoticeParserV20 } from "./KISExecutionNoticeParserV20";
 import { brokerExecutionTruthBusV20 } from "./BrokerExecutionTruthBusV20";
@@ -19,7 +21,7 @@ import { getExchangeMasterUniverseV20 } from "../../src/services/ExchangeMasterU
 export interface KISRealtimeClientConfig {
   appKey: string;
   appSecret: string;
-  approvalKey: string;
+  approvalKey?: string;
   htsId?: string;
   isPaper?: boolean;
   overseasRealtimeEntitled?: boolean;
@@ -29,6 +31,57 @@ const ROTATION_INTERVAL_MS = 45_000;
 const DOMESTIC_ROTATION_BATCH = 18;
 const US_ROTATION_BATCH = 18;
 const WARM_PER_ROTATION = 8;
+const KIS_REAL_REST_DOMAIN = process.env.KIS_REAL_DOMAIN ?? "https://openapi.koreainvestment.com:9443";
+const STORED_CREDENTIALS_PATH = path.join(process.cwd(), "data", "server_api_credentials.json");
+const STORED_CREDENTIALS_WATCH_MS = 10_000;
+
+let activeRealtimeClient: ServerKISRealtimeClientV20 | null = null;
+let activeRealtimeFingerprint = "";
+let storedCredentialsWatcherStarted = false;
+
+const toBool = (value: unknown): boolean => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "y";
+};
+
+const readStoredRealtimeConfig = (): KISRealtimeClientConfig | null => {
+  let disk: Record<string, unknown> = {};
+  try {
+    if (fs.existsSync(STORED_CREDENTIALS_PATH)) {
+      const raw = fs.readFileSync(STORED_CREDENTIALS_PATH, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") disk = parsed as Record<string, unknown>;
+    }
+  } catch (error) {
+    console.warn("[ServerKISRealtimeClientV20] Failed to read stored KIS credentials metadata.", error);
+  }
+
+  const appKey = String(
+    disk.kisAppKey || disk.koreaAppKey || process.env.KIS_APP_KEY || process.env.KIS_APPKEY || ""
+  ).trim();
+  const appSecret = String(
+    disk.kisAppSecret || disk.koreaAppSecret || process.env.KIS_APP_SECRET || process.env.KIS_APPSECRET || ""
+  ).trim();
+
+  if (!appKey || !appSecret) return null;
+
+  const approvalKey = String(disk.kisApprovalKey || process.env.KIS_APPROVAL_KEY || "").trim();
+  const htsId = String(disk.kisHtsId || process.env.KIS_HTS_ID || "").trim();
+  const overseasRealtimeEntitled = toBool(
+    disk.kisOverseasRealtimeEntitled ?? process.env.KIS_OVERSEAS_REALTIME_ENTITLED
+  );
+
+  return {
+    appKey,
+    appSecret,
+    approvalKey: approvalKey || undefined,
+    htsId: htsId || undefined,
+    // This repository's broker gateway is LIVE-only. Never silently route saved
+    // production credentials to the KIS virtual-trading WebSocket endpoint.
+    isPaper: false,
+    overseasRealtimeEntitled,
+  };
+};
 
 export class ServerKISRealtimeClientV20 {
   private ws: WebSocket | null = null;
@@ -46,17 +99,87 @@ export class ServerKISRealtimeClientV20 {
   private koreaCursor = 0;
   private usCursor = 0;
   private rotationBusy = false;
+  private approvalRequestInFlight: Promise<string | null> | null = null;
 
   constructor(config: KISRealtimeClientConfig) {
-    this.config = config;
+    this.config = {
+      ...config,
+      // V12/V21 broker runtime is LIVE-only. The previous server startup passed
+      // isPaper:true here, which pointed valid live credentials at the VTS socket.
+      isPaper: false,
+    };
   }
 
-  public connect(): void {
+  private credentialFingerprint(): string {
+    return [
+      this.config.appKey.trim(),
+      this.config.appSecret.trim(),
+      this.config.htsId || "",
+      this.config.overseasRealtimeEntitled === true ? "US1" : "US0",
+    ].join("::");
+  }
+
+  private async acquireApprovalKey(): Promise<string | null> {
+    if (this.config.approvalKey?.trim()) return this.config.approvalKey.trim();
+    if (this.approvalRequestInFlight) return this.approvalRequestInFlight;
+
+    this.approvalRequestInFlight = (async () => {
+      try {
+        const res = await fetch(`${KIS_REAL_REST_DOMAIN}/oauth2/Approval`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            grant_type: "client_credentials",
+            appkey: this.config.appKey,
+            secretkey: this.config.appSecret,
+          }),
+        });
+
+        if (!res.ok) {
+          console.warn(`[ServerKISRealtimeClientV20] approval key HTTP ${res.status}`);
+          return null;
+        }
+
+        const data = await res.json().catch(() => null);
+        const approvalKey = String(data?.approval_key || "").trim();
+        if (!approvalKey) {
+          console.warn("[ServerKISRealtimeClientV20] KIS approval response did not include approval_key.");
+          return null;
+        }
+
+        this.config.approvalKey = approvalKey;
+        console.log("[ServerKISRealtimeClientV20] KIS WebSocket approval key acquired.");
+        return approvalKey;
+      } catch (error) {
+        console.warn("[ServerKISRealtimeClientV20] KIS approval key request failed.", error);
+        return null;
+      } finally {
+        this.approvalRequestInFlight = null;
+      }
+    })();
+
+    return this.approvalRequestInFlight;
+  }
+
+  public async connect(): Promise<void> {
     if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) return;
 
-    const domain = this.config.isPaper
-      ? "ops.koreainvestment.com:31000"
-      : "ops.koreainvestment.com:21000";
+    const fingerprint = this.credentialFingerprint();
+    if (activeRealtimeClient && activeRealtimeClient !== this) {
+      if (activeRealtimeFingerprint === fingerprint && activeRealtimeClient.isSocketConnected()) return;
+      activeRealtimeClient.disconnect();
+    }
+
+    const approvalKey = await this.acquireApprovalKey();
+    if (!approvalKey) {
+      this.scheduleReconnect();
+      return;
+    }
+
+    activeRealtimeClient = this;
+    activeRealtimeFingerprint = fingerprint;
+
+    const domain = "ops.koreainvestment.com:21000";
     const url = `ws://${domain}/tryitout/H0STCNT0`;
 
     this.closedIntentionally = false;
@@ -66,7 +189,7 @@ export class ServerKISRealtimeClientV20 {
 
       this.ws.on("open", () => {
         this.isConnected = true;
-        console.log("[ServerKISRealtimeClientV20] KIS WebSocket connected.");
+        console.log("[ServerKISRealtimeClientV20] KIS LIVE WebSocket connected.");
         if (this.config.htsId) this.subscribeExecutionNotice(this.config.htsId);
         this.resubscribeAll();
         void this.initializeWholeMarketRotation();
@@ -110,7 +233,7 @@ export class ServerKISRealtimeClientV20 {
   }
 
   private sendControl(trId: "H0STCNT0" | "HDFSCNT0", symbol: string, subscribe: boolean): void {
-    if (!this.ws || !this.isConnected || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || !this.isConnected || this.ws.readyState !== WebSocket.OPEN || !this.config.approvalKey) return;
     this.ws.send(JSON.stringify({
       header: {
         approval_key: this.config.approvalKey,
@@ -158,6 +281,7 @@ export class ServerKISRealtimeClientV20 {
     await this.rotateWholeMarketBatch();
     if (!this.rotationTimer) {
       this.rotationTimer = setInterval(() => void this.rotateWholeMarketBatch(), ROTATION_INTERVAL_MS);
+      this.rotationTimer.unref?.();
     }
   }
 
@@ -220,7 +344,7 @@ export class ServerKISRealtimeClientV20 {
   }
 
   public subscribeExecutionNotice(htsId: string): void {
-    if (!this.ws || !this.isConnected || !htsId) return;
+    if (!this.ws || !this.isConnected || !htsId || !this.config.approvalKey) return;
     this.ws.send(JSON.stringify({
       header: {
         approval_key: this.config.approvalKey,
@@ -287,8 +411,10 @@ export class ServerKISRealtimeClientV20 {
   }
 
   private scheduleReconnect(): void {
+    if (this.closedIntentionally) return;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = setTimeout(() => this.connect(), 5000);
+    this.reconnectTimer = setTimeout(() => void this.connect(), 5000);
+    this.reconnectTimer.unref?.();
   }
 
   public disconnect(): void {
@@ -299,5 +425,45 @@ export class ServerKISRealtimeClientV20 {
     if (this.ws) this.ws.close();
     this.ws = null;
     this.isConnected = false;
+    if (activeRealtimeClient === this) {
+      activeRealtimeClient = null;
+      activeRealtimeFingerprint = "";
+    }
   }
 }
+
+async function ensureStoredKISRealtimeClient(): Promise<void> {
+  const config = readStoredRealtimeConfig();
+  if (!config) return;
+
+  const fingerprint = [
+    config.appKey.trim(),
+    config.appSecret.trim(),
+    config.htsId || "",
+    config.overseasRealtimeEntitled === true ? "US1" : "US0",
+  ].join("::");
+
+  if (activeRealtimeClient && activeRealtimeFingerprint === fingerprint) {
+    if (!activeRealtimeClient.isSocketConnected()) void activeRealtimeClient.connect();
+    return;
+  }
+
+  if (activeRealtimeClient) activeRealtimeClient.disconnect();
+  const client = new ServerKISRealtimeClientV20(config);
+  await client.connect();
+}
+
+export function startStoredKISRealtimeCredentialWatcherV20(): void {
+  if (storedCredentialsWatcherStarted) return;
+  storedCredentialsWatcherStarted = true;
+
+  const firstRun = setTimeout(() => void ensureStoredKISRealtimeClient(), 1000);
+  firstRun.unref?.();
+
+  const watcher = setInterval(() => void ensureStoredKISRealtimeClient(), STORED_CREDENTIALS_WATCH_MS);
+  watcher.unref?.();
+}
+
+// server.ts already imports this module. Start a lightweight watcher so a KIS key
+// saved from the UI can activate realtime streaming without requiring a restart.
+startStoredKISRealtimeCredentialWatcherV20();
