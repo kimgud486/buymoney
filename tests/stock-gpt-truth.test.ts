@@ -7,6 +7,8 @@ const stockSearch = readFileSync("src/components/trading/StockSearchAndAddModal.
 const stockShell = readFileSync("src/components/trading/StockGPTShellV2.tsx", "utf8");
 const featurePanels = readFileSync("src/components/trading/StockGPTFeaturePanels.tsx", "utf8");
 const operationalTruth = readFileSync("src/components/trading/OperationalTruthMonitorV20.tsx", "utf8");
+const realtimeFeed = readFileSync("src/services/realtimeMarketFeedService.ts", "utf8");
+const integrityGate = readFileSync("src/services/MarketDataIntegrityGate.ts", "utf8");
 
 test("Stock GPT startup clears legacy selected ticker before passive market effects", () => {
   assert.match(appEntry, /useLayoutEffect\(\(\)\s*=>\s*\{\s*setSelectedSymbol\(["']["']\)/s);
@@ -42,4 +44,29 @@ test("broker truth monitor never silently substitutes Samsung when no symbol is 
   assert.doesNotMatch(operationalTruth, /normalizeSymbol\(selectedSymbol\)\s*\|\|\s*["']005930["']/);
   assert.match(operationalTruth, /symbol\s*\|\|\s*["']종목 미선택["']/);
   assert.match(operationalTruth, /if\s*\(!isKoreaSymbol\)/);
+});
+
+test("realtime feed preserves missing numeric fields instead of inventing zero", () => {
+  assert.match(realtimeFeed, /parseOptionalMarketNumber/);
+  assert.doesNotMatch(realtimeFeed, /fluctuationsRatioRaw\s*\|\|\s*item\.fluctuationsRatio\s*\|\|\s*["']0["']/);
+  assert.doesNotMatch(realtimeFeed, /accumulatedTradingVolume\s*\|\|\s*["']0["']/);
+  assert.doesNotMatch(realtimeFeed, /accumulatedTradingValue\s*\|\|\s*["']0["']/);
+  assert.doesNotMatch(realtimeFeed, /marketValue(?:Full)?\s*\|\|\s*["']0["']/);
+  assert.match(realtimeFeed, /providerTimestamp\s*==\s*null\s*\?\s*["']UNAVAILABLE["']/);
+});
+
+test("realtime feed never stamps missing provider time as now", () => {
+  assert.doesNotMatch(realtimeFeed, /Number\(item\.trade_timestamp\)\s*\|\|\s*Date\.now\(\)/);
+  assert.match(realtimeFeed, /parseOptionalTimestamp\(item\.trade_timestamp\)/);
+  assert.match(realtimeFeed, /ageMs\s*=\s*providerTimestamp\s*==\s*null\s*\?\s*null/);
+});
+
+test("market integrity gate fails closed on missing timestamps and candle volume", () => {
+  assert.doesNotMatch(integrityGate, /quote\.providerTimestamp\s*\|\|\s*quote\.timestamp\s*\|\|\s*now/);
+  assert.doesNotMatch(integrityGate, /quote\.volume\s*\|\|\s*0/);
+  assert.doesNotMatch(integrityGate, /c\.volume\s*\?\?\s*0/);
+  assert.doesNotMatch(integrityGate, /c\.timestamp\s*\|\|\s*c\.time\s*\|\|\s*0/);
+  assert.doesNotMatch(integrityGate, /c\.tradeValue\s*\|\|\s*0/);
+  assert.match(integrityGate, /MISSING_OR_INVALID_PROVIDER_TIMESTAMP/);
+  assert.match(integrityGate, /MISSING_OR_INVALID_VOLUME_AT_INDEX/);
 });
