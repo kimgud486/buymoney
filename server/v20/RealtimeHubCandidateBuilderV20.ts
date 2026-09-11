@@ -1,5 +1,6 @@
 import { serverRealtimeMarketHubV20 } from "./ServerRealtimeMarketHubV20";
 import { ServerTrueMTFEvidenceProviderV20 } from "./ServerTrueMTFEvidenceProviderV20";
+import { latestSessionCandlesV20, sessionVwapV20 } from "./SessionAwareMarketMathV20";
 import {
   ServerGlobalRealtimeScannerV20,
   type DataTruthStatus,
@@ -73,19 +74,6 @@ function atr(candles: HubCandle[], period = 14): number | undefined {
   if (trs.length < period) return undefined;
   const w = trs.slice(-period);
   return w.reduce((a, b) => a + b, 0) / w.length;
-}
-
-function vwap(candles: HubCandle[]): number | undefined {
-  let pv = 0;
-  let vol = 0;
-  for (const c of candles) {
-    if (!Number.isFinite(c.volume) || c.volume <= 0) continue;
-    const typical = (c.high + c.low + c.close) / 3;
-    if (!Number.isFinite(typical)) continue;
-    pv += typical * c.volume;
-    vol += c.volume;
-  }
-  return vol > 0 ? pv / vol : undefined;
 }
 
 function rvol(candles: HubCandle[], lookback = 20): number {
@@ -175,17 +163,20 @@ export class RealtimeHubCandidateBuilderV20 {
       return { candidate: null, telemetry: { ...telemetry, reason: "INSUFFICIENT_REALTIME_CANDLES" } };
     }
 
+    const sessionCandles = latestSessionCandlesV20(candles, quote.market);
     const closes = candles.map((c) => c.close);
     const signalIndicators = unifiedSignal?.dataStatus === "READY" ? unifiedSignal.indicators : null;
-    const vwapValue = signalIndicators?.vwap ?? vwap(candles);
+    // Always prefer a session-correct VWAP. The unified engine uses the same helper,
+    // while this fallback protects the candidate path during warmup or stale signal cache.
+    const vwapValue = sessionVwapV20(candles, quote.market) ?? signalIndicators?.vwap;
     const ema9 = signalIndicators?.ema9 ?? ema(closes, 9);
     const ema20 = signalIndicators?.ema20 ?? ema(closes, 20);
     const ema50 = signalIndicators?.ema50 ?? ema(closes, 50);
     const atr14 = signalIndicators?.atr14 ?? atr(candles, 14);
     const rsi14 = signalIndicators?.rsi14 ?? rsi(closes, 14);
     const currentRvol = signalIndicators?.rvol20 ?? rvol(candles, 20);
-    const first = candles[0];
-    const latest = candles[candles.length - 1];
+    const first = sessionCandles[0] ?? candles[0];
+    const latest = sessionCandles[sessionCandles.length - 1] ?? candles[candles.length - 1];
     const spreadBps = quote.askPrice && quote.bidPrice && quote.askPrice >= quote.bidPrice && quote.price > 0
       ? ((quote.askPrice - quote.bidPrice) / quote.price) * 10_000
       : undefined;
@@ -217,7 +208,7 @@ export class RealtimeHubCandidateBuilderV20 {
       patterns: detectedPatterns,
       structureTrend: structure(candles),
       isBreakout: unifiedSignal?.pattern === "BREAKOUT_20" || breakout(candles, 20),
-      isRetest: retest(candles, vwapValue),
+      isRetest: retest(sessionCandles, vwapValue),
       chaseRisk: rsi14 !== undefined && rsi14 >= 82,
       exhaustionRisk: atr14 !== undefined && quote.price > 0 && atr14 / quote.price >= 0.12,
       dataStatus,
