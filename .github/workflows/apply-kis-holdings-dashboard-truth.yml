@@ -26,15 +26,33 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
+
           path = Path('scripts/fix-kis-holdings-and-dashboard-truth.mjs')
           text = path.read_text()
+
+          # The generated server function is stored inside a JS template string.
+          # Preserve every inner template literal as source text instead of executing
+          # it inside the temporary patcher itself.
           start_marker = 'const overseasBalanceFunction = `'
           end_marker = '\n`;\n\nserver = replaceBetween('
           start = text.index(start_marker) + len(start_marker)
           end = text.index(end_marker, start)
           body = text[start:end]
-          body = body.replace('`', '\\`').replace('${', '\\${')
-          path.write_text(text[:start] + body + text[end:])
+          body = body.replace('`', '\\`')
+          body = re.sub(r'(?<!\\)\$\{', r'\\${', body)
+          text = text[:start] + body + text[end:]
+
+          # Dashboard replacement strings also contain JSX template literals.
+          # Escape only interpolation markers that are not already escaped.
+          dashboard_marker = '// 3) Dashboard: direct React chart expansion + truth-only display values'
+          dashboard_start = text.index(dashboard_marker)
+          head = text[:dashboard_start]
+          tail = text[dashboard_start:]
+          tail = re.sub(r'(?<!\\)\$\{', r'\\${', tail)
+          text = head + tail
+
+          path.write_text(text)
           PY
 
       - name: Apply targeted fixes
