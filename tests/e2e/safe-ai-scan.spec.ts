@@ -28,10 +28,14 @@ test.describe("Current unified AI trading safety E2E", () => {
     await expect(page.getByRole("button", { name: /PAPER/ })).toHaveCount(0);
   });
 
-  test("removed legacy Safe AI launcher stays unmounted", async ({ page }) => {
+  test("Safe AI scanner modal mounts the autonomous scan launcher", async ({ page }) => {
     await openCurrentDashboard(page);
 
     await expect(page.getByTestId("safe-ai-autotrade-launcher")).toHaveCount(0);
-    await expect(page.getByTestId("open-explainable-scanner")).toBeVisible();
+    await page.getByTestId("open-explainable-scanner").click();
+
+    await expect(page.getByTestId("safe-ai-autotrade-launcher")).toBeVisible();
+    await expect(page.getByText(/스캔 AI 자율매매/).first()).toBeVisible();
+    await expect(page.getByText(/LIVE_RESTRICTED/).first()).toBeVisible();
   });
 });
