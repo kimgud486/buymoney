@@ -66,7 +66,7 @@ test.describe("Stock GPT verified-data safety E2E", () => {
     await expect(page.getByRole("button", { name: /자동.*주문|주문.*실행|실매수|실매도/ })).toHaveCount(0);
   });
 
-  test("a stock question enters verified-data analysis and never fabricates an execution path", async ({ page }) => {
+  test("a stock question enters verified-data analysis, tabs fail closed, and execution stays review-only", async ({ page }) => {
     await openStockGpt(page);
 
     const input = page.getByPlaceholder(/무엇을 분석할까요/);
@@ -77,6 +77,26 @@ test.describe("Stock GPT verified-data safety E2E", () => {
 
     const longReview = page.getByRole("button", { name: /LONG 검토/ });
     if ((await longReview.count()) > 0) {
+      await expect(page.getByTestId("stock-tab-chart")).toBeVisible();
+
+      await page.getByTestId("stock-tab-overview").click();
+      await expect(page.getByTestId("stock-tab-panel-overview")).toBeVisible();
+
+      await page.getByTestId("stock-tab-analysis").click();
+      await expect(page.getByTestId("stock-tab-panel-analysis")).toBeVisible();
+
+      await page.getByTestId("stock-tab-financials").click();
+      await expect(page.getByTestId("stock-gpt-no-data-tab")).toContainText("재무 정보: NO_DATA");
+
+      await page.getByTestId("stock-tab-news").click();
+      await expect(page.getByTestId("stock-gpt-no-data-tab")).toContainText("관련 뉴스: NO_DATA");
+
+      await page.getByTestId("stock-tab-community").click();
+      await expect(page.getByTestId("stock-gpt-no-data-tab")).toContainText("토론 커뮤니티: NO_DATA");
+
+      await page.getByTestId("stock-tab-chart").click();
+      await expect(page.getByTestId("stock-tab-panel-chart")).toBeVisible();
+
       await longReview.first().click();
       await expect(page.getByText(/검토 단계만 열립니다/)).toBeVisible();
       await expect(page.getByRole("button", { name: /주문.*실행|실행.*주문|매수.*확인|매도.*확인/ })).toHaveCount(0);
