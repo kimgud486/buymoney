@@ -5,6 +5,7 @@ import {
   Building2,
   Check,
   CheckCircle2,
+  Circle,
   Copy,
   Eye,
   EyeOff,
@@ -31,16 +32,50 @@ type TestResult = {
   fingerprint?: string;
 };
 
+type KisRuntimeStatus = {
+  loading: boolean;
+  checkedAt: number | null;
+  brokerConfigured: boolean;
+  oauthAuthenticated: boolean;
+  accountQuerySucceeded: boolean;
+  quoteQuerySucceeded: boolean;
+  realtimeQuoteVerified: boolean;
+  dataStatus: string;
+  marketSession: string;
+  lastPrice: number | null;
+  quoteAsOf: string | null;
+  error?: string;
+};
+
+const EMPTY_KIS_STATUS: KisRuntimeStatus = {
+  loading: false,
+  checkedAt: null,
+  brokerConfigured: false,
+  oauthAuthenticated: false,
+  accountQuerySucceeded: false,
+  quoteQuerySucceeded: false,
+  realtimeQuoteVerified: false,
+  dataStatus: "NO_DATA",
+  marketSession: "UNKNOWN",
+  lastPrice: null,
+  quoteAsOf: null
+};
+
 const maskAccount = (value: string) => {
   const clean = value.trim();
   if (clean.length <= 4) return clean;
   return `${clean.slice(0, 3)}****${clean.slice(-2)}`;
 };
 
-export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({
-  isOpen,
-  onClose
-}) => {
+const StatusDot: React.FC<{ ok?: boolean; unknown?: boolean }> = ({ ok, unknown }) => (
+  <Circle
+    className={`h-3 w-3 shrink-0 fill-current ${
+      unknown ? "text-slate-400" : ok ? "text-emerald-500" : "text-red-500"
+    }`}
+  />
+);
+
+export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({ isOpen, onClose }) => {
   const {
     profile,
     updateProfileSettings,
@@ -58,6 +93,7 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [serverIp, setServerIp] = useState("확인 중...");
   const [isCopiedIp, setIsCopiedIp] = useState(false);
+  const [kisStatus, setKisStatus] = useState<KisRuntimeStatus>(EMPTY_KIS_STATUS);
 
   const [koreaKey, setKoreaKey] = useState("");
   const [koreaSecret, setKoreaSecret] = useState("");
@@ -81,6 +117,37 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({
     testResult?.success === true &&
     testResult.broker === activeTab &&
     testResult.fingerprint === (activeTab === "KOREA" ? koreaFingerprint : upbitFingerprint);
+
+  const fetchKisRuntimeStatus = async () => {
+    setKisStatus((prev) => ({ ...prev, loading: true }));
+    try {
+      const res = await fetch("/api/broker/v21/runtime?symbol=005930", { cache: "no-store" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+
+      const evidence = data?.liveEnvironmentProof?.evidence || {};
+      setKisStatus({
+        loading: false,
+        checkedAt: Date.now(),
+        brokerConfigured: evidence?.brokerConfigured === true || data?.oauth !== "NOT_CONFIGURED",
+        oauthAuthenticated: evidence?.oauthAuthenticated === true || data?.oauth === "AUTHENTICATED",
+        accountQuerySucceeded: evidence?.accountQuerySucceeded === true,
+        quoteQuerySucceeded: evidence?.quoteQuerySucceeded === true,
+        realtimeQuoteVerified: evidence?.realtimeQuoteVerified === true,
+        dataStatus: String(data?.dataStatus || "NO_DATA"),
+        marketSession: String(data?.marketSession || "UNKNOWN"),
+        lastPrice: Number.isFinite(Number(data?.lastPrice)) ? Number(data.lastPrice) : null,
+        quoteAsOf: data?.quoteAsOf ? String(data.quoteAsOf) : null
+      });
+    } catch (error: any) {
+      setKisStatus((prev) => ({
+        ...prev,
+        loading: false,
+        checkedAt: Date.now(),
+        error: error?.message || "KIS 상태 확인 실패"
+      }));
+    }
+  };
 
   useEffect(() => {
     if (!isOpen) return;
@@ -106,6 +173,13 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({
       })
       .catch(() => setServerIp("확인 불가"));
   }, [isOpen, profile?.koreaAccountNo, profile?.koreaAccountCode]);
+
+  useEffect(() => {
+    if (!isOpen || activeTab !== "KOREA") return;
+    void fetchKisRuntimeStatus();
+    const timer = window.setInterval(() => void fetchKisRuntimeStatus(), 5000);
+    return () => window.clearInterval(timer);
+  }, [isOpen, activeTab]);
 
   const invalidateTest = () => setTestResult(null);
 
@@ -239,6 +313,7 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({
           koreaAccountCode: koreaAccountCode.trim() || "01"
         } as any);
         clearBrokerError("korea");
+        window.setTimeout(() => void fetchKisRuntimeStatus(), 1200);
       } else {
         clearBrokerError("upbit");
       }
@@ -299,6 +374,7 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({
       setUpbitKey("");
       setUpbitSecret("");
       setTestResult(null);
+      setKisStatus(EMPTY_KIS_STATUS);
       clearBrokerError("korea");
       clearBrokerError("upbit");
 
@@ -332,7 +408,7 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({
             </div>
             <div>
               <h2 className="text-base font-black">실거래 Open API 등록</h2>
-              <p className="mt-0.5 text-xs text-slate-400">키 테스트와 저장을 분리한 보안형 연결창</p>
+              <p className="mt-0.5 text-xs text-slate-400">키 테스트 · 서버 저장 · 실제 연결상태 확인</p>
             </div>
           </div>
           <button onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-white" aria-label="닫기">
@@ -380,6 +456,59 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({
               {isCopiedIp ? "복사됨" : "IP 복사"}
             </button>
           </div>
+
+          {activeTab === "KOREA" && (
+            <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-black text-slate-900 dark:text-white">KIS 실제 연결 신호등</div>
+                  <div className="mt-0.5 text-[11px] text-slate-500">서버가 실제로 확인한 값만 초록색으로 표시합니다.</div>
+                </div>
+                <button
+                  onClick={() => void fetchKisRuntimeStatus()}
+                  disabled={kisStatus.loading}
+                  className="flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-[11px] font-bold text-slate-700 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${kisStatus.loading ? "animate-spin" : ""}`} />
+                  새로고침
+                </button>
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="flex items-center gap-2 rounded-lg bg-white/80 p-2.5 text-xs dark:bg-slate-950/70">
+                  <StatusDot ok={kisStatus.brokerConfigured} />
+                  <span className="font-bold">KIS 등록</span>
+                  <span className="ml-auto text-slate-500">{kisStatus.brokerConfigured ? "등록됨" : "미등록"}</span>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg bg-white/80 p-2.5 text-xs dark:bg-slate-950/70">
+                  <StatusDot ok={kisStatus.oauthAuthenticated} />
+                  <span className="font-bold">OAuth 인증</span>
+                  <span className="ml-auto text-slate-500">{kisStatus.oauthAuthenticated ? "성공" : "대기/실패"}</span>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg bg-white/80 p-2.5 text-xs dark:bg-slate-950/70">
+                  <StatusDot ok={kisStatus.accountQuerySucceeded} />
+                  <span className="font-bold">실계좌 조회</span>
+                  <span className="ml-auto text-slate-500">{kisStatus.accountQuerySucceeded ? "성공" : "미확인"}</span>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg bg-white/80 p-2.5 text-xs dark:bg-slate-950/70">
+                  <StatusDot ok={kisStatus.realtimeQuoteVerified} />
+                  <span className="font-bold">국내 실제 현재가</span>
+                  <span className="ml-auto text-slate-500">{kisStatus.realtimeQuoteVerified ? "검증됨" : "미검증"}</span>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg bg-white/80 p-2.5 text-xs dark:bg-slate-950/70 sm:col-span-2">
+                  <StatusDot unknown />
+                  <span className="font-bold">미국 실시간 권한</span>
+                  <span className="ml-auto text-slate-500">별도 KIS 해외 실시간 권한 확인 필요</span>
+                </div>
+              </div>
+
+              <div className="mt-3 text-[11px] leading-5 text-slate-500">
+                시장상태: <strong>{kisStatus.marketSession}</strong> · 데이터: <strong>{kisStatus.dataStatus}</strong>
+                {kisStatus.lastPrice !== null ? ` · 삼성전자 확인가 ${kisStatus.lastPrice.toLocaleString("ko-KR")}` : ""}
+                {kisStatus.error ? ` · 상태확인 오류: ${kisStatus.error}` : ""}
+              </div>
+            </div>
+          )}
 
           {activeTab === "KOREA" ? (
             <div className="space-y-4">
