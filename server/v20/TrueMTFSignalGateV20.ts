@@ -1,7 +1,7 @@
 // ----------------------------------------------------------------------
-// TRUE MULTI-TIMEFRAME SIGNAL GATE V20.3
+// TRUE MULTI-TIMEFRAME SIGNAL GATE V20.9
 // 1m -> 3m -> 5m -> Daily confirmation before BUY promotion
-// Truth-first: missing/invalid timeframe evidence can never become BUY.
+// Truth-first: missing/invalid/stale/desynchronized timeframe evidence can never become BUY.
 // ----------------------------------------------------------------------
 
 export type TrueMTFTimeframeV20 = "1m" | "3m" | "5m" | "D";
@@ -43,6 +43,12 @@ export interface TrueMTFEvidenceV20 {
   "3m"?: TrueMTFSnapshotV20;
   "5m"?: TrueMTFSnapshotV20;
   D?: TrueMTFSnapshotV20;
+
+  /**
+   * Server-owned reference timestamp captured when this evidence bundle was built.
+   * Historical/unit-test evidence may omit it; production provider sets it.
+   */
+  asOfTimestamp?: number;
 }
 
 export interface TrueMTFGateConfigV20 {
@@ -50,6 +56,12 @@ export interface TrueMTFGateConfigV20 {
   maxEntryRsi: number;
   hardOverheatRsi: number;
   maxVwapExtensionPct: number;
+  maxAge1mMs: number;
+  maxAge3mMs: number;
+  maxAge5mMs: number;
+  maxAgeDailyMs: number;
+  maxIntradaySkewMs: number;
+  maxFutureDriftMs: number;
 }
 
 export interface TrueMTFGateResultV20 {
@@ -60,18 +72,34 @@ export interface TrueMTFGateResultV20 {
   confirmations: string[];
 }
 
+const MINUTE = 60_000;
+const DAY = 86_400_000;
+
 const DEFAULT_CONFIG: TrueMTFGateConfigV20 = {
   minEntryRvol: 1.2,
   maxEntryRsi: 80,
   hardOverheatRsi: 82,
-  maxVwapExtensionPct: 4.5
+  maxVwapExtensionPct: 4.5,
+  maxAge1mMs: 3 * MINUTE,
+  maxAge3mMs: 9 * MINUTE,
+  maxAge5mMs: 15 * MINUTE,
+  maxAgeDailyMs: 8 * DAY,
+  maxIntradaySkewMs: 7 * MINUTE,
+  maxFutureDriftMs: MINUTE,
 };
 
 const EXPECTED_INTERVAL_MS: Record<TrueMTFTimeframeV20, number> = {
   "1m": 60_000,
   "3m": 180_000,
   "5m": 300_000,
-  D: 86_400_000
+  D: 86_400_000,
+};
+
+const MAX_AGE_KEY: Record<TrueMTFTimeframeV20, keyof TrueMTFGateConfigV20> = {
+  "1m": "maxAge1mMs",
+  "3m": "maxAge3mMs",
+  "5m": "maxAge5mMs",
+  D: "maxAgeDailyMs",
 };
 
 function finite(v: unknown): v is number {
@@ -135,7 +163,7 @@ function validateSnapshot(
     ["ema50", snapshot.ema50],
     ["rsi14", snapshot.rsi14],
     ["macdHist", snapshot.macdHist],
-    ["rvol", snapshot.rvol]
+    ["rvol", snapshot.rvol],
   ];
 
   const invalid = requiredNumbers.find(([, value]) => !finite(value));
@@ -149,6 +177,53 @@ function validateSnapshot(
     return false;
   }
 
+  return true;
+}
+
+function validateTemporalCoherence(
+  evidence: TrueMTFEvidenceV20,
+  cfg: TrueMTFGateConfigV20,
+  blockers: string[],
+  confirmations: string[]
+): boolean {
+  const intraday = [evidence["1m"], evidence["3m"], evidence["5m"]].filter(
+    (x): x is TrueMTFSnapshotV20 => Boolean(x)
+  );
+
+  if (intraday.length === 3) {
+    const timestamps = intraday.map((x) => x.lastBarTimestamp);
+    const skewMs = Math.max(...timestamps) - Math.min(...timestamps);
+    if (skewMs > cfg.maxIntradaySkewMs) {
+      blockers.push(`MTF_DESYNC:${skewMs}ms`);
+      return false;
+    }
+    confirmations.push(`MTF_SYNCED:${skewMs}ms`);
+  }
+
+  if (!positive(evidence.asOfTimestamp)) {
+    // Historical/replay evidence can be evaluated deterministically without wall-clock freshness.
+    return true;
+  }
+
+  const reference = evidence.asOfTimestamp;
+  const frames: TrueMTFTimeframeV20[] = ["1m", "3m", "5m", "D"];
+
+  for (const tf of frames) {
+    const snapshot = evidence[tf];
+    if (!snapshot) continue;
+    const ageMs = reference - snapshot.lastBarTimestamp;
+    if (ageMs < -cfg.maxFutureDriftMs) {
+      blockers.push(`${tf}:TIMESTAMP_IN_FUTURE:${Math.abs(ageMs)}ms`);
+      return false;
+    }
+    const maxAge = Number(cfg[MAX_AGE_KEY[tf]]);
+    if (ageMs > maxAge) {
+      blockers.push(`${tf}:STALE_BAR:${ageMs}ms`);
+      return false;
+    }
+  }
+
+  confirmations.push("MTF_FRESH");
   return true;
 }
 
@@ -180,7 +255,7 @@ export class TrueMTFSignalGateV20 {
         hardReject: false,
         missingTimeframes: required,
         blockers: ["TRUE_MTF_EVIDENCE_MISSING"],
-        confirmations
+        confirmations,
       };
     }
 
@@ -200,7 +275,7 @@ export class TrueMTFSignalGateV20 {
         hardReject: false,
         missingTimeframes,
         blockers,
-        confirmations
+        confirmations,
       };
     }
 
@@ -216,7 +291,17 @@ export class TrueMTFSignalGateV20 {
         hardReject: false,
         missingTimeframes,
         blockers,
-        confirmations
+        confirmations,
+      };
+    }
+
+    if (!validateTemporalCoherence(evidence, cfg, blockers, confirmations)) {
+      return {
+        passed: false,
+        hardReject: true,
+        missingTimeframes,
+        blockers,
+        confirmations,
       };
     }
 
@@ -229,7 +314,7 @@ export class TrueMTFSignalGateV20 {
         hardReject: true,
         missingTimeframes,
         blockers,
-        confirmations
+        confirmations,
       };
     }
 
@@ -245,7 +330,7 @@ export class TrueMTFSignalGateV20 {
         hardReject: true,
         missingTimeframes,
         blockers,
-        confirmations
+        confirmations,
       };
     }
 
@@ -259,7 +344,7 @@ export class TrueMTFSignalGateV20 {
           hardReject: true,
           missingTimeframes,
           blockers,
-          confirmations
+          confirmations,
         };
       }
     }
@@ -339,7 +424,7 @@ export class TrueMTFSignalGateV20 {
       hardReject: false,
       missingTimeframes,
       blockers,
-      confirmations
+      confirmations,
     };
   }
 }

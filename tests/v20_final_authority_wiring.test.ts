@@ -21,13 +21,15 @@ test("precheck scanner does not fabricate a generic bullish pattern when none ex
 test("final HTTP decision rebuilds True MTF on the server and never trusts client MTF", () => {
   const handler = read("server/v20/FinalBuyHoldHttpHandlerV20.ts");
   const provider = read("server/v20/ServerTrueMTFEvidenceProviderV20.ts");
+  const builder = read("server/v20/RealtimeHubCandidateBuilderV20.ts");
   assert.match(handler, /ServerTrueMTFEvidenceProviderV20\.build/);
   assert.match(handler, /trueMtf: serverTrueMtf/);
   assert.match(handler, /mtfAuthority: "SERVER_OWNED"/);
   assert.match(provider, /aggregateOneMinuteToThreeMinuteV20/);
   assert.match(provider, /payload\.dataStatus !== "REALTIME_VERIFIED"/);
   assert.match(provider, /payload\.dataStatus !== "REALTIME_DERIVED"/);
-  assert.match(provider, /buildSnapshot\("3m", derived3,[^\n]+"REALTIME_DERIVED"\)/);
+  assert.match(provider, /buildSnapshot\("3m", derived3,[^\n]+"REALTIME_DERIVED"(?:,\s*input\.market)?\)/);
+  assert.match(builder, /market:\s*built\.candidate\.market === "KR"/);
   assert.doesNotMatch(provider, /derived \? "REALTIME_DERIVED" : "REALTIME_VERIFIED"/);
   assert.match(provider, /rows\.length !== 3/);
 });
