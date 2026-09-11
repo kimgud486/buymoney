@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Brain,
@@ -16,21 +16,47 @@ import {
 import { ExplainableTradeIdea } from "../scanner/ExplainableOpportunityScannerEngine";
 
 type ScannerDataStatus = "REALTIME_VERIFIED" | "STALE" | "NO_DATA" | "ERROR" | "UNKNOWN";
+type UiMarket = "ALL" | "KOREA" | "US" | "BTC";
+type DiagnosticMarket = "KOREA" | "US" | "UPBIT";
 
 type ScannerPayload = {
   success?: boolean;
   scannedAt?: string;
   totalScanned?: number;
   passedCount?: number;
-  rejectedCount?: number;
   dataStatus?: ScannerDataStatus;
   message?: string;
   topIdeas?: ExplainableTradeIdea[];
 };
 
+type MarketDiagnostic = {
+  universe: number;
+  liveQuoteReady: number;
+  candle15mReady: number;
+  passed: number;
+};
+
+type DiagnosticPayload = {
+  diagnostics?: Partial<Record<DiagnosticMarket, Partial<MarketDiagnostic>>>;
+  dataStatus?: ScannerDataStatus;
+  scanTimestamp?: string;
+};
+
+const EMPTY_DIAGNOSTIC: MarketDiagnostic = {
+  universe: 0,
+  liveQuoteReady: 0,
+  candle15mReady: 0,
+  passed: 0,
+};
+
 function finiteNumber(value: unknown): number | null {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+function nonNegativeInt(value: unknown): number {
+  const n = finiteNumber(value);
+  return n == null ? 0 : Math.max(0, Math.floor(n));
 }
 
 function formatNumber(value: unknown, maximumFractionDigits = 2): string {
@@ -54,8 +80,31 @@ function statusLabel(status: ScannerDataStatus): { text: string; className: stri
   return { text: "상태 확인 중", className: "text-slate-300 border-slate-700 bg-slate-900", live: false };
 }
 
+function normalizeDiagnostic(raw: Partial<MarketDiagnostic> | undefined): MarketDiagnostic {
+  return {
+    universe: nonNegativeInt(raw?.universe),
+    liveQuoteReady: nonNegativeInt(raw?.liveQuoteReady),
+    candle15mReady: nonNegativeInt(raw?.candle15mReady),
+    passed: nonNegativeInt(raw?.passed),
+  };
+}
+
+function diagnosticReason(d: MarketDiagnostic): string {
+  if (d.universe <= 0) return "종목 목록이 아직 준비되지 않았습니다.";
+  if (d.liveQuoteReady <= 0) return "실행등급 실시간 시세가 아직 들어오지 않았습니다.";
+  if (d.candle15mReady <= 0) return "실시간 시세는 있지만 15분봉 20개가 아직 준비되지 않았습니다.";
+  if (d.passed <= 0) return "시세와 15분봉은 준비됐지만 현재 분석 조건 통과 종목이 없습니다.";
+  return `${d.passed}개 종목이 진단 스캐너 조건을 통과했습니다.`;
+}
+
+function marketLabel(market: DiagnosticMarket): string {
+  if (market === "KOREA") return "국내";
+  if (market === "US") return "미국";
+  return "업비트";
+}
+
 export const ExplainableOpportunityScanner: React.FC = () => {
-  const [market, setMarket] = useState<"ALL" | "KOREA" | "US" | "BTC">("ALL");
+  const [market, setMarket] = useState<UiMarket>("ALL");
   const [isYesOnlyMode, setIsYesOnlyMode] = useState(true);
   const [ideas, setIdeas] = useState<ExplainableTradeIdea[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,7 +114,51 @@ export const ExplainableOpportunityScanner: React.FC = () => {
   const [passedCount, setPassedCount] = useState(0);
   const [dataStatus, setDataStatus] = useState<ScannerDataStatus>("UNKNOWN");
   const [errorMessage, setErrorMessage] = useState("");
+  const [diagnostics, setDiagnostics] = useState<Partial<Record<DiagnosticMarket, MarketDiagnostic>> | null>(null);
+  const [diagnosticError, setDiagnosticError] = useState("");
   const [aiGeneratingSymbol, setAiGeneratingSymbol] = useState<string | null>(null);
+
+  const diagnosticMarkets = useMemo<DiagnosticMarket[]>(() => {
+    if (market === "KOREA") return ["KOREA"];
+    if (market === "US") return ["US"];
+    if (market === "BTC") return ["UPBIT"];
+    return ["KOREA", "US", "UPBIT"];
+  }, [market]);
+
+  const fetchDiagnostics = useCallback(async () => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 8_000);
+    try {
+      const marketFilter = market === "BTC" ? "UPBIT" : market;
+      const res = await fetch("/api/ai/hot-list", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ marketFilter }),
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const data = (await res.json().catch(() => ({}))) as DiagnosticPayload;
+      if (!res.ok || !data.diagnostics) {
+        setDiagnostics(null);
+        setDiagnosticError(`시장 준비상태 조회 실패 (HTTP ${res.status})`);
+        return;
+      }
+      setDiagnostics({
+        KOREA: normalizeDiagnostic(data.diagnostics.KOREA),
+        US: normalizeDiagnostic(data.diagnostics.US),
+        UPBIT: normalizeDiagnostic(data.diagnostics.UPBIT),
+      });
+      setDiagnosticError("");
+    } catch (err) {
+      setDiagnostics(null);
+      setDiagnosticError(err instanceof DOMException && err.name === "AbortError"
+        ? "시장 준비상태 조회가 8초를 초과했습니다."
+        : "시장 준비상태를 불러오지 못했습니다.");
+      console.warn("[ExplainableScanner] Diagnostic fetch error:", err);
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }, [market]);
 
   const fetchScannerResults = useCallback(async () => {
     setLoading(true);
@@ -81,15 +174,15 @@ export const ExplainableOpportunityScanner: React.FC = () => {
 
       if (!res.ok || data.success !== true || !Array.isArray(data.topIdeas)) {
         setIdeas([]);
-        setTotalScanned(finiteNumber(data.totalScanned) ?? 0);
+        setTotalScanned(nonNegativeInt(data.totalScanned));
         setPassedCount(0);
         setDataStatus(res.ok ? data.dataStatus || "NO_DATA" : "ERROR");
         setErrorMessage(data.message || `스캐너 응답 오류 (HTTP ${res.status})`);
         return;
       }
 
-      const total = Math.max(0, finiteNumber(data.totalScanned) ?? 0);
-      const passed = Math.max(0, finiteNumber(data.passedCount) ?? data.topIdeas.length);
+      const total = nonNegativeInt(data.totalScanned);
+      const passed = nonNegativeInt(data.passedCount ?? data.topIdeas.length);
       setIdeas(data.topIdeas);
       setTotalScanned(total);
       setPassedCount(passed);
@@ -100,7 +193,9 @@ export const ExplainableOpportunityScanner: React.FC = () => {
       setIdeas([]);
       setPassedCount(0);
       setDataStatus("ERROR");
-      setErrorMessage(err instanceof DOMException && err.name === "AbortError" ? "스캐너 응답 시간이 8초를 초과했습니다." : "스캐너 서버에 연결하지 못했습니다.");
+      setErrorMessage(err instanceof DOMException && err.name === "AbortError"
+        ? "스캐너 응답 시간이 8초를 초과했습니다."
+        : "스캐너 서버에 연결하지 못했습니다.");
       console.warn("[ExplainableScanner] Fetch error:", err);
     } finally {
       window.clearTimeout(timeout);
@@ -108,15 +203,19 @@ export const ExplainableOpportunityScanner: React.FC = () => {
     }
   }, [market, isYesOnlyMode]);
 
+  const refreshAll = useCallback(async () => {
+    await Promise.allSettled([fetchScannerResults(), fetchDiagnostics()]);
+  }, [fetchDiagnostics, fetchScannerResults]);
+
   useEffect(() => {
-    void fetchScannerResults();
-  }, [fetchScannerResults]);
+    void refreshAll();
+  }, [refreshAll]);
 
   useEffect(() => {
     if (!autoRefresh) return;
-    const interval = window.setInterval(() => void fetchScannerResults(), 15_000);
+    const interval = window.setInterval(() => void refreshAll(), 15_000);
     return () => window.clearInterval(interval);
-  }, [autoRefresh, fetchScannerResults]);
+  }, [autoRefresh, refreshAll]);
 
   const requestAiDeepExplanation = async (idea: ExplainableTradeIdea) => {
     setAiGeneratingSymbol(idea.symbol);
@@ -170,7 +269,7 @@ export const ExplainableOpportunityScanner: React.FC = () => {
             <button onClick={() => setAutoRefresh((v) => !v)} className={`px-3 py-1.5 rounded-xl border text-xs flex items-center gap-1.5 ${autoRefresh ? "bg-emerald-950/50 text-emerald-300 border-emerald-500/30" : "bg-slate-950 text-slate-400 border-slate-800"}`}>
               <Zap className="w-3.5 h-3.5" /> 15초 자동갱신 {autoRefresh ? "ON" : "OFF"}
             </button>
-            <button onClick={() => void fetchScannerResults()} disabled={loading} className="p-2 bg-slate-800 rounded-xl border border-slate-700 disabled:opacity-50" title="새로고침"><RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} /></button>
+            <button onClick={() => void refreshAll()} disabled={loading} className="p-2 bg-slate-800 rounded-xl border border-slate-700 disabled:opacity-50" title="새로고침"><RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} /></button>
           </div>
         </div>
 
@@ -185,6 +284,44 @@ export const ExplainableOpportunityScanner: React.FC = () => {
         </div>
 
         {errorMessage && <div className="flex items-start gap-2 rounded-xl border border-rose-500/30 bg-rose-950/20 p-3 text-xs text-rose-200"><AlertTriangle className="w-4 h-4 shrink-0" />{errorMessage}</div>}
+      </section>
+
+      <section className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold text-slate-100">시장 준비상태 진단</h2>
+            <p className="text-[11px] text-slate-500 mt-0.5">전체 종목 → 실행등급 실시간 시세 → 15분봉 20개 → 분석 조건 통과 순서입니다.</p>
+          </div>
+          <span className="text-[10px] text-slate-500">추천 숫자가 아니라 데이터 준비 진단입니다</span>
+        </div>
+
+        {diagnosticError ? (
+          <div className="flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-950/10 p-3 text-xs text-amber-200">
+            <AlertTriangle className="w-4 h-4 shrink-0" />{diagnosticError}
+          </div>
+        ) : (
+          <div className={`grid gap-3 ${diagnosticMarkets.length === 1 ? "grid-cols-1" : "grid-cols-1 md:grid-cols-3"}`}>
+            {diagnosticMarkets.map((diagnosticMarket) => {
+              const d = diagnostics?.[diagnosticMarket] ?? EMPTY_DIAGNOSTIC;
+              const hasDiagnostics = diagnostics != null;
+              return (
+                <div key={diagnosticMarket} className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <strong className="text-sm text-slate-100">{marketLabel(diagnosticMarket)}</strong>
+                    <span className={`text-[10px] ${hasDiagnostics && d.liveQuoteReady > 0 ? "text-emerald-300" : "text-slate-500"}`}>{hasDiagnostics ? "실제 진단값" : "조회 중"}</span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1 text-center">
+                    <div className="rounded-lg bg-slate-900 p-2"><span className="block text-[9px] text-slate-500">전체</span><strong className="text-xs text-slate-200">{hasDiagnostics ? d.universe : "-"}</strong></div>
+                    <div className="rounded-lg bg-slate-900 p-2"><span className="block text-[9px] text-slate-500">실시간</span><strong className="text-xs text-cyan-300">{hasDiagnostics ? d.liveQuoteReady : "-"}</strong></div>
+                    <div className="rounded-lg bg-slate-900 p-2"><span className="block text-[9px] text-slate-500">15분봉</span><strong className="text-xs text-indigo-300">{hasDiagnostics ? d.candle15mReady : "-"}</strong></div>
+                    <div className="rounded-lg bg-slate-900 p-2"><span className="block text-[9px] text-slate-500">분석통과</span><strong className="text-xs text-emerald-300">{hasDiagnostics ? d.passed : "-"}</strong></div>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">{hasDiagnostics ? diagnosticReason(d) : "시장 준비상태를 확인하고 있습니다."}</p>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       {loading && ideas.length === 0 ? (
@@ -210,7 +347,7 @@ export const ExplainableOpportunityScanner: React.FC = () => {
             return (
               <article key={idea.id || `${idea.market}-${idea.symbol}-${index}`} className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
                 <div className="flex items-start justify-between gap-3">
-                  <div><div className="flex items-center gap-2"><span className="text-indigo-300 font-bold">#{index + 1}</span><h2 className="text-lg font-bold text-white">{idea.name}</h2><span className="text-xs text-slate-500">{idea.symbol}</span></div><div className="mt-1 font-mono text-slate-200">{formatNumber(price)} {idea.market === "US" ? "$" : idea.market === "BTC" ? "원" : "원"} {changePct != null && <span className={changePct >= 0 ? "text-emerald-400" : "text-rose-400"}>({changePct >= 0 ? "+" : ""}{changePct.toFixed(2)}%)</span>}</div></div>
+                  <div><div className="flex items-center gap-2"><span className="text-indigo-300 font-bold">#{index + 1}</span><h2 className="text-lg font-bold text-white">{idea.name}</h2><span className="text-xs text-slate-500">{idea.symbol}</span></div><div className="mt-1 font-mono text-slate-200">{formatNumber(price)} {idea.market === "US" ? "$" : "원"} {changePct != null && <span className={changePct >= 0 ? "text-emerald-400" : "text-rose-400"}>({changePct >= 0 ? "+" : ""}{changePct.toFixed(2)}%)</span>}</div></div>
                   <div className="text-right"><div className="text-[10px] text-slate-500">SETUP SCORE</div><strong className="text-2xl text-indigo-300">{formatNumber(idea.score, 0)}</strong><span className="ml-2 px-2 py-1 rounded-lg border border-slate-700 text-xs text-slate-300">{idea.grade}</span></div>
                 </div>
 
