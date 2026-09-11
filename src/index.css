@@ -38,7 +38,6 @@ html, body {
   touch-action: auto;
 }
 
-
 /* Enable text selection inside input fields and text areas */
 input, textarea, [contenteditable="true"] {
   user-select: text;
@@ -82,4 +81,25 @@ html.dark {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Approved Stock GPT desktop composition.
+   Keep the reference left rail + center workspace + right live rail visible
+   on ordinary desktop widths instead of waiting for Tailwind's 2xl breakpoint. */
+@media (min-width: 1024px) {
+  [data-testid="stock-gpt-approved-layout"] > div {
+    grid-template-columns: 220px minmax(0, 1fr) 280px !important;
+  }
 
+  [data-testid="stock-gpt-approved-layout"] > div > aside:first-child {
+    display: flex !important;
+  }
+
+  [data-testid="stock-gpt-approved-layout"] > div > aside:last-child {
+    display: block !important;
+  }
+}
+
+@media (min-width: 1440px) {
+  [data-testid="stock-gpt-approved-layout"] > div {
+    grid-template-columns: 230px minmax(0, 1fr) 300px !important;
+  }
+}
