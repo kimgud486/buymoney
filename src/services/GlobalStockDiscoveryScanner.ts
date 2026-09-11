@@ -1,7 +1,8 @@
 // AISTOCK 24 v10 Global Stock Discovery Scanner Pipeline Service
-// Real Market Data Feed via MarketDiscoveryProvider & Stock Universe
-import { getAllStocks, StockItem } from "../data/stockUniverse";
+// TRUTH-FIRST compatibility layer: verified market values only, no synthetic fallbacks.
+import { getAllStocks } from "../data/stockUniverse";
 import { realCandleStore } from "./RealCandleStore";
+import { IndicatorTruthEngine } from "./IndicatorTruthEngine";
 
 export type MarketType = "KOREA" | "US" | "BTC";
 export type ScannerGrade = "S" | "A+" | "A" | "B" | "WATCH" | "NO SETUP";
@@ -22,20 +23,20 @@ export type SetupType =
 export type SetupLifecycleState = "FORMING" | "CONFIRMED" | "ACTIVE" | "INVALIDATED";
 
 export interface ScoreBreakdown {
-  relativeStrength: number; // Max 15
-  rvolScore: number; // Max 12
-  liquidityScore: number; // Max 10
-  emaAlignment: number; // Max 10
-  adxScore: number; // Max 8
-  high52wScore: number; // Max 8
-  breakoutScore: number; // Max 10
-  vcpScore: number; // Max 7
-  pullbackScore: number; // Max 5
-  momentumScore: number; // Max 10
-  sectorStrength: number; // Max 5
-  regionalBoost: number; // KR (+Theme +Disclosure), US (+Gap +DollarVol)
-  riskPenalty: number; // Overbought, Extreme Volatility, Dilution
-  totalScore: number; // Final 0-100
+  relativeStrength: number;
+  rvolScore: number;
+  liquidityScore: number;
+  emaAlignment: number;
+  adxScore: number;
+  high52wScore: number;
+  breakoutScore: number;
+  vcpScore: number;
+  pullbackScore: number;
+  momentumScore: number;
+  sectorStrength: number;
+  regionalBoost: number;
+  riskPenalty: number;
+  totalScore: number;
 }
 
 export interface GlobalScannedStock {
@@ -47,17 +48,17 @@ export interface GlobalScannedStock {
   marketLabel: string;
   price: number;
   changePct: number;
-  tradingValue: number; // 억원 or $M
-  rvol: number; // e.g., 3.1x
-  rsScore: number; // 0-100
-  adx: number; // e.g. 34.2
-  gapPct?: number; // e.g., +5.8%
+  tradingValue: number;
+  rvol: number;
+  rsScore: number;
+  adx: number;
+  gapPct?: number;
   setup: SetupType;
   setupState: SetupLifecycleState;
   grade: ScannerGrade;
   scores: ScoreBreakdown;
   catalysts: string[];
-  v9UnifiedShapeEligible: boolean; // Transferred to v9 Unified Shape AI
+  v9UnifiedShapeEligible: boolean;
   pipelineStage: "UNIVERSE" | "LIQUIDITY_PASS" | "MOMENTUM_PASS" | "SETUP_PASS" | "TOP_20_CANDIDATE";
   sparklineData: number[];
 }
@@ -70,94 +71,132 @@ export interface PipelineFilterOptions {
   searchQuery: string;
 }
 
+const MIN_VERIFIED_15M_BARS = 35;
+
+function finiteNumber(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function positiveNumber(value: unknown): number | null {
+  const n = finiteNumber(value);
+  return n != null && n > 0 ? n : null;
+}
+
+function parsedVolume(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) && value > 0 ? value : null;
+  const cleaned = String(value ?? "").replace(/[^0-9.]/g, "");
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 /**
  * @deprecated ANALYSIS_ONLY
- * Legacy GlobalStockDiscoveryScannerService V10.
- * Recommended production scanner is GlobalStockDiscoveryScannerV17 / V18.
+ * Legacy compatibility service used by older scanner UI code.
+ * Production authority remains the verified realtime V19.2/V20 scanner path.
+ *
+ * Truth rule: a symbol is omitted unless price, volume, RVOL, change and a
+ * verified non-stale 15m candle snapshot are all available. Missing evidence
+ * never receives a believable default value.
  */
 export class GlobalStockDiscoveryScannerService {
-  /**
-   * Dynamically build candidates from stockUniverse real data
-   */
   private static getDynamicUniverse(): GlobalScannedStock[] {
     const rawStocks = getAllStocks();
+    const candidates: GlobalScannedStock[] = [];
 
-    return rawStocks.map((s, idx) => {
+    rawStocks.forEach((s, idx) => {
+      const price = positiveNumber(s.price);
+      const rvol = positiveNumber(s.rvol);
+      const changePct = finiteNumber(s.changeRate);
+      const volume = parsedVolume(s.volume);
+      const candleSnapshot = realCandleStore.getSnapshot(s.symbol, "15m");
+
+      if (
+        price == null ||
+        rvol == null ||
+        changePct == null ||
+        volume == null ||
+        !candleSnapshot ||
+        !candleSnapshot.verified ||
+        candleSnapshot.stale ||
+        candleSnapshot.candles.length < MIN_VERIFIED_15M_BARS
+      ) {
+        return;
+      }
+
+      const candles = candleSnapshot.candles;
+      const indicators = IndicatorTruthEngine.computeSnapshot(candles);
       const isUs = s.market === "US";
       const isBtc = s.market === "UPBIT";
       const marketType: MarketType = isUs ? "US" : isBtc ? "BTC" : "KOREA";
       const marketLabel = isUs ? "NASDAQ/NYSE" : isBtc ? "UPBIT KRW" : "KOSPI/KOSDAQ";
 
-      const price = s.price || 0;
-      const rvol = s.rvol || 1.2;
-      const changePct = s.changeRate || 0;
-      const parsedVol = typeof s.volume === "number" ? s.volume : parseInt(String(s.volume || "").replace(/[^0-9]/g, ""), 10) || 0;
-      const candles = realCandleStore.getCachedCandles(s.symbol, "15m");
-      const high52wPrice = candles.length > 0 ? Math.max(...candles.map((c) => c.high)) : price;
+      const monetaryValue = price * volume;
+      const tradingValue = isUs ? monetaryValue / 1_000_000 : monetaryValue / 100_000_000;
 
-      // Calculate dynamic score components based on actual data
+      const previous20 = candles.slice(-21, -1);
+      const previous20High = previous20.length > 0 ? Math.max(...previous20.map((c) => c.high)) : null;
+      const breakout = previous20High != null && price > previous20High && rvol >= 1.5;
+      const ema20 = indicators.ema20;
+      const ema9 = indicators.ema9;
+      const ema50 = indicators.ema50;
+      const nearEma20 = ema20 != null && ema20 > 0 && price >= ema20 && ((price - ema20) / ema20) <= 0.015;
+
+      const relativeStrength = changePct > 0 ? Math.min(15, Math.round(changePct * 1.5)) : 0;
       const rvolScore = Math.min(12, Math.round(rvol * 3));
-      const momentumScore = changePct > 0 ? Math.min(10, Math.round(changePct * 1.5)) : 2;
-      const relativeStrength = Math.min(15, Math.round(7 + changePct));
-      const liquidityScore = parsedVol > 1000000 ? 10 : 7;
-      const emaAlignment = changePct > 0 ? 9 : 5;
-      const adxScore = 7;
-      const high52wScore = Math.min(8, Math.round(8 * (s.price / high52wPrice)));
-      const breakoutScore = rvol >= 2.0 ? 10 : 5;
-      const vcpScore = 5;
-      const pullbackScore = 4;
-      const sectorStrength = 4;
-      const regionalBoost = 4;
-      const riskPenalty = changePct < -5 ? 10 : 0;
+      const liquidityScore = tradingValue >= (isUs ? 20 : 500) ? 10 : tradingValue >= (isUs ? 5 : 100) ? 6 : 2;
+      const emaAlignment = ema9 != null && ema20 != null && ema50 != null
+        ? ema9 > ema20 && ema20 > ema50
+          ? 10
+          : ema9 > ema20
+            ? 5
+            : 0
+        : 0;
+      const adxScore = 0;
+      const high52wScore = 0;
+      const breakoutScore = breakout ? 10 : 0;
+      const vcpScore = 0;
+      const pullbackScore = nearEma20 ? 5 : 0;
+      const momentumScore = changePct > 0 ? Math.min(10, Math.round(changePct * 1.5)) : 0;
+      const sectorStrength = 0;
+      const regionalBoost = 0;
+      const riskPenalty = Math.abs(changePct) > 20 || (indicators.rsi14 != null && indicators.rsi14 > 80) ? 10 : 0;
 
-      const totalScore = Math.min(
-        99,
-        Math.max(
-          15,
-          relativeStrength +
-            rvolScore +
-            liquidityScore +
-            emaAlignment +
-            adxScore +
-            high52wScore +
-            breakoutScore +
-            vcpScore +
-            pullbackScore +
-            momentumScore +
-            sectorStrength +
-            regionalBoost -
-            riskPenalty
-        )
-      );
+      const totalScore = Math.max(0, Math.min(100,
+        relativeStrength + rvolScore + liquidityScore + emaAlignment + adxScore +
+        high52wScore + breakoutScore + vcpScore + pullbackScore + momentumScore +
+        sectorStrength + regionalBoost - riskPenalty
+      ));
 
-      let grade: ScannerGrade = "B";
-      if (totalScore >= 90) grade = "S";
-      else if (totalScore >= 80) grade = "A+";
-      else if (totalScore >= 70) grade = "A";
+      let grade: ScannerGrade = "NO SETUP";
+      if (totalScore >= 70) grade = "A";
+      else if (totalScore >= 60) grade = "B";
+      else if (totalScore >= 45) grade = "WATCH";
 
-      let setup: SetupType = "Volume Breakout";
-      if (rvol >= 2.5 && changePct >= 3.0) setup = "Breakout";
-      else if ((high52wPrice - s.price) / s.price <= 0.03) setup = "52W High";
-      else if (changePct > 0 && changePct < 3.0) setup = "EMA Pullback";
+      let setup: SetupType = "Momentum Continuation";
+      if (breakout) setup = "Breakout";
+      else if (nearEma20) setup = "EMA Pullback";
+      else if (rvol >= 2.0) setup = "Volume Breakout";
 
-      const sparklineData = candles.length >= 5 ? candles.slice(-5).map((c) => c.close) : [s.price, s.price, s.price, s.price, s.price];
+      const sparklineData = candles.slice(-20).map((c) => c.close).filter((v) => Number.isFinite(v) && v > 0);
+      if (sparklineData.length < 5) return;
 
-      return {
+      candidates.push({
         id: `scanned_${s.symbol}_${idx}`,
         rank: idx + 1,
         symbol: s.symbol,
         name: s.name,
         market: marketType,
         marketLabel,
-        price: s.price,
+        price,
         changePct,
-        tradingValue: Math.round((s.price * parsedVol) / 100000000) || 500,
+        tradingValue: Number(tradingValue.toFixed(2)),
         rvol,
-        rsScore: Math.min(99, Math.round(70 + changePct * 2)),
-        adx: 32.5,
-        gapPct: changePct > 0 ? Number((changePct * 0.4).toFixed(1)) : 0,
+        rsScore: Math.round((relativeStrength / 15) * 100),
+        adx: 0,
+        gapPct: 0,
         setup,
-        setupState: totalScore >= 80 ? "ACTIVE" : "CONFIRMED",
+        setupState: totalScore >= 60 ? "ACTIVE" : totalScore >= 45 ? "CONFIRMED" : "FORMING",
         grade,
         scores: {
           relativeStrength,
@@ -176,67 +215,38 @@ export class GlobalStockDiscoveryScannerService {
           totalScore
         },
         catalysts: [
-          `${s.category || "주요 섹터"} 모멘텀 수급`,
-          `RVOL ${rvol}배 거래대금 유입`,
-          `실시간 퀀트 시그널`
+          `검증된 실시간 가격/거래량`,
+          `RVOL ${rvol.toFixed(2)}배`,
+          `15분봉 ${candles.length}개 검증 완료`
         ],
-        v9UnifiedShapeEligible: totalScore >= 72,
-        pipelineStage: totalScore >= 80 ? "TOP_20_CANDIDATE" : "SETUP_PASS",
-        sparklineData: [...sparklineData, s.price]
-      };
+        v9UnifiedShapeEligible: totalScore >= 55,
+        pipelineStage: totalScore >= 60 ? "TOP_20_CANDIDATE" : totalScore >= 45 ? "SETUP_PASS" : "MOMENTUM_PASS",
+        sparklineData
+      });
     });
+
+    return candidates;
   }
 
-  /**
-   * Run the full v10 Global Stock Discovery Pipeline with real dynamic data
-   */
   public static runPipeline(options: PipelineFilterOptions): GlobalScannedStock[] {
     let dataset = this.getDynamicUniverse();
 
-    // Market Filter
-    if (options.market !== "ALL") {
-      dataset = dataset.filter((s) => s.market === options.market);
-    }
+    if (options.market !== "ALL") dataset = dataset.filter((s) => s.market === options.market);
+    if (options.gradeFilter !== "ALL") dataset = dataset.filter((s) => s.grade === options.gradeFilter);
+    if (options.setupFilter !== "ALL") dataset = dataset.filter((s) => s.setup === options.setupFilter);
+    if (options.minScore > 0) dataset = dataset.filter((s) => s.scores.totalScore >= options.minScore);
 
-    // Grade Filter
-    if (options.gradeFilter !== "ALL") {
-      dataset = dataset.filter((s) => s.grade === options.gradeFilter);
-    }
-
-    // Setup Filter
-    if (options.setupFilter !== "ALL") {
-      dataset = dataset.filter((s) => s.setup === options.setupFilter);
-    }
-
-    // Min Score Filter
-    if (options.minScore > 0) {
-      dataset = dataset.filter((s) => s.scores.totalScore >= options.minScore);
-    }
-
-    // Search Query
     if (options.searchQuery.trim().length > 0) {
       const q = options.searchQuery.toLowerCase().trim();
       dataset = dataset.filter(
-        (s) =>
-          s.symbol.toLowerCase().includes(q) ||
-          s.name.toLowerCase().includes(q) ||
-          s.setup.toLowerCase().includes(q)
+        (s) => s.symbol.toLowerCase().includes(q) || s.name.toLowerCase().includes(q) || s.setup.toLowerCase().includes(q)
       );
     }
 
-    // Sort descending by Global Stock Score
     dataset.sort((a, b) => b.scores.totalScore - a.scores.totalScore);
-
-    // Re-assign dynamic rank
-    return dataset.map((item, idx) => ({
-      ...item,
-      rank: idx + 1
-    }));
+    return dataset.map((item, idx) => ({ ...item, rank: idx + 1 }));
   }
 
-  /**
-   * Return Top 20 Global Discovery Candidates for v9 Unified Shape AI
-   */
   public static getTop20Candidates(): GlobalScannedStock[] {
     return this.runPipeline({
       market: "ALL",
