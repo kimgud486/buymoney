@@ -10,9 +10,18 @@ export type BrokerAccountTruthResult = {
 export type BrokerAccountTruthVerdict = {
   verified: boolean;
   reason: string;
+  accountTotal: number | null;
 };
 
 type UnknownRecord = Record<string, unknown>;
+
+function fail(reason: string): BrokerAccountTruthVerdict {
+  return { verified: false, reason, accountTotal: null };
+}
+
+function pass(reason: string, accountTotal: number): BrokerAccountTruthVerdict {
+  return { verified: true, reason, accountTotal };
+}
 
 function asRecord(value: unknown): UnknownRecord | null {
   return value != null && typeof value === "object" && !Array.isArray(value)
@@ -31,43 +40,35 @@ function hasOkStatus(raw: UnknownRecord | null): raw is UnknownRecord {
 
 function validateKorea(raw: UnknownRecord): BrokerAccountTruthVerdict {
   const kisRes = asRecord(raw.kisRes);
-  if (!kisRes) {
-    return { verified: false, reason: "KOREA_RAW_KIS_RESPONSE_MISSING" };
-  }
+  if (!kisRes) return fail("KOREA_RAW_KIS_RESPONSE_MISSING");
 
   // A legitimate zero balance is valid. Missing/null is not converted to zero here.
   const balance = finiteNonNegative(kisRes.balance);
-  if (balance == null) {
-    return { verified: false, reason: "KOREA_BALANCE_EVIDENCE_MISSING" };
-  }
+  if (balance == null) return fail("KOREA_BALANCE_EVIDENCE_MISSING");
 
   if (!Array.isArray(kisRes.positions)) {
-    return { verified: false, reason: "KOREA_POSITIONS_EVIDENCE_MISSING" };
+    return fail("KOREA_POSITIONS_EVIDENCE_MISSING");
   }
 
-  return { verified: true, reason: "KOREA_ACCOUNT_EVIDENCE_VERIFIED" };
+  return pass("KOREA_ACCOUNT_EVIDENCE_VERIFIED", balance);
 }
 
 function validateUs(raw: UnknownRecord): BrokerAccountTruthVerdict {
   const balance = finiteNonNegative(raw.usBal);
-  if (balance == null) {
-    return { verified: false, reason: "US_BALANCE_EVIDENCE_MISSING" };
-  }
+  if (balance == null) return fail("US_BALANCE_EVIDENCE_MISSING");
 
   if (!Array.isArray(raw.usPositions)) {
-    return { verified: false, reason: "US_POSITIONS_EVIDENCE_MISSING" };
+    return fail("US_POSITIONS_EVIDENCE_MISSING");
   }
 
-  return { verified: true, reason: "US_ACCOUNT_EVIDENCE_VERIFIED" };
+  return pass("US_ACCOUNT_EVIDENCE_VERIFIED", balance);
 }
 
 function validateUpbit(raw: UnknownRecord): BrokerAccountTruthVerdict {
   const total = finiteNonNegative(raw.upbitTotal);
-  if (total == null) {
-    return { verified: false, reason: "UPBIT_TOTAL_EVIDENCE_MISSING" };
-  }
+  if (total == null) return fail("UPBIT_TOTAL_EVIDENCE_MISSING");
 
-  return { verified: true, reason: "UPBIT_ACCOUNT_EVIDENCE_VERIFIED" };
+  return pass("UPBIT_ACCOUNT_EVIDENCE_VERIFIED", total);
 }
 
 /**
@@ -83,17 +84,17 @@ export function validateBrokerAccountSyncEvidence(
   result: BrokerAccountTruthResult | null | undefined,
 ): BrokerAccountTruthVerdict {
   if (!result || result.success !== true) {
-    return { verified: false, reason: "BROKER_SYNC_NOT_SUCCESSFUL" };
+    return fail("BROKER_SYNC_NOT_SUCCESSFUL");
   }
 
   const raw = asRecord(result.rawResponse);
   if (!hasOkStatus(raw)) {
-    return { verified: false, reason: "BROKER_RAW_EVIDENCE_MISSING" };
+    return fail("BROKER_RAW_EVIDENCE_MISSING");
   }
 
   if (broker === "korea") return validateKorea(raw);
   if (broker === "us") return validateUs(raw);
   if (broker === "upbit") return validateUpbit(raw);
 
-  return { verified: false, reason: "UNSUPPORTED_BROKER" };
+  return fail("UNSUPPORTED_BROKER");
 }
