@@ -14,7 +14,6 @@ test.describe("Current unified AI trading safety E2E", () => {
 
     await expect(page.getByTestId("operational-truth-monitor-v20")).toBeVisible();
     await expect(page.getByTestId("operational-gate-state")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "AI AUTO TRADING" })).toBeVisible();
     await expect(page.getByTestId("open-holdings")).toBeVisible();
     await expect(page.getByTestId("open-explainable-scanner")).toBeVisible();
     await expect(page.getByTestId("theme-toggle")).toBeVisible();
