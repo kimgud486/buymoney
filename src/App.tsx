@@ -14,6 +14,7 @@ import RealtimeHubStatusStrip from "./components/trading/RealtimeHubStatusStrip"
 import FeedResiliencePolicyBridge from "./components/trading/FeedResiliencePolicyBridge";
 import RealtimeStreamFeedBridge from "./components/trading/RealtimeStreamFeedBridge";
 import OperationalTruthMonitorV20 from "./components/trading/OperationalTruthMonitorV20";
+import AiSignalsResponsiveLayoutFix from "./components/trading/AiSignalsResponsiveLayoutFix";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MainScreenKoreanText } from "./components/MainScreenKoreanText";
 import ElementaryScanExplanationPanel from "./components/ElementaryScanExplanationPanel";
@@ -51,6 +52,51 @@ function MainLayout() {
   }, []);
 
   useEffect(() => {
+    const styleId = "main-technical-chart-expand-style";
+    let styleEl = document.getElementById(styleId) as HTMLStyleElement | null;
+    if (!styleEl) {
+      styleEl = document.createElement("style");
+      styleEl.id = styleId;
+      styleEl.textContent = `
+        [data-main-chart-expanded="true"] [class*="h-[470px]"] {
+          height: 72vh !important;
+          min-height: 620px !important;
+          max-height: 900px !important;
+        }
+        @media (max-width: 1023px) {
+          [data-main-chart-expanded="true"] [class*="h-[470px]"] {
+            height: 68vh !important;
+            min-height: 520px !important;
+          }
+        }
+      `;
+      document.head.appendChild(styleEl);
+    }
+
+    const applyExpandedChartSizing = (centerColumn: HTMLElement) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const fixedSvgCanvas = centerColumn.querySelector('[class*="h-[470px]"]') as HTMLElement | null;
+          if (fixedSvgCanvas) {
+            fixedSvgCanvas.style.height = "72vh";
+            fixedSvgCanvas.style.minHeight = "620px";
+            fixedSvgCanvas.style.maxHeight = "900px";
+          }
+
+          const modeSwitcher = Array.from(centerColumn.querySelectorAll("button")).find((candidate) =>
+            (candidate.textContent || "").includes("캔들 차트 + 기술적 지표"),
+          )?.parentElement?.parentElement as HTMLElement | null;
+          const activeChartRoot = modeSwitcher?.nextElementSibling as HTMLElement | null;
+          if (activeChartRoot) {
+            activeChartRoot.dataset.prevMinHeight = activeChartRoot.dataset.prevMinHeight || activeChartRoot.style.minHeight || "";
+            activeChartRoot.style.minHeight = "68vh";
+          }
+
+          centerColumn.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      });
+    };
+
     const handleChartExpandClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
       const button = target?.closest("button") as HTMLButtonElement | null;
@@ -76,25 +122,9 @@ function MainLayout() {
         centerColumn.style.zIndex = "25";
         centerColumn.style.position = "relative";
 
-        const fixedSvgCanvas = centerColumn.querySelector('[class*="h-[470px]"]') as HTMLElement | null;
-        if (fixedSvgCanvas) {
-          fixedSvgCanvas.dataset.prevHeight = fixedSvgCanvas.style.height || "";
-          fixedSvgCanvas.style.height = "72vh";
-          fixedSvgCanvas.style.minHeight = "620px";
-        }
-
-        const modeSwitcher = button.parentElement?.parentElement as HTMLElement | null;
-        const activeChartRoot = modeSwitcher?.nextElementSibling as HTMLElement | null;
-        if (activeChartRoot) {
-          activeChartRoot.dataset.prevMinHeight = activeChartRoot.style.minHeight || "";
-          activeChartRoot.style.minHeight = "68vh";
-        }
-
         button.setAttribute("aria-pressed", "true");
         button.title = "다시 누르면 메인 차트가 원래 크기로 줄어듭니다";
-        requestAnimationFrame(() => {
-          centerColumn.scrollIntoView({ behavior: "smooth", block: "start" });
-        });
+        applyExpandedChartSizing(centerColumn);
       } else {
         centerColumn.style.gridColumn = centerColumn.dataset.prevGridColumn || "";
         centerColumn.style.zIndex = centerColumn.dataset.prevZIndex || "";
@@ -102,8 +132,9 @@ function MainLayout() {
 
         const fixedSvgCanvas = centerColumn.querySelector('[class*="h-[470px]"]') as HTMLElement | null;
         if (fixedSvgCanvas) {
-          fixedSvgCanvas.style.height = fixedSvgCanvas.dataset.prevHeight || "";
+          fixedSvgCanvas.style.height = "";
           fixedSvgCanvas.style.minHeight = "";
+          fixedSvgCanvas.style.maxHeight = "";
         }
 
         const modeSwitcher = button.parentElement?.parentElement as HTMLElement | null;
@@ -118,7 +149,10 @@ function MainLayout() {
     };
 
     document.addEventListener("click", handleChartExpandClick);
-    return () => document.removeEventListener("click", handleChartExpandClick);
+    return () => {
+      document.removeEventListener("click", handleChartExpandClick);
+      document.getElementById(styleId)?.remove();
+    };
   }, []);
 
   return (
@@ -127,6 +161,7 @@ function MainLayout() {
       <RealtimeMarketStreamManager />
       <RealtimeStreamFeedBridge />
       <FeedResiliencePolicyBridge />
+      <AiSignalsResponsiveLayoutFix />
 
       <ErrorBoundary>
         <RealtimeHubStatusStrip />

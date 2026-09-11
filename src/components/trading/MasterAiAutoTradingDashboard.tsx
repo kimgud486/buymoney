@@ -1818,14 +1818,35 @@ export const MasterAiAutoTradingDashboard: React.FC<{
               name={currentStock.name}
               market={currentStock.market === "US" ? "US" : currentStock.market === "UPBIT" ? "UPBIT" : "KOREA"}
               initialPrice={currentStock.price}
-              initialCandles={candles.map(c => ({
-                time: typeof c.time === "number" ? c.time : Math.floor(new Date(c.time).getTime() / 1000),
-                open: c.open,
-                high: c.high,
-                low: c.low,
-                close: c.close,
-                volume: c.volume
-              }))}
+              initialCandles={candles.map((c, idx) => {
+                let sec: number;
+                if (typeof c.time === "number") {
+                  sec = c.time;
+                } else if (typeof c.time === "string") {
+                  const pNum = Number(c.time);
+                  if (Number.isFinite(pNum) && pNum > 0) {
+                    sec = pNum;
+                  } else {
+                    sec = Math.floor(new Date(c.time).getTime() / 1000);
+                  }
+                } else {
+                  sec = 0;
+                }
+                if (!Number.isFinite(sec) || sec <= 0) {
+                  sec = Math.floor(Date.now() / 1000) - (candles.length - idx) * 60;
+                }
+                if (sec > 10_000_000_000) {
+                  sec = Math.floor(sec / 1000);
+                }
+                return {
+                  time: sec,
+                  open: Number(c.open) || 0,
+                  high: Number(c.high) || 0,
+                  low: Number(c.low) || 0,
+                  close: Number(c.close) || 0,
+                  volume: Math.max(0, Number(c.volume) || 0)
+                };
+              })}
               isWhiteTheme={isWhiteTheme}
               onStateChange={(state, conf) => {
                 setLiveTradingState(state);

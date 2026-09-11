@@ -25,6 +25,9 @@ test("final HTTP decision rebuilds True MTF on the server and never trusts clien
   assert.match(handler, /trueMtf: serverTrueMtf/);
   assert.match(handler, /mtfAuthority: "SERVER_OWNED"/);
   assert.match(provider, /aggregateOneMinuteToThreeMinuteV20/);
-  assert.match(provider, /dataStatus: derived \? "REALTIME_DERIVED" : "REALTIME_VERIFIED"/);
+  assert.match(provider, /payload\.dataStatus !== "REALTIME_VERIFIED"/);
+  assert.match(provider, /payload\.dataStatus !== "REALTIME_DERIVED"/);
+  assert.match(provider, /buildSnapshot\("3m", derived3,[^\n]+"REALTIME_DERIVED"\)/);
+  assert.doesNotMatch(provider, /derived \? "REALTIME_DERIVED" : "REALTIME_VERIFIED"/);
   assert.match(provider, /rows\.length !== 3/);
 });

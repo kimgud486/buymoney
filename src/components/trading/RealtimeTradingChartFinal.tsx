@@ -184,13 +184,33 @@ export const RealtimeTradingChartFinal: React.FC<RealtimeTradingChartFinalProps>
       const markers: SeriesMarker<Time>[] = [];
 
       candles.forEach((c, idx) => {
-        const timeVal = typeof c.time === "number" ? (c.time as Time) : (c.time as Time);
+        let sec: number;
+        if (typeof c.time === "number") {
+          sec = c.time;
+        } else if (typeof c.time === "string") {
+          const pNum = Number(c.time);
+          if (Number.isFinite(pNum) && pNum > 0) {
+            sec = pNum;
+          } else {
+            sec = Math.floor(new Date(c.time).getTime() / 1000);
+          }
+        } else {
+          sec = 0;
+        }
+        if (!Number.isFinite(sec) || sec <= 0) {
+          sec = Math.floor(Date.now() / 1000) - (candles.length - idx) * 300;
+        }
+        if (sec > 10_000_000_000) {
+          sec = Math.floor(sec / 1000);
+        }
+
+        const timeVal = sec as Time;
         candleData.push({
           time: timeVal,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close
+          open: Number(c.open) || 0,
+          high: Number(c.high) || 0,
+          low: Number(c.low) || 0,
+          close: Number(c.close) || 0
         });
 
         volumeData.push({

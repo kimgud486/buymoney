@@ -29,7 +29,8 @@ export interface AutonomousScanResult {
  *
  * IMPORTANT:
  * The orchestrator's policy remains authoritative. The default policy is
- * SIGNAL_ONLY, so this pipeline does not silently enable live orders.
+ * LIVE_RESTRICTED, so only candidates that pass the realtime/risk gates can
+ * reach the broker order manager.
  */
 export class AutonomousScanPipeline {
   constructor(private orchestrator: AutonomousTradingOrchestrator) {}

@@ -28,10 +28,19 @@ test.describe("Current unified AI trading safety E2E", () => {
     await expect(page.getByRole("button", { name: /PAPER/ })).toHaveCount(0);
   });
 
-  test("removed legacy Safe AI launcher stays unmounted", async ({ page }) => {
+  test("Safe AI auto monitor is OFF by default and becomes active only after user opt-in", async ({ page }) => {
     await openCurrentDashboard(page);
 
     await expect(page.getByTestId("safe-ai-autotrade-launcher")).toHaveCount(0);
-    await expect(page.getByTestId("open-explainable-scanner")).toBeVisible();
+    await page.getByTestId("open-explainable-scanner").click();
+
+    await expect(page.getByTestId("safe-ai-autotrade-launcher")).toBeVisible();
+    await expect(page.getByTestId("safe-ai-auto-toggle")).toBeVisible();
+    await expect(page.getByTestId("safe-ai-auto-toggle")).toHaveAttribute("aria-pressed", "false");
+    await expect(page.getByText(/SCAN ONLY · AUTO OFF/).first()).toBeVisible();
+
+    await page.getByTestId("safe-ai-auto-toggle").click();
+    await expect(page.getByTestId("safe-ai-auto-toggle")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByText(/LIVE_RESTRICTED · AUTO 15s/).first()).toBeVisible();
   });
 });

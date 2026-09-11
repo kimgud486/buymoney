@@ -33,6 +33,14 @@ export function generateForecastPath(
   const last = candles[candles.length - 1];
   if (!last) return [];
 
+  let lastTime = Number(last.time);
+  if (!Number.isFinite(lastTime) || lastTime <= 0) {
+    lastTime = Math.floor(Date.now() / 1000);
+  }
+  if (lastTime > 10_000_000_000) {
+    lastTime = Math.floor(lastTime / 1000);
+  }
+
   const safeClose = Number.isFinite(last.close) && last.close > 0 ? last.close : 0;
   if (safeClose === 0) return [];
 
@@ -80,13 +88,19 @@ export function generateForecastPath(
   let stepSec = 60;
   if (candles.length >= 2) {
     const prev = candles[candles.length - 2];
-    const diff = Math.abs(last.time - prev.time);
-    if (diff > 0 && diff <= 86400) {
-      stepSec = diff;
+    let prevTime = Number(prev.time);
+    if (prevTime > 10_000_000_000) prevTime = Math.floor(prevTime / 1000);
+    if (Number.isFinite(prevTime) && prevTime > 0) {
+      const diff = Math.abs(lastTime - prevTime);
+      if (diff > 0 && diff <= 86400) {
+        stepSec = diff;
+      }
     }
   }
 
+  let runningTime = lastTime;
   for (let i = 1; i <= horizon; i++) {
+    runningTime += stepSec;
     // Exponential decay of current momentum into the future
     const decay = Math.exp(-0.15 * i);
     const drift = safeAtr * safeStrength * decay * 0.35;
@@ -104,13 +118,19 @@ export function generateForecastPath(
     const upperVal = Math.round((projected + uncertainty) * 100) / 100;
     const lowerVal = Math.round((projected - uncertainty) * 100) / 100;
 
-    if (Number.isFinite(predictedVal) && Number.isFinite(upperVal) && Number.isFinite(lowerVal)) {
+    if (
+      Number.isFinite(runningTime) &&
+      runningTime > 0 &&
+      Number.isFinite(predictedVal) &&
+      Number.isFinite(upperVal) &&
+      Number.isFinite(lowerVal)
+    ) {
       results.push({
-        time: last.time + i * stepSec,
+        time: runningTime,
         predicted: predictedVal,
         upper: upperVal,
         lower: lowerVal,
-        probabilityUp, // Heuristic direction score
+        probabilityUp,
         probabilityDown
       });
     }

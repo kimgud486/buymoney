@@ -90,7 +90,14 @@ export const VerifiedSignalOverlayChart: React.FC<Props> = ({ symbol, result }) 
           .slice(0, -1);
 
         if (!containerRef.current || cancelled || normalized.length < 20) return;
-        chartRef.current?.remove();
+        if (chartRef.current) {
+          try {
+            chartRef.current.remove();
+          } catch {
+            // Ignore if disposed
+          }
+          chartRef.current = null;
+        }
 
         const chart = createChart(containerRef.current, {
           height: 420,
@@ -150,8 +157,13 @@ export const VerifiedSignalOverlayChart: React.FC<Props> = ({ symbol, result }) 
 
         chart.timeScale().fitContent();
         resizeObserver = new ResizeObserver((entries) => {
-          const width = entries[0]?.contentRect.width;
-          if (width) chart.applyOptions({ width });
+          if (cancelled) return;
+          try {
+            const width = entries[0]?.contentRect.width;
+            if (width && chartRef.current) chart.applyOptions({ width });
+          } catch {
+            // Ignore if disposed
+          }
         });
         resizeObserver.observe(containerRef.current);
       } catch (e: any) {
@@ -164,9 +176,19 @@ export const VerifiedSignalOverlayChart: React.FC<Props> = ({ symbol, result }) 
     run();
     return () => {
       cancelled = true;
-      resizeObserver?.disconnect();
-      chartRef.current?.remove();
-      chartRef.current = null;
+      try {
+        resizeObserver?.disconnect();
+      } catch {
+        // Ignore
+      }
+      if (chartRef.current) {
+        try {
+          chartRef.current.remove();
+        } catch {
+          // Ignore if disposed
+        }
+        chartRef.current = null;
+      }
     };
   }, [symbol, result]);
 

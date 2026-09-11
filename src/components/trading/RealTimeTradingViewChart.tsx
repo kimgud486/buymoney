@@ -69,6 +69,66 @@ export interface RealTimeTradingViewChartProps {
   className?: string;
 }
 
+// Helper to sanitize, filter finite values/times, sort ascending, and deduplicate time series data for lightweight-charts
+function sanitizeTimeSeriesData<T extends { time: Time; value?: number; open?: number; high?: number; low?: number; close?: number }>(
+  items: T[]
+): T[] {
+  if (!Array.isArray(items) || items.length === 0) return [];
+
+  const valid: T[] = [];
+  for (const item of items) {
+    if (!item) continue;
+    let sec = typeof item.time === "number" ? item.time : Math.floor(new Date(item.time as any).getTime() / 1000);
+    if (!Number.isFinite(sec) || sec <= 0) continue;
+    if (sec > 10_000_000_000) sec = Math.floor(sec / 1000);
+
+    if ("open" in item) {
+      const o = Number(item.open);
+      const h = Number(item.high);
+      const l = Number(item.low);
+      const c = Number(item.close);
+      if (
+        !Number.isFinite(o) ||
+        !Number.isFinite(h) ||
+        !Number.isFinite(l) ||
+        !Number.isFinite(c) ||
+        o <= 0 ||
+        h <= 0 ||
+        l <= 0 ||
+        c <= 0
+      ) {
+        continue;
+      }
+      valid.push({ ...item, time: sec as Time, open: o, high: h, low: l, close: c });
+    } else if ("value" in item) {
+      const v = Number(item.value);
+      if (!Number.isFinite(v) || v <= 0) continue;
+      valid.push({ ...item, time: sec as Time, value: v });
+    } else {
+      valid.push({ ...item, time: sec as Time });
+    }
+  }
+
+  valid.sort((a, b) => (a.time as number) - (b.time as number));
+
+  const result: T[] = [];
+  let prevTime = 0;
+  for (const item of valid) {
+    const t = item.time as number;
+    if (result.length === 0) {
+      result.push(item);
+      prevTime = t;
+    } else if (t > prevTime) {
+      result.push(item);
+      prevTime = t;
+    } else if (t === prevTime) {
+      result[result.length - 1] = item;
+    }
+  }
+
+  return result;
+}
+
 export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> = ({
   symbol,
   name,
@@ -175,19 +235,24 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
   // Convert initial candles to clean LiveCandle array (Return empty if no real initial candles)
   const normalizedInitialCandles: LiveCandle[] = useMemo(() => {
     if (initialCandles && initialCandles.length > 0) {
-      return initialCandles.map(c => {
-        let sec = typeof c.time === "number" ? c.time : Math.floor(new Date(c.time).getTime() / 1000);
-        if (sec > 10_000_000_000) sec = Math.floor(sec / 1000);
-        return {
-          time: sec,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-          volume: c.volume,
-          isClosed: true
-        };
-      }).sort((a, b) => a.time - b.time);
+      const raw = initialCandles.map(c => ({
+        time: c.time as Time,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        volume: c.volume
+      }));
+      const sanitized = sanitizeTimeSeriesData(raw);
+      return sanitized.map(c => ({
+        time: c.time as number,
+        open: c.open!,
+        high: c.high!,
+        low: c.low!,
+        close: c.close!,
+        volume: Math.max(0, Number((c as any).volume) || 0),
+        isClosed: true
+      }));
     }
     // LIVE MODE ENFORCEMENT: No synthetic seed candle generation!
     return [];
@@ -458,44 +523,41 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
     try {
       if (forecastSeriesRef.current && bullForecastSeriesRef.current && bearForecastSeriesRef.current) {
         forecastSeriesRef.current.setData(
-          forecast
-            .map(p => ({ time: p.time as Time, value: p.predicted }))
-            .filter((p): p is { time: Time; value: number } => Number.isFinite(p.value) && p.value > 0)
+          sanitizeTimeSeriesData(forecast.map(p => ({ time: p.time as Time, value: p.predicted })))
         );
         bullForecastSeriesRef.current.setData(
-          forecast
-            .map(p => ({ time: p.time as Time, value: p.upper }))
-            .filter((p): p is { time: Time; value: number } => Number.isFinite(p.value) && p.value > 0)
+          sanitizeTimeSeriesData(forecast.map(p => ({ time: p.time as Time, value: p.upper })))
         );
         bearForecastSeriesRef.current.setData(
-          forecast
-            .map(p => ({ time: p.time as Time, value: p.lower }))
-            .filter((p): p is { time: Time; value: number } => Number.isFinite(p.value) && p.value > 0)
+          sanitizeTimeSeriesData(forecast.map(p => ({ time: p.time as Time, value: p.lower })))
         );
       }
 
-      // 7. Update indicator series lines
-      if (ema9SeriesRef.current && Number.isFinite(indicators.ema9) && indicators.ema9 > 0) {
-        ema9SeriesRef.current.update({ time: closedCandle.time as Time, value: indicators.ema9 });
-      }
-      if (ema20SeriesRef.current && Number.isFinite(indicators.ema20) && indicators.ema20 > 0) {
-        ema20SeriesRef.current.update({ time: closedCandle.time as Time, value: indicators.ema20 });
-      }
-      if (vwapSeriesRef.current && Number.isFinite(indicators.vwap) && indicators.vwap > 0) {
-        vwapSeriesRef.current.update({ time: closedCandle.time as Time, value: indicators.vwap });
-      }
+      const closedSec = Number(closedCandle.time);
+      if (Number.isFinite(closedSec) && closedSec > 0) {
+        // 7. Update indicator series lines
+        if (ema9SeriesRef.current && Number.isFinite(indicators.ema9) && indicators.ema9 > 0) {
+          ema9SeriesRef.current.update({ time: closedSec as Time, value: indicators.ema9 });
+        }
+        if (ema20SeriesRef.current && Number.isFinite(indicators.ema20) && indicators.ema20 > 0) {
+          ema20SeriesRef.current.update({ time: closedSec as Time, value: indicators.ema20 });
+        }
+        if (vwapSeriesRef.current && Number.isFinite(indicators.vwap) && indicators.vwap > 0) {
+          vwapSeriesRef.current.update({ time: closedSec as Time, value: indicators.vwap });
+        }
 
-      // 8. Update marker if special event happened
-      if (markersRef.current && (nextState === "BUY" || nextState === "SELL" || nextState === "SELL_WATCH" || nextState === "PROFIT_HOLD")) {
-        const currentMarkers = markersRef.current.markers() || [];
-        const newMarker = {
-          time: closedCandle.time as Time,
-          position: nextState === "BUY" ? "belowBar" : "aboveBar",
-          color: nextState === "BUY" ? "#10b981" : nextState === "PROFIT_HOLD" ? "#06b6d4" : nextState === "SELL_WATCH" ? "#f59e0b" : "#ef4444",
-          shape: nextState === "BUY" ? "arrowUp" : nextState === "PROFIT_HOLD" ? "circle" : nextState === "SELL_WATCH" ? "square" : "arrowDown",
-          text: `${nextState} (${confidenceScore}%)`
-        };
-        markersRef.current.setMarkers([...currentMarkers.slice(-20), newMarker]);
+        // 8. Update marker if special event happened
+        if (markersRef.current && (nextState === "BUY" || nextState === "SELL" || nextState === "SELL_WATCH" || nextState === "PROFIT_HOLD")) {
+          const currentMarkers = markersRef.current.markers() || [];
+          const newMarker = {
+            time: closedSec as Time,
+            position: nextState === "BUY" ? "belowBar" : "aboveBar",
+            color: nextState === "BUY" ? "#10b981" : nextState === "PROFIT_HOLD" ? "#06b6d4" : nextState === "SELL_WATCH" ? "#f59e0b" : "#ef4444",
+            shape: nextState === "BUY" ? "arrowUp" : nextState === "PROFIT_HOLD" ? "circle" : nextState === "SELL_WATCH" ? "square" : "arrowDown",
+            text: `${nextState} (${confidenceScore}%)`
+          };
+          markersRef.current.setMarkers([...currentMarkers.slice(-20), newMarker]);
+        }
       }
     } catch {
       // Ignore if chart is disposed
@@ -574,13 +636,15 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
 
     // Populate historical candles
     candleSeries.setData(
-      historyRef.current.map(c => ({
-        time: c.time as Time,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close
-      }))
+      sanitizeTimeSeriesData(
+        historyRef.current.map(c => ({
+          time: c.time as Time,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close
+        }))
+      )
     );
 
     // Markers setup
@@ -600,11 +664,13 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
       }
     });
     volumeSeries.setData(
-      historyRef.current.map(c => ({
-        time: c.time as Time,
-        value: c.volume,
-        color: c.close >= c.open ? (isKrx ? "#ef444433" : "#10b98133") : (isKrx ? "#3b82f633" : "#f43f5e33")
-      }))
+      sanitizeTimeSeriesData(
+        historyRef.current.map(c => ({
+          time: c.time as Time,
+          value: c.volume,
+          color: c.close >= c.open ? (isKrx ? "#ef444433" : "#10b98133") : (isKrx ? "#3b82f633" : "#f43f5e33")
+        }))
+      )
     );
 
     // 3. EMA 9 (Amber) & EMA 20 (Cyan)
@@ -635,28 +701,28 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
     const initialCloses = historyRef.current.map(c => c.close);
 
     ema9Series.setData(
-      historyRef.current
-        .map((c, idx) => ({
+      sanitizeTimeSeriesData(
+        historyRef.current.map((c, idx) => ({
           time: c.time as Time,
           value: IndicatorEngine.calcEMA(initialCloses.slice(0, idx + 1), 9)
         }))
-        .filter((p): p is { time: Time; value: number } => Number.isFinite(p.value) && p.value > 0)
+      )
     );
 
     ema20Series.setData(
-      historyRef.current
-        .map((c, idx) => ({
+      sanitizeTimeSeriesData(
+        historyRef.current.map((c, idx) => ({
           time: c.time as Time,
           value: IndicatorEngine.calcEMA(initialCloses.slice(0, idx + 1), 20)
         }))
-        .filter((p): p is { time: Time; value: number } => Number.isFinite(p.value) && p.value > 0)
+      )
     );
 
     let runningCumVol = 0;
     let runningCumVolP = 0;
     vwapSeries.setData(
-      historyRef.current
-        .map(c => {
+      sanitizeTimeSeriesData(
+        historyRef.current.map(c => {
           runningCumVol += c.volume;
           runningCumVolP += ((c.high + c.low + c.close) / 3) * c.volume;
           return {
@@ -664,7 +730,7 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
             value: runningCumVol > 0 ? Math.round((runningCumVolP / runningCumVol) * 100) / 100 : c.close
           };
         })
-        .filter((p): p is { time: Time; value: number } => Number.isFinite(p.value) && p.value > 0)
+      )
     );
 
     // 5. AI Forecast Paths (Base: dashed purple, Bull: dotted green, Bear: dotted red)
@@ -705,19 +771,13 @@ export const RealTimeTradingViewChart: React.FC<RealTimeTradingViewChartProps> =
     const initForecast = generateForecastPath(historyRef.current, initialIndicators, 8);
     setLastForecast(initForecast);
     forecastSeries.setData(
-      initForecast
-        .map(p => ({ time: p.time as Time, value: p.predicted }))
-        .filter((p): p is { time: Time; value: number } => Number.isFinite(p.value) && p.value > 0)
+      sanitizeTimeSeriesData(initForecast.map(p => ({ time: p.time as Time, value: p.predicted })))
     );
     bullForecastSeries.setData(
-      initForecast
-        .map(p => ({ time: p.time as Time, value: p.upper }))
-        .filter((p): p is { time: Time; value: number } => Number.isFinite(p.value) && p.value > 0)
+      sanitizeTimeSeriesData(initForecast.map(p => ({ time: p.time as Time, value: p.upper })))
     );
     bearForecastSeries.setData(
-      initForecast
-        .map(p => ({ time: p.time as Time, value: p.lower }))
-        .filter((p): p is { time: Time; value: number } => Number.isFinite(p.value) && p.value > 0)
+      sanitizeTimeSeriesData(initForecast.map(p => ({ time: p.time as Time, value: p.lower })))
     );
 
     // Fit content smoothly
