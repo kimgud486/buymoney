@@ -19,9 +19,11 @@ test.describe("Stock GPT verified-data safety E2E", () => {
     await expect(page.getByRole("button", { name: /오늘의 강한 종목 찾아줘/ })).toBeVisible();
 
     await expect(page.getByRole("button", { name: "새 분석" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "이전 대화" })).toBeVisible();
     await expect(page.getByRole("button", { name: "관심종목" })).toBeVisible();
     await expect(page.getByRole("button", { name: "보유종목" })).toBeVisible();
     await expect(page.getByRole("button", { name: "실시간 스캐너" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "알림 기록" })).toBeVisible();
     await expect(page.getByText("시장 상태", { exact: true })).toBeVisible();
     await expect(page.getByText("강한 섹터/테마 TOP 5", { exact: true })).toBeVisible();
     await expect(page.getByText("실시간 급상승 종목", { exact: true })).toBeVisible();
@@ -30,7 +32,7 @@ test.describe("Stock GPT verified-data safety E2E", () => {
     await expect(page.getByTestId("operational-truth-monitor-v20")).toHaveCount(1);
   });
 
-  test("existing features open in the approved center workspace and scanner truth stack stays connected", async ({ page }) => {
+  test("existing features open in the approved center workspace and truth modules stay connected", async ({ page }) => {
     await openStockGpt(page);
 
     await page.getByRole("button", { name: "관심종목" }).click();
@@ -38,6 +40,10 @@ test.describe("Stock GPT verified-data safety E2E", () => {
 
     await page.getByRole("button", { name: "보유종목" }).click();
     await expect(page.getByTestId("stock-gpt-holdings-panel")).toBeVisible();
+
+    await page.getByRole("button", { name: "이전 대화" }).click();
+    await expect(page.getByTestId("stock-gpt-history-panel")).toBeVisible();
+    await expect(page.getByTestId("stock-gpt-transaction-history")).toBeVisible();
 
     await page.getByRole("button", { name: "실시간 스캐너" }).click();
     await expect(page.getByTestId("stock-gpt-real-scanner-panel")).toBeVisible();
@@ -48,6 +54,7 @@ test.describe("Stock GPT verified-data safety E2E", () => {
 
     await page.getByRole("button", { name: "알림 기록" }).click();
     await expect(page.getByTestId("stock-gpt-alerts-panel")).toBeVisible();
+    await expect(page.getByTestId("stock-gpt-live-volatility-alerts")).toBeVisible();
   });
 
   test("direct auto-order controls are absent from the Stock GPT landing screen", async ({ page }) => {
