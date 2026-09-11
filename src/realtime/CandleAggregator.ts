@@ -134,12 +134,13 @@ export class CandleAggregator {
       return {
         updatedCandle: this.currentCandle,
         completedCandle,
-        candle: this.currentCandle,
+        // Existing chart calls onClosedCandle(res.candle) when closed=true.
+        // Return the completed bar here so indicators never run on an unclosed bar.
+        candle: completedCandle,
         closed: true
       };
     }
 
-    // Ignore seriously out-of-order ticks from an older candle slot.
     if (slotStartMs < this.currentSlotMs) {
       return {
         updatedCandle: this.currentCandle,
