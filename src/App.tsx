@@ -9,17 +9,12 @@ import { PricePulseProvider } from "./context/PricePulseContext";
 import { ToastContainer } from "./components/ToastContainer";
 import { RealtimeMarketStreamManager } from "./components/RealtimeMarketStreamManager";
 import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecuritiesConsensusModal";
-import { MasterAiAutoTradingDashboard } from "./components/trading/MasterAiAutoTradingDashboard";
-import RealtimeHubStatusStrip from "./components/trading/RealtimeHubStatusStrip";
 import FeedResiliencePolicyBridge from "./components/trading/FeedResiliencePolicyBridge";
 import RealtimeStreamFeedBridge from "./components/trading/RealtimeStreamFeedBridge";
 import OperationalTruthMonitorV20 from "./components/trading/OperationalTruthMonitorV20";
-import AiSignalsResponsiveLayoutFix from "./components/trading/AiSignalsResponsiveLayoutFix";
 import VerifiedTimeframeFetchBridge from "./components/trading/VerifiedTimeframeFetchBridge";
-import ScannerGraphButtonBridge from "./components/trading/ScannerGraphButtonBridge";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { MainScreenKoreanText } from "./components/MainScreenKoreanText";
-import ElementaryScanExplanationPanel from "./components/ElementaryScanExplanationPanel";
+import StockGPTShell from "./components/trading/StockGPTShell";
 import { v11ExecutionEngine } from "./components/AistockV11ExecutionConsole";
 
 function MainLayout() {
@@ -31,18 +26,19 @@ function MainLayout() {
       localStorage.removeItem("AISTOCK_SECURITY_PIN");
       localStorage.removeItem("AISTOCK_SECURITY_PHONE");
       sessionStorage.removeItem("AISTOCK_SESSION_UNLOCKED");
-    } catch (e) {
-      // ignore
+    } catch {
+      // Browser storage can be unavailable in restricted environments.
     }
 
+    // Preserve the existing execution engine state, but do not auto-approve orders.
     v11ExecutionEngine.setTradingMode("LIVE", false);
 
     document.body.style.overflow = "";
     document.body.style.position = "";
     document.documentElement.style.overflow = "";
 
-    const handleOpenConsensus = (e: Event) => {
-      const customEvent = e as CustomEvent<string>;
+    const handleOpenConsensus = (event: Event) => {
+      const customEvent = event as CustomEvent<string>;
       if (customEvent.detail) setConsensusSelectedSymbol(customEvent.detail);
       setIsConsensusModalOpen(true);
     };
@@ -54,34 +50,22 @@ function MainLayout() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans relative">
-      <MainScreenKoreanText />
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans relative">
+      {/* Existing live-data bridges stay mounted behind the redesigned UI. */}
       <VerifiedTimeframeFetchBridge />
       <RealtimeMarketStreamManager />
       <RealtimeStreamFeedBridge />
       <FeedResiliencePolicyBridge />
-      <AiSignalsResponsiveLayoutFix />
-      <ScannerGraphButtonBridge />
+
+      {/* Keep operational truth checks alive without exposing the legacy dashboard chrome. */}
+      <div className="hidden" aria-hidden="true">
+        <ErrorBoundary>
+          <OperationalTruthMonitorV20 />
+        </ErrorBoundary>
+      </div>
 
       <ErrorBoundary>
-        <RealtimeHubStatusStrip />
-      </ErrorBoundary>
-
-      <ErrorBoundary>
-        <OperationalTruthMonitorV20 />
-      </ErrorBoundary>
-
-      <ErrorBoundary>
-        <ElementaryScanExplanationPanel />
-      </ErrorBoundary>
-
-      <ErrorBoundary>
-        <MasterAiAutoTradingDashboard
-          onOpenConsensusModal={(sym) => {
-            setConsensusSelectedSymbol(sym);
-            setIsConsensusModalOpen(true);
-          }}
-        />
+        <StockGPTShell />
       </ErrorBoundary>
 
       <ToastContainer />
