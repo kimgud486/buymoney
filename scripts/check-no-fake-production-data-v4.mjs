@@ -1,5 +1,6 @@
 // ----------------------------------------------------------------------
-// ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V6 (AISTOCK V21.2 TRUTH-FIRST)
+// ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V9 (AISTOCK V21.2 TRUTH-FIRST)
+// Protects realtime truth, scanner counts, and market-readiness diagnostics.
 // ----------------------------------------------------------------------
 
 import fs from "node:fs";
@@ -49,6 +50,57 @@ function auditPresetFixture() {
   ];
   if (requiredEmptyExports.some((rule) => !rule.test(text))) {
     fail("src/data/presetStocks.ts must keep production preset/demo stock arrays empty");
+  }
+}
+
+function auditRealtimeMarketBridge() {
+  const bridgePath = path.resolve("src/hooks/useMarketDataBridge.ts");
+  if (!fs.existsSync(bridgePath)) return;
+  const text = fs.readFileSync(bridgePath, "utf8");
+  const forbiddenBridgeShapes = [
+    "isConnected: true,\n    latencyMs: 18",
+    "bufferCount: 128",
+    "currentTick?.price || 50000",
+    "currentTick?.changePct || 1.5",
+    "data.volume || \"1.2M\"",
+    "q.volume || \"1.2M\"",
+    "rvol: Number(data.rvol || 2.5)",
+    "rvol: 2.5",
+    "Math.round(110 + (Math.random() - 0.45) * 20)",
+    "Math.round(price * 1.02)",
+    "Math.round(price * 0.98)",
+    "AI 오토트레이딩 ${signal.type} 시그널 포착"
+  ];
+  for (const shape of forbiddenBridgeShapes) {
+    if (text.includes(shape)) fail(`REALTIME MARKET BRIDGE SYNTHETIC FALLBACK FOUND: ${shape}`);
+  }
+}
+
+function auditScannerUiTruth() {
+  const scannerPath = path.resolve("src/components/ExplainableOpportunityScanner.tsx");
+  if (!fs.existsSync(scannerPath)) return;
+  const text = fs.readFileSync(scannerPath, "utf8");
+  const forbiddenScannerShapes = [
+    "data.totalScanned || 29",
+    "data.totalScanned ?? 29",
+    "15개 하드조건",
+    "YES 승인 조건: Profit Opportunity Score 82점",
+    "ON (🔥 82점+)"
+  ];
+  for (const shape of forbiddenScannerShapes) {
+    if (text.includes(shape)) fail(`SCANNER UI TRUTH VIOLATION FOUND: ${shape}`);
+  }
+
+  const requiredDiagnosticShapes = [
+    "/api/ai/hot-list",
+    "liveQuoteReady",
+    "candle15mReady",
+    "시장 준비상태 진단",
+    "실행등급 실시간 시세가 아직 들어오지 않았습니다.",
+    "15분봉 20개가 아직 준비되지 않았습니다."
+  ];
+  for (const shape of requiredDiagnosticShapes) {
+    if (!text.includes(shape)) fail(`SCANNER READINESS DIAGNOSTIC MISSING: ${shape}`);
   }
 }
 
@@ -108,12 +160,14 @@ function scanFile(fullPath) {
   }
 }
 
-console.log("🔍 Running Production Zero Fake Data Audit V6...");
+console.log("🔍 Running Production Zero Fake Data Audit V9...");
 auditPresetFixture();
+auditRealtimeMarketBridge();
+auditScannerUiTruth();
 auditServerTruthRoutes();
 for (const rootPath of ROOTS) scanPath(rootPath);
 if (failed) {
-  console.error("💥 Zero Fake Data Audit V6 FAILED!");
+  console.error("💥 Zero Fake Data Audit V9 FAILED!");
   process.exit(1);
 }
-console.log("✅ Production Zero Fake Data Audit V6 PASSED cleanly.");
+console.log("✅ Production Zero Fake Data Audit V9 PASSED cleanly.");
