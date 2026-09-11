@@ -140,7 +140,10 @@ export const StockSearchAndAddModal: React.FC<StockSearchAndAddModalProps> = ({
     );
 
     saveCustomStock(newStock);
-    realtimeMarketFeedService.registerSymbol(newStock.symbol, regMarket === "US" ? "US" : regMarket === "UPBIT" ? "UPBIT" : "KOSPI");
+    realtimeMarketFeedService.registerSymbol(
+      newStock.symbol,
+      regMarket === "US" ? "US" : regMarket === "UPBIT" ? "UPBIT" : regMarket === "KOSDAQ" ? "KOSDAQ" : "KOSPI",
+    );
     alert(`[${newStock.name}(${newStock.symbol})] 종목 메타정보를 등록했습니다. 실제 시세가 확인되기 전까지 가격은 NO_DATA입니다.`);
     setRegName("");
     setRegSymbol("");
