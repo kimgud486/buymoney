@@ -43,6 +43,15 @@ interface CandidateExecutionUi {
   message: string;
 }
 
+interface AutoOrderSizing {
+  qty: number;
+  availableCash: number;
+  estimatedCost: number;
+  riskBudget: number;
+  riskPerUnit: number;
+  reason?: string;
+}
+
 const MARKET_LABEL: Record<ScanMarket, string> = {
   ALL: "전체",
   KOREA: "국내",
@@ -54,6 +63,7 @@ const MAX_SCAN_AGE_MS = 5 * 60 * 1000;
 const MAX_FUTURE_CLOCK_SKEW_MS = 60 * 1000;
 const AUTO_SCAN_INTERVAL_MS = 15_000;
 const SAME_SYMBOL_ORDER_COOLDOWN_MS = 60_000;
+const CASH_SAFETY_BUFFER_RATIO = 0.995;
 
 const evaluateScanFreshness = (scannedAt?: string): ScanFreshnessResult => {
   if (!scannedAt) return { isFresh: false, reason: "스캐너 응답 시각이 없어 실시간성을 확인할 수 없습니다." };
@@ -89,12 +99,81 @@ const formatPrice = (value: number, market: EnsembleEvaluationResult["market"]):
   return `${Math.round(value).toLocaleString()}원`;
 };
 
-const getAutoOrderQty = (candidate: EnsembleEvaluationResult): number => {
+const getAvailableCash = (
+  candidate: EnsembleEvaluationResult,
+  cashBreakdown: any,
+  profile: any,
+): number => {
+  const marketCash = candidate.market === "BTC"
+    ? cashBreakdown?.upbitCash
+    : candidate.market === "US"
+      ? cashBreakdown?.usCash
+      : cashBreakdown?.koreaCash;
+
+  if (Number.isFinite(Number(marketCash)) && Number(marketCash) >= 0) return Number(marketCash);
+
+  const fallback = profile?.cash ?? profile?.balance ?? 0;
+  return Number.isFinite(Number(fallback)) ? Math.max(0, Number(fallback)) : 0;
+};
+
+const getAutoOrderSizing = (
+  candidate: EnsembleEvaluationResult,
+  availableCash: number,
+  configuredRiskPct: number,
+): AutoOrderSizing => {
   const price = candidate.entryPrice > 0 ? candidate.entryPrice : candidate.entryHigh;
-  if (!Number.isFinite(price) || price <= 0) return 0;
-  if (candidate.market === "BTC") return Number((5500 / price).toFixed(8));
-  if (candidate.market === "US") return 0.0001;
-  return 1;
+  const stop = candidate.stopLossPrice;
+
+  if (!Number.isFinite(price) || price <= 0) {
+    return { qty: 0, availableCash, estimatedCost: 0, riskBudget: 0, riskPerUnit: 0, reason: "유효한 진입가격이 없습니다." };
+  }
+  if (!Number.isFinite(availableCash) || availableCash <= 0) {
+    return { qty: 0, availableCash: 0, estimatedCost: 0, riskBudget: 0, riskPerUnit: 0, reason: "실제 가용잔고가 없습니다." };
+  }
+  if (!Number.isFinite(stop) || stop <= 0 || stop >= price) {
+    return { qty: 0, availableCash, estimatedCost: 0, riskBudget: 0, riskPerUnit: 0, reason: "손절가격이 유효하지 않아 위험기준 수량을 계산할 수 없습니다." };
+  }
+
+  const riskPct = Number.isFinite(configuredRiskPct) && configuredRiskPct > 0
+    ? Math.min(100, configuredRiskPct)
+    : 1;
+  const spendableCash = availableCash * CASH_SAFETY_BUFFER_RATIO;
+  const riskBudget = availableCash * (riskPct / 100);
+  const riskPerUnit = price - stop;
+  const riskBasedQty = riskBudget / riskPerUnit;
+  const affordableQty = spendableCash / price;
+  const rawQty = Math.min(riskBasedQty, affordableQty);
+
+  let qty = 0;
+  if (candidate.market === "KOREA") qty = Math.floor(rawQty);
+  else if (candidate.market === "US") qty = Math.floor(rawQty * 10000) / 10000;
+  else qty = Math.floor(rawQty * 100000000) / 100000000;
+
+  const estimatedCost = qty * price;
+  if (!Number.isFinite(qty) || qty <= 0) {
+    return {
+      qty: 0,
+      availableCash,
+      estimatedCost: 0,
+      riskBudget,
+      riskPerUnit,
+      reason: candidate.market === "KOREA"
+        ? "현재 잔고로 이 종목을 1주도 살 수 없어 주문하지 않습니다."
+        : "현재 잔고와 손절위험 기준으로 주문 가능한 수량이 없습니다.",
+    };
+  }
+  if (estimatedCost > availableCash) {
+    return {
+      qty: 0,
+      availableCash,
+      estimatedCost,
+      riskBudget,
+      riskPerUnit,
+      reason: "계산된 주문금액이 실제 가용잔고를 초과해 주문을 차단했습니다.",
+    };
+  }
+
+  return { qty, availableCash, estimatedCost, riskBudget, riskPerUnit };
 };
 
 const mapMarket = (market: EnsembleEvaluationResult["market"]): "KOREA" | "US" | "BTC" =>
@@ -109,6 +188,7 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
     addToast,
     executeTrade,
     profile,
+    cashBreakdown,
     isKillSwitchActive,
   } = useApp() as any;
 
@@ -193,11 +273,12 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
         continue;
       }
 
-      const qty = getAutoOrderQty(candidate);
-      if (qty <= 0 || candidate.entryPrice <= 0) {
+      const availableCash = getAvailableCash(candidate, cashBreakdown, profile);
+      const sizing = getAutoOrderSizing(candidate, availableCash, Number(profile?.riskLimitPerTrade ?? 1));
+      if (sizing.qty <= 0 || candidate.entryPrice <= 0) {
         setExecutionUi((prev) => ({
           ...prev,
-          [candidate.symbol]: { state: "SKIPPED", message: "유효한 주문 수량 또는 진입가격이 없어 건너뜁니다." },
+          [candidate.symbol]: { state: "SKIPPED", message: sizing.reason || "잔고·손절위험 기준으로 주문 가능한 수량이 없어 건너뜁니다." },
         }));
         continue;
       }
@@ -205,7 +286,10 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
       lastOrderAttemptRef.current.set(candidate.symbol, now);
       setExecutionUi((prev) => ({
         ...prev,
-        [candidate.symbol]: { state: "SUBMITTING", message: "실주문 안전검사 중" },
+        [candidate.symbol]: {
+          state: "SUBMITTING",
+          message: `잔고 ${sizing.availableCash.toLocaleString()} 기준 · 주문예상 ${sizing.estimatedCost.toLocaleString()} · 실주문 안전검사 중`,
+        },
       }));
 
       try {
@@ -214,10 +298,10 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
           name: candidate.name,
           market: mapMarket(candidate.market),
           side: "BUY",
-          qty,
+          qty: sizing.qty,
           price: candidate.entryPrice,
           strategyName: "AI 스캔 자율매매 LIVE_RESTRICTED",
-          aiRationale: `Scanner ${candidate.sourceScore}/100 · Ensemble ${candidate.ensembleScore}/100 · R:R ${candidate.rrRatio.toFixed(2)} · RVOL ${candidate.rvol.toFixed(2)}x`,
+          aiRationale: `Scanner ${candidate.sourceScore}/100 · Ensemble ${candidate.ensembleScore}/100 · R:R ${candidate.rrRatio.toFixed(2)} · RVOL ${candidate.rvol.toFixed(2)}x · AvailableCash ${sizing.availableCash} · RiskBudget ${sizing.riskBudget.toFixed(2)} · Qty ${sizing.qty}`,
           bypassGuard: false,
         });
 
@@ -247,7 +331,7 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
         addToast({ type: "ERROR", title: `AI 자율매매 실패 · ${candidate.name}`, message });
       }
     }
-  }, [addToast, autoScanEnabled, executeTrade, isKillSwitchActive, onConfirmOrderApproval, profile?.autoTradingEnabled]);
+  }, [addToast, autoScanEnabled, cashBreakdown, executeTrade, isKillSwitchActive, onConfirmOrderApproval, profile]);
 
   const runScan = useCallback(async (targetMarket: ScanMarket = market) => {
     if (scanInFlightRef.current) return;
@@ -350,7 +434,7 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
                   {autoScanEnabled ? "LIVE_RESTRICTED · AUTO 15s" : "SCAN ONLY · AUTO OFF"}
                 </span>
               </div>
-              <p className="mt-1 text-xs leading-relaxed text-slate-400">자동감시 ON → 15초마다 스캔 → 앙상블 검증 → 실시간성 확인 → 기존 실주문 안전 게이트 → 조건 통과 후보만 주문 검사</p>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400">자동감시 ON → 15초마다 스캔 → 앙상블 검증 → 실시간성 확인 → 실제 가용잔고 + 손절위험으로 수량 계산 → 기존 실주문 안전 게이트</p>
             </div>
           </div>
 
@@ -383,7 +467,7 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
             <span>자동매매 후보: <strong className="text-emerald-300">{reviewReadyCount}</strong></span>
             <span>반복주문 방지: <strong className="text-cyan-300">종목별 60초</strong></span>
           </div>
-          <div className="flex items-center gap-1.5 font-bold text-emerald-300"><ShieldCheck className="h-3.5 w-3.5" />실시간성 · API · 잔고 · 장시간 · 킬스위치 검사를 통과해야 주문합니다.</div>
+          <div className="flex items-center gap-1.5 font-bold text-emerald-300"><ShieldCheck className="h-3.5 w-3.5" />실시간성 · API · 실제잔고 · 손절위험 · 장시간 · 킬스위치를 통과해야 주문합니다.</div>
         </div>
 
         {scanError && <div data-testid="safe-ai-scan-error" className="mt-4 flex items-start gap-2 rounded-xl border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>{scanError}</span></div>}
