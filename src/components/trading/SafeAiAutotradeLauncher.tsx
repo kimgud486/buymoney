@@ -20,6 +20,18 @@ import {
 type ScanMarket = "ALL" | "KOREA" | "US" | "BTC";
 type ExecutionState = "WAITING" | "SUBMITTING" | "EXECUTED" | "SKIPPED" | "FAILED";
 type TradeMarket = "KOREA" | "US" | "BTC";
+type OperatorStatus =
+  | "SCANNING"
+  | "WAITING_SIGNAL"
+  | "MARKET_CLOSED"
+  | "NO_QUOTE"
+  | "STALE_QUOTE"
+  | "RISK_BLOCKED"
+  | "BALANCE_SYNC_ERROR"
+  | "ORDER_SUBMITTED"
+  | "ORDER_REJECTED"
+  | "AUTH_ERROR"
+  | "API_ERROR";
 
 type SafeAiAutotradeLauncherProps = {
   onSelectSymbolForChart?: (symbol: string) => void;
@@ -58,6 +70,36 @@ const MARKET_LABEL: Record<ScanMarket, string> = {
   KOREA: "국내",
   US: "미국",
   BTC: "가상자산",
+};
+
+const OPERATOR_STATUS_LABEL: Record<OperatorStatus, string> = {
+  SCANNING: "스캔 중",
+  WAITING_SIGNAL: "신호 대기",
+  MARKET_CLOSED: "장 마감",
+  NO_QUOTE: "시세 없음",
+  STALE_QUOTE: "시세 지연",
+  RISK_BLOCKED: "위험 차단",
+  BALANCE_SYNC_ERROR: "잔고조회 오류",
+  ORDER_SUBMITTED: "주문 전송",
+  ORDER_REJECTED: "주문 거절",
+  AUTH_ERROR: "인증 오류",
+  API_ERROR: "API 오류",
+};
+
+const classifyExecutionStatus = (item?: CandidateExecutionUi): OperatorStatus => {
+  if (!item) return "WAITING_SIGNAL";
+  const message = String(item.message || "").toLowerCase();
+  if (item.state === "EXECUTED") return "ORDER_SUBMITTED";
+  if (item.state === "SUBMITTING") return "SCANNING";
+  if (/장.?마감|market.?closed|off.?market|거래.?시간/.test(message)) return "MARKET_CLOSED";
+  if (/시세.*없|quote.*(missing|unavailable)|가격.*없/.test(message)) return "NO_QUOTE";
+  if (/지연|stale|실시간성/.test(message)) return "STALE_QUOTE";
+  if (/잔고.*(실패|오류|미확인)|가용잔고.*(확인하지 못|조회.*실패)/.test(message)) return "BALANCE_SYNC_ERROR";
+  if (/인증|credential|api.?key|app.?key|secret|토큰|token/.test(message)) return "AUTH_ERROR";
+  if (/거절|reject/.test(message)) return "ORDER_REJECTED";
+  if (item.state === "FAILED") return "API_ERROR";
+  if (item.state === "SKIPPED") return "RISK_BLOCKED";
+  return "WAITING_SIGNAL";
 };
 
 const MAX_SCAN_AGE_MS = 5 * 60 * 1000;
@@ -506,14 +548,15 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
   const executionBadge = (symbol: string) => {
     const item = executionUi[symbol];
     if (!item) return null;
-    const cls = item.state === "EXECUTED"
+    const status = classifyExecutionStatus(item);
+    const cls = status === "ORDER_SUBMITTED"
       ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-      : item.state === "FAILED"
+      : status === "API_ERROR" || status === "AUTH_ERROR" || status === "ORDER_REJECTED" || status === "BALANCE_SYNC_ERROR"
         ? "border-rose-500/30 bg-rose-500/10 text-rose-300"
-        : item.state === "SUBMITTING"
+        : status === "SCANNING"
           ? "border-cyan-500/30 bg-cyan-500/10 text-cyan-300"
           : "border-amber-500/30 bg-amber-500/10 text-amber-300";
-    return <span className={`rounded-md border px-1.5 py-0.5 text-[9px] font-black ${cls}`}>{item.state}</span>;
+    return <span className={`rounded-md border px-1.5 py-0.5 text-[9px] font-black ${cls}`}>{OPERATOR_STATUS_LABEL[status]}</span>;
   };
 
   return (
@@ -608,7 +651,7 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
                   <div className="rounded-lg border border-amber-500/20 bg-amber-950/10 p-3"><div className="mb-1 flex items-center gap-1.5 font-bold text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />뭐가 위험해?</div><p className="leading-relaxed text-slate-300">{selectedCandidate.riskReasons.slice(0, 4).join(" · ") || "추가 하드 리스크 없음"}</p></div>
                 </div>
 
-                {executionUi[selectedCandidate.symbol] && <div className="mt-3 rounded-lg border border-slate-800 bg-slate-900 p-3 text-xs"><strong className="text-white">자동매매 상태: {executionUi[selectedCandidate.symbol].state}</strong><p className="mt-1 text-slate-400">{executionUi[selectedCandidate.symbol].message}</p></div>}
+                {executionUi[selectedCandidate.symbol] && <div className="mt-3 rounded-lg border border-slate-800 bg-slate-900 p-3 text-xs"><strong className="text-white">자동매매 상태: {OPERATOR_STATUS_LABEL[classifyExecutionStatus(executionUi[selectedCandidate.symbol])]}</strong><p className="mt-1 text-slate-400">{executionUi[selectedCandidate.symbol].message}</p></div>}
 
                 <button type="button" onClick={() => selectForDetail(selectedCandidate)} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-cyan-500/40 bg-cyan-500/10 px-4 py-2.5 text-xs font-black text-cyan-200 transition hover:bg-cyan-500/20"><Eye className="h-4 w-4" />이 종목 차트와 스캔 정보 자세히 보기<Target className="h-4 w-4" /></button>
               </div>
