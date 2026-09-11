@@ -70,6 +70,30 @@ export interface LiveCandle {
   providerTimestamp?: number;
 }
 
+export interface MarketStructureSnapshot {
+  trend: "BULLISH" | "BEARISH" | "SIDEWAYS";
+  hhhlValid: boolean;
+  lhllValid: boolean;
+  higherHigh: boolean;
+  higherLow: boolean;
+  lowerHigh: boolean;
+  lowerLow: boolean;
+  structure: "HH_HL" | "LH_LL" | "SIDEWAYS";
+  lastHigherHigh?: number;
+  lastHigherLow?: number;
+  lastLowerHigh?: number;
+  lastLowerLow?: number;
+  lastConfirmedSwingHigh?: number;
+  lastConfirmedSwingLow?: number;
+  confirmedSupport?: number;
+  breakoutValid: boolean;
+  pullbackValid: boolean;
+  vwapReclaim: boolean;
+  volumeExpansion: boolean;
+  chochDetected: boolean;
+  bosDetected: boolean;
+}
+
 export interface IndicatorSnapshot {
   ema9: number;
   ema20: number;
