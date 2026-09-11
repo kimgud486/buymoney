@@ -9,6 +9,7 @@ const featurePanels = readFileSync("src/components/trading/StockGPTFeaturePanels
 const operationalTruth = readFileSync("src/components/trading/OperationalTruthMonitorV20.tsx", "utf8");
 const realtimeFeed = readFileSync("src/services/realtimeMarketFeedService.ts", "utf8");
 const integrityGate = readFileSync("src/services/MarketDataIntegrityGate.ts", "utf8");
+const realBrokerView = readFileSync("src/components/trading/RealBrokerDetailedBalanceAndHoldings.tsx", "utf8");
 
 test("Stock GPT startup clears legacy selected ticker before passive market effects", () => {
   assert.match(appEntry, /useLayoutEffect\(\(\)\s*=>\s*\{\s*setSelectedSymbol\(["']["']\)/s);
@@ -75,4 +76,34 @@ test("market integrity gate fails closed on missing timestamps and candle volume
   assert.doesNotMatch(integrityGate, /c\.tradeValue\s*\|\|\s*0/);
   assert.match(integrityGate, /MISSING_OR_INVALID_PROVIDER_TIMESTAMP/);
   assert.match(integrityGate, /MISSING_OR_INVALID_VOLUME_AT_INDEX/);
+});
+
+test("real broker account view has no hardcoded market/account truth fallbacks", () => {
+  assert.doesNotMatch(realBrokerView, /exchangeRateKRW\s*=\s*1520/);
+  assert.doesNotMatch(realBrokerView, /5012\*\*\*\*-01/);
+  assert.doesNotMatch(realBrokerView, /price\s*:\s*135000000/);
+  assert.doesNotMatch(realBrokerView, /price\s*:\s*248000/);
+  assert.doesNotMatch(realBrokerView, /price\s*:\s*128\b/);
+  assert.doesNotMatch(realBrokerView, /splitRatio/);
+  assert.doesNotMatch(realBrokerView, /연결 정상/);
+  assert.doesNotMatch(realBrokerView, /하나은행 매매기준율 연동 LIVE/);
+  assert.match(realBrokerView, /accountDataReady/);
+  assert.match(realBrokerView, /검증 공급자 미연결/);
+});
+
+test("real broker account view is review-only and never sends direct orders", () => {
+  assert.doesNotMatch(realBrokerView, /executeTrade\s*\(/);
+  assert.doesNotMatch(realBrokerView, /uiActionExecutor/);
+  assert.doesNotMatch(realBrokerView, /onQuickTrade\s*\(/);
+  assert.doesNotMatch(realBrokerView, /전종목 일괄 매도/);
+  assert.doesNotMatch(realBrokerView, /전량 즉시 익절\/매도/);
+  assert.match(realBrokerView, /DIRECT ORDER DISABLED/);
+  assert.match(realBrokerView, /이 화면에서는 주문을 전송하지 않습니다/);
+});
+
+test("real broker valuation never substitutes average price for a missing current price", () => {
+  assert.doesNotMatch(realBrokerView, /currentPrice[^\n]*avgPrice/);
+  assert.match(realBrokerView, /const currentPrice = positiveNumber\(position\.currentPrice\)/);
+  assert.match(realBrokerView, /const avgPrice = positiveNumber\(position\.avgPrice\)/);
+  assert.match(realBrokerView, /valuationKrw = hasValuationInputs/);
 });
