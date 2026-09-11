@@ -1,14 +1,15 @@
 // ----------------------------------------------------------------------
-// SERVER GLOBAL REALTIME SCANNER V20.7
+// SERVER GLOBAL REALTIME SCANNER V20.8
 // TRUTH-FIRST / NO FABRICATED FALLBACKS
 // KR + US + UPBIT
-// BUY requires Truth Bridge + verified 1m/3m/5m/D + executable pattern.
+// BUY requires Truth Bridge + verified 1m/3m/5m/D + executable pattern + ensemble review.
 // Score/grade are capped by actual evidence coverage so incomplete data cannot look A/S grade.
 // ----------------------------------------------------------------------
 
 import { TrueMTFEvidenceV20, TrueMTFGateResultV20, TrueMTFSignalGateV20 } from "./TrueMTFSignalGateV20";
 import { ExecutablePatternGateResultV20, ExecutablePatternGateV20 } from "./ExecutablePatternGateV20";
 import { ScannerCandidateTruthBridgeV20 } from "./ScannerCandidateTruthBridgeV20";
+import { OpenSourceSignalEnsemble, ScannerEvidenceEvaluation } from "../../src/autonomous/OpenSourceSignalEnsemble";
 
 export type MarketType = "KR" | "US" | "CRYPTO";
 export type ExchangeType = "KOSPI" | "KOSDAQ" | "NASDAQ" | "NYSE" | "AMEX" | "UPBIT" | "UNKNOWN";
@@ -31,7 +32,9 @@ export interface ScanCandidateResult extends ScanCandidateInput {
   setupScore: number; grade: "S" | "A" | "B" | "C" | "REJECT";
   recommendation: "BUY_CANDIDATE" | "WATCH" | "REJECT"; rejectionReason?: string;
   missingFields: string[]; dataCoveragePct: number;
-  trueMtfGate: TrueMTFGateResultV20; patternGate: ExecutablePatternGateResultV20; timestamp: number;
+  trueMtfGate: TrueMTFGateResultV20; patternGate: ExecutablePatternGateResultV20;
+  ensembleValidation: ScannerEvidenceEvaluation;
+  timestamp: number;
 }
 
 function validNumber(v: unknown): v is number { return typeof v === "number" && Number.isFinite(v); }
@@ -60,6 +63,17 @@ export function capScannerScoreByEvidence(rawScore: number, dataCoveragePct: num
   return score;
 }
 
+function emptyEnsembleValidation(reason: string): ScannerEvidenceEvaluation {
+  return {
+    decision: "NO",
+    ensembleScore: 0,
+    approvalRequired: true,
+    liveAutoOrderEnabled: false,
+    riskReasons: [reason],
+    bullishReasons: [],
+  };
+}
+
 export class ServerGlobalRealtimeScannerV20 {
   public static evaluateCandidate(input: ScanCandidateInput): ScanCandidateResult {
     const truthBridge = ScannerCandidateTruthBridgeV20.normalize(input);
@@ -69,7 +83,8 @@ export class ServerGlobalRealtimeScannerV20 {
     const patternGate = ExecutablePatternGateV20.evaluate(input.patterns);
     const reject = (reason: string, missingFields: string[] = []): ScanCandidateResult => ({
       ...input, setupScore: 0, grade: "REJECT", recommendation: "REJECT", rejectionReason: reason,
-      missingFields, dataCoveragePct: 0, trueMtfGate, patternGate, timestamp
+      missingFields, dataCoveragePct: 0, trueMtfGate, patternGate,
+      ensembleValidation: emptyEnsembleValidation(reason), timestamp
     });
 
     if (truthBridge.rejectionReason) return reject(truthBridge.rejectionReason, ["volume", "tradeValue"]);
@@ -114,7 +129,6 @@ export class ServerGlobalRealtimeScannerV20 {
     let grade: ScanCandidateResult["grade"]; let recommendation: ScanCandidateResult["recommendation"];
     if (score >= 88) { grade="S"; recommendation="BUY_CANDIDATE"; } else if (score >= 76) { grade="A"; recommendation="BUY_CANDIDATE"; } else if (score >= 62) { grade="B"; recommendation="WATCH"; } else { grade="C"; recommendation="REJECT"; }
 
-    // Derived/incomplete evidence can never be presented with an A/S-looking grade.
     if (input.dataStatus === "REALTIME_DERIVED" && recommendation === "BUY_CANDIDATE") {
       recommendation = "WATCH";
       grade = "B";
@@ -126,7 +140,34 @@ export class ServerGlobalRealtimeScannerV20 {
       score = Math.min(score, 75);
     }
 
-    return { ...input, setupScore: score, grade, recommendation, missingFields, dataCoveragePct, trueMtfGate, patternGate, timestamp };
+    const atrPct = positive(input.atr14) && positive(input.price) ? (input.atr14 / input.price) * 100 : null;
+    const ensembleValidation = OpenSourceSignalEnsemble.evaluateScannerEvidence({
+      symbol: input.symbol,
+      name: input.name,
+      market: input.market,
+      sourceScore: score,
+      dataCoveragePct,
+      dataStatus: input.dataStatus,
+      rvol: input.rvol,
+      rsi: input.rsi14,
+      atrPct,
+      hasRelativeStrength: rsValues.length > 0,
+      hasVwap: positive(input.vwap),
+      hasEma20: positive(input.ema20),
+      hasPattern: patternGate.passed,
+      trueMtfPassed: trueMtfGate.passed,
+      sourceRecommendation: recommendation,
+    });
+
+    // A BUY label must survive the independent ensemble review too. The ensemble never submits orders.
+    if (recommendation === "BUY_CANDIDATE" && ensembleValidation.decision !== "REVIEW_READY") {
+      recommendation = "WATCH";
+      grade = "B";
+      score = Math.min(score, 75);
+      if (!missingFields.includes("ensembleReview")) missingFields.push("ensembleReview");
+    }
+
+    return { ...input, setupScore: score, grade, recommendation, missingFields, dataCoveragePct, trueMtfGate, patternGate, ensembleValidation, timestamp };
   }
 
   public static scanCandidates(candidates: ScanCandidateInput[]): ScanCandidateResult[] {
