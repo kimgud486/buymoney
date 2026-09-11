@@ -9,9 +9,9 @@ export interface VerifiedQuoteMetadata {
   provider: "UPBIT" | "NAVER_POLLING" | "YAHOO_FINANCE" | "KIS" | "SYSTEM_HUB";
   source: string;
   exchange: string;
-  providerTimestamp: string;
+  providerTimestamp: string | null;
   receivedAt: string;
-  ageMs: number;
+  ageMs: number | null;
   isRealtime: boolean;
   isVerified: boolean;
   isStale: boolean;
@@ -31,6 +31,28 @@ export interface VerifiedCandle {
   verificationError?: string;
 }
 
+function parseOptionalFiniteNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const parsed = Number(typeof value === "string" ? value.replace(/,/g, "") : value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseTimestampMs(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
+
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric;
+
+  const parsed = new Date(String(value)).getTime();
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 export class MarketDataIntegrityGate {
   private static MAX_QUOTE_AGE_MS = 60000; // 60s max staleness for live quotes
   private static MAX_FUTURE_ALLOWANCE_MS = 5000; // 5s clock skew allowance
@@ -48,13 +70,12 @@ export class MarketDataIntegrityGate {
     const now = Date.now();
     const receivedAt = new Date(now).toISOString();
 
-    const provTime = quote.providerTimestamp || quote.timestamp || now;
-    const providerTimestamp = typeof provTime === "number" ? new Date(provTime).toISOString() : String(provTime);
-    const tsMs = typeof provTime === "number" ? provTime : new Date(provTime).getTime();
-
-    const ageMs = isNaN(tsMs) ? 0 : Math.max(0, now - tsMs);
-    const isFuture = !isNaN(tsMs) && tsMs > now + this.MAX_FUTURE_ALLOWANCE_MS;
-    const isStale = ageMs > this.MAX_QUOTE_AGE_MS;
+    const rawProviderTimestamp = quote.providerTimestamp ?? quote.timestamp ?? null;
+    const tsMs = parseTimestampMs(rawProviderTimestamp);
+    const providerTimestamp = tsMs == null ? null : new Date(tsMs).toISOString();
+    const ageMs = tsMs == null ? null : Math.max(0, now - tsMs);
+    const isFuture = tsMs != null && tsMs > now + this.MAX_FUTURE_ALLOWANCE_MS;
+    const isStaleByAge = ageMs != null && ageMs > this.MAX_QUOTE_AGE_MS;
 
     const providerName: "UPBIT" | "NAVER_POLLING" | "YAHOO_FINANCE" | "KIS" | "SYSTEM_HUB" =
       (quote.provider as any) ||
@@ -67,19 +88,22 @@ export class MarketDataIntegrityGate {
         : "SYSTEM_HUB");
 
     const exchangeName = quote.market || "KOSPI";
+    const parsedVolume = parseOptionalFiniteNumber(quote.volume);
 
-    // Run FakeDataDetector inspection
+    // Run FakeDataDetector inspection. Missing data stays missing: never invent
+    // a zero volume or a current timestamp merely to satisfy the detector.
     const tick: MarketTick = {
       symbol: quote.symbol,
       price: quote.price,
-      volume: typeof quote.volume === "number" ? quote.volume : parseFloat(String(quote.volume || 0)) || 0,
-      timestamp: isNaN(tsMs) ? now : tsMs,
+      timestamp: tsMs ?? Number.NaN,
       source: quote.source || quote.provider || "REALTIME_STREAM",
     };
+    if (parsedVolume != null) tick.volume = parsedVolume;
+
     const detectorResult = defaultFakeDataDetector.inspect(tick, now);
 
     let isVerified = detectorResult.liveTradingAllowed;
-    let failureReason = detectorResult.reasons.length > 0 
+    let failureReason = detectorResult.reasons.length > 0
       ? detectorResult.reasons.map(r => r.code).join(", ")
       : "VERIFIED_OK";
 
@@ -89,6 +113,15 @@ export class MarketDataIntegrityGate {
     } else if (typeof quote.price !== "number" || isNaN(quote.price) || quote.price <= 0) {
       isVerified = false;
       failureReason = "INVALID_PRICE_NON_POSITIVE";
+    } else if (tsMs == null) {
+      isVerified = false;
+      failureReason = "MISSING_OR_INVALID_PROVIDER_TIMESTAMP";
+    } else if (isFuture) {
+      isVerified = false;
+      failureReason = "FUTURE_PROVIDER_TIMESTAMP";
+    } else if (isStaleByAge) {
+      isVerified = false;
+      failureReason = "STALE_PROVIDER_TIMESTAMP";
     }
 
     return {
@@ -100,9 +133,9 @@ export class MarketDataIntegrityGate {
         providerTimestamp,
         receivedAt,
         ageMs,
-        isRealtime: detectorResult.status === "VERIFIED",
+        isRealtime: isVerified && detectorResult.status === "VERIFIED",
         isVerified,
-        isStale: detectorResult.status === "STALE",
+        isStale: tsMs == null || isStaleByAge || detectorResult.status === "STALE",
         verificationReason: failureReason,
         trustScore: detectorResult.trustScore,
       }
@@ -124,24 +157,33 @@ export class MarketDataIntegrityGate {
         return { isVerified: false, verifiedCandles: [], errorReason: `INVALID_CANDLE_OBJECT_AT_INDEX_${i}` };
       }
 
-      const open = Number(c.open);
-      const high = Number(c.high);
-      const low = Number(c.low);
-      const close = Number(c.close);
-      const volume = Number(c.volume ?? 0);
-      const timestamp = Number(c.timestamp || c.time || 0);
+      const open = parseOptionalFiniteNumber(c.open);
+      const high = parseOptionalFiniteNumber(c.high);
+      const low = parseOptionalFiniteNumber(c.low);
+      const close = parseOptionalFiniteNumber(c.close);
+      const volume = parseOptionalFiniteNumber(c.volume);
+      const timestamp = parseTimestampMs(c.timestamp ?? c.time);
+      const tradeValue = parseOptionalFiniteNumber(c.tradeValue);
 
       // Logical OHLC checks
-      if (isNaN(open) || open <= 0 || isNaN(high) || high <= 0 || isNaN(low) || low <= 0 || isNaN(close) || close <= 0) {
-        return { isVerified: false, verifiedCandles: [], errorReason: `NON_POSITIVE_OHLC_AT_INDEX_${i}` };
+      if (open == null || open <= 0 || high == null || high <= 0 || low == null || low <= 0 || close == null || close <= 0) {
+        return { isVerified: false, verifiedCandles: [], errorReason: `NON_POSITIVE_OR_MISSING_OHLC_AT_INDEX_${i}` };
       }
 
       if (low > Math.min(open, close) || high < Math.max(open, close)) {
         return { isVerified: false, verifiedCandles: [], errorReason: `OHLC_LOGICAL_INCONSISTENCY_AT_INDEX_${i}` };
       }
 
-      if (isNaN(volume) || volume < 0) {
-        return { isVerified: false, verifiedCandles: [], errorReason: `NEGATIVE_VOLUME_AT_INDEX_${i}` };
+      if (volume == null || volume < 0) {
+        return { isVerified: false, verifiedCandles: [], errorReason: `MISSING_OR_INVALID_VOLUME_AT_INDEX_${i}` };
+      }
+
+      if (timestamp == null) {
+        return { isVerified: false, verifiedCandles: [], errorReason: `MISSING_OR_INVALID_TIMESTAMP_AT_INDEX_${i}` };
+      }
+
+      if (tradeValue != null && tradeValue < 0) {
+        return { isVerified: false, verifiedCandles: [], errorReason: `INVALID_TRADE_VALUE_AT_INDEX_${i}` };
       }
 
       if (timestamp > now + this.MAX_FUTURE_ALLOWANCE_MS) {
@@ -160,7 +202,7 @@ export class MarketDataIntegrityGate {
         low,
         close,
         volume,
-        tradeValue: Number(c.tradeValue || 0),
+        ...(tradeValue != null ? { tradeValue } : {}),
         isVerified: true
       });
     }
