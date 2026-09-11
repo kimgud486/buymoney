@@ -50,7 +50,7 @@ export interface UserProfile {
   dailyLossLimit: number;
   maxPositionWeight: number;
   autoTradingEnabled: boolean;
-  autoTradingTargetMarket?: 'ALL' | 'KOREA' | 'US';
+  autoTradingTargetMarket?: 'ALL' | 'KOREA' | 'US' | 'BTC';
   // AI Auto-Trading Filter Settings
   maxHoldingsCount?: number; // 최대 전체 보유 종목 수 (기본 5개)
   minAiConfidenceScore?: number; // 최소 AI 신뢰도 점수 (기본 85점 이상)
