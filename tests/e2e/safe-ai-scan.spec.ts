@@ -18,7 +18,6 @@ test.describe("Stock GPT verified-data safety E2E", () => {
     await expect(page.getByPlaceholder(/무엇을 분석할까요/)).toBeVisible();
     await expect(page.getByRole("button", { name: /오늘의 강한 종목 찾아줘/ })).toBeVisible();
 
-    // Approved reference rails must remain visible on an ordinary desktop viewport.
     await expect(page.getByRole("button", { name: "새 분석" })).toBeVisible();
     await expect(page.getByRole("button", { name: "관심종목" })).toBeVisible();
     await expect(page.getByRole("button", { name: "보유종목" })).toBeVisible();
@@ -28,11 +27,10 @@ test.describe("Stock GPT verified-data safety E2E", () => {
     await expect(page.getByText("실시간 급상승 종목", { exact: true })).toBeVisible();
     await expect(page.getByText("위험 신호 종목", { exact: true })).toBeVisible();
 
-    // Runtime truth checks stay mounted behind the approved UI.
     await expect(page.getByTestId("operational-truth-monitor-v20")).toHaveCount(1);
   });
 
-  test("existing features open in the approved center workspace instead of a replacement dashboard", async ({ page }) => {
+  test("existing features open in the approved center workspace and scanner truth stack stays connected", async ({ page }) => {
     await openStockGpt(page);
 
     await page.getByRole("button", { name: "관심종목" }).click();
@@ -43,6 +41,10 @@ test.describe("Stock GPT verified-data safety E2E", () => {
 
     await page.getByRole("button", { name: "실시간 스캐너" }).click();
     await expect(page.getByTestId("stock-gpt-real-scanner-panel")).toBeVisible();
+    await expect(page.getByTestId("stock-gpt-v20-final-scanner")).toBeVisible();
+    await expect(page.getByTestId("stock-gpt-intraday-pattern-panel")).toBeVisible();
+    await expect(page.getByTestId("stock-gpt-bot-truth-panel")).toBeVisible();
+    await expect(page.getByText("PRECHECK ≠ FINAL BUY")).toBeVisible();
 
     await page.getByRole("button", { name: "알림 기록" }).click();
     await expect(page.getByTestId("stock-gpt-alerts-panel")).toBeVisible();
@@ -72,7 +74,6 @@ test.describe("Stock GPT verified-data safety E2E", () => {
       await expect(page.getByText(/검토 단계만 열립니다/)).toBeVisible();
       await expect(page.getByRole("button", { name: /주문.*실행|실행.*주문|매수.*확인|매도.*확인/ })).toHaveCount(0);
     } else {
-      // CI can legitimately have no broker/provider credentials. That must stay NO_DATA.
       await expect(page.getByText(/NO_DATA|실제 시세를 요청했습니다|가짜 캔들을 대신 넣지 않습니다/).first()).toBeVisible();
     }
   });
