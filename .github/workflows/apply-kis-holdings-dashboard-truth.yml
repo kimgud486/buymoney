@@ -22,6 +22,21 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Normalize temporary patcher quoting
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/fix-kis-holdings-and-dashboard-truth.mjs')
+          text = path.read_text()
+          start_marker = 'const overseasBalanceFunction = `'
+          end_marker = '\n`;\n\nserver = replaceBetween('
+          start = text.index(start_marker) + len(start_marker)
+          end = text.index(end_marker, start)
+          body = text[start:end]
+          body = body.replace('`', '\\`').replace('${', '\\${')
+          path.write_text(text[:start] + body + text[end:])
+          PY
+
       - name: Apply targeted fixes
         run: node scripts/fix-kis-holdings-and-dashboard-truth.mjs
 
