@@ -7,6 +7,12 @@ export interface ExchangeUniverseSymbolV20 {
   name: string;
   market: ExchangeUniverseMarket;
   source: "KIS_MASTER" | "NASDAQ_TRADER" | "UPBIT" | "STATIC_FALLBACK";
+  /**
+   * Verified KIS overseas WebSocket subscription key.
+   * Example from the official KIS sample: AAPL on Nasdaq -> DNASAAPL.
+   * Leave undefined when the exchange-to-KIS prefix has not been verified.
+   */
+  kisRealtimeKey?: string;
 }
 
 export interface ExchangeUniverseSnapshotV20 {
@@ -118,6 +124,15 @@ function pipeRows(text: string): string[][] {
   return text.split(/\r?\n/).filter(Boolean).map((line) => line.split("|"));
 }
 
+function verifiedNasdaqKisRealtimeKey(symbol: string): string | undefined {
+  const clean = String(symbol || "").trim().toUpperCase();
+  // KIS official overseas WebSocket examples use DNASAAPL for Nasdaq AAPL.
+  // Keep the transform deliberately narrow. Symbols requiring special exchange
+  // handling are not guessed and therefore do not receive an execution-grade key.
+  if (!/^[A-Z0-9]{1,5}$/.test(clean)) return undefined;
+  return `DNAS${clean}`;
+}
+
 async function fetchUsMaster(): Promise<ExchangeUniverseSymbolV20[]> {
   const [nasdaqResponse, otherResponse] = await Promise.all([
     fetch(NASDAQ_LISTED_URL, { signal: AbortSignal.timeout(10000) }),
@@ -129,12 +144,20 @@ async function fetchUsMaster(): Promise<ExchangeUniverseSymbolV20[]> {
   for (const parts of pipeRows(await nasdaqResponse.text()).slice(1)) {
     const [symbol, name, , testIssue] = parts;
     if (!symbol || !name || symbol === "File Creation Time" || testIssue === "Y") continue;
-    rows.push({ symbol, name, market: "US", source: "NASDAQ_TRADER" });
+    rows.push({
+      symbol,
+      name,
+      market: "US",
+      source: "NASDAQ_TRADER",
+      kisRealtimeKey: verifiedNasdaqKisRealtimeKey(symbol),
+    });
   }
   for (const parts of pipeRows(await otherResponse.text()).slice(1)) {
     const [symbol, name, exchange, , , , testIssue] = parts;
     if (!symbol || !name || symbol === "File Creation Time" || testIssue === "Y") continue;
     if (!["A", "N", "P", "Z", "V"].includes(exchange)) continue;
+    // Do not fabricate a KIS tr_key for NYSE/AMEX/ARCA/BATS/etc. until the
+    // exchange-prefix mapping is verified against an official KIS source.
     rows.push({ symbol, name, market: "US", source: "NASDAQ_TRADER" });
   }
   if (rows.length < 3000) throw new Error(`NASDAQ_TRADER_MASTER_TOO_SMALL:${rows.length}`);
