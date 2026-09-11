@@ -12,6 +12,7 @@ import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecur
 import { MasterAiAutoTradingDashboard } from "./components/trading/MasterAiAutoTradingDashboard";
 import RealtimeHubStatusStrip from "./components/trading/RealtimeHubStatusStrip";
 import FeedResiliencePolicyBridge from "./components/trading/FeedResiliencePolicyBridge";
+import OperationalTruthMonitorV20 from "./components/trading/OperationalTruthMonitorV20";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MainScreenKoreanText } from "./components/MainScreenKoreanText";
 import ElementaryScanExplanationPanel from "./components/ElementaryScanExplanationPanel";
@@ -130,6 +131,10 @@ function MainLayout() {
 
       <ErrorBoundary>
         <RealtimeHubStatusStrip />
+      </ErrorBoundary>
+
+      <ErrorBoundary>
+        <OperationalTruthMonitorV20 />
       </ErrorBoundary>
 
       <ErrorBoundary>
