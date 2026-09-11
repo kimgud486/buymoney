@@ -65,6 +65,7 @@ const MAX_FUTURE_CLOCK_SKEW_MS = 60 * 1000;
 const AUTO_SCAN_INTERVAL_MS = 15_000;
 const SAME_SYMBOL_ORDER_COOLDOWN_MS = 60_000;
 const CASH_SAFETY_BUFFER_RATIO = 0.995;
+const BALANCE_SYNC_CACHE_MS = 30_000;
 
 const evaluateScanFreshness = (scannedAt?: string): ScanFreshnessResult => {
   if (!scannedAt) return { isFresh: false, reason: "스캐너 응답 시각이 없어 실시간성을 확인할 수 없습니다." };
@@ -221,6 +222,7 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
   const [executionUi, setExecutionUi] = useState<Record<string, CandidateExecutionUi>>({});
   const scanInFlightRef = useRef(false);
   const lastOrderAttemptRef = useRef<Map<string, number>>(new Map());
+  const freshCashCacheRef = useRef<Map<TradeMarket, { cash: number; syncedAt: number }>>(new Map());
 
   const reviewReadyCount = useMemo(
     () => results.filter((result) => result.decision === "REVIEW_READY").length,
@@ -326,6 +328,14 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
       }
 
       let availableCash = freshCashByMarket.get(candidateMarket);
+      if (availableCash === undefined) {
+        const cachedCash = freshCashCacheRef.current.get(candidateMarket);
+        if (cachedCash && now - cachedCash.syncedAt < BALANCE_SYNC_CACHE_MS) {
+          availableCash = cachedCash.cash;
+          freshCashByMarket.set(candidateMarket, cachedCash.cash);
+        }
+      }
+
       if (availableCash === undefined && !balanceFailureByMarket.has(candidateMarket)) {
         try {
           const syncResult = await syncRealAccountBalance(mapBalanceBroker(candidateMarket), true);
@@ -339,6 +349,7 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
             } else {
               availableCash = syncedMarketCash;
               freshCashByMarket.set(candidateMarket, syncedMarketCash);
+              freshCashCacheRef.current.set(candidateMarket, { cash: syncedMarketCash, syncedAt: now });
             }
           }
         } catch (error: any) {
