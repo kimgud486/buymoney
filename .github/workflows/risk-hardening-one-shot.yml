@@ -1,0 +1,64 @@
+name: Risk Hardening One Shot
+
+on:
+  push:
+    paths:
+      - '.github/workflows/risk-hardening-one-shot.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  harden-risk-paths:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply guarded risk hardening
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+
+          const appPath = 'src/context/AppContext.tsx';
+          let app = fs.readFileSync(appPath, 'utf8');
+          const legacyCondition = 'if (isFullConsensusApproved && (!isRealTradingActive || hasKeys)) {';
+          const matches = app.split(legacyCondition).length - 1;
+          if (matches !== 1) throw new Error(`Expected exactly one legacy BUY execution condition, found ${matches}`);
+          app = app.replace(
+            legacyCondition,
+            `// Legacy 4-second scanner remains analysis-only. SafeAiAutotradeLauncher is the sole new-entry execution authority.\n      const allowLegacyNewEntryExecution = false;\n      if (allowLegacyNewEntryExecution && isFullConsensusApproved && (!isRealTradingActive || hasKeys)) {`
+          );
+          if (app.includes('[SafetyCheck Auto-Bypass]')) throw new Error('Unsafe Holdings Limit auto-bypass marker still present');
+          fs.writeFileSync(appPath, app);
+
+          const serverPath = 'server.ts';
+          let server = fs.readFileSync(serverPath, 'utf8');
+          const middlewareDefaults = /dailyLossLimit\s*=\s*100,\s*currentLossPct\s*=\s*0,\s*marketRiskLevel\s*=\s*"NORMAL",\s*maxPositionWeight\s*=\s*100,/;
+          if (!middlewareDefaults.test(server)) throw new Error('Expected permissive server risk defaults not found');
+          server = server.replace(
+            middlewareDefaults,
+            `dailyLossLimit = 2,\n      currentLossPct = 0,\n      marketRiskLevel = "NORMAL",\n      maxPositionWeight = 20,`
+          );
+          fs.writeFileSync(serverPath, server);
+
+          console.log('Guarded risk hardening applied to AppContext and server middleware defaults.');
+          NODE
+
+      - name: TypeScript check
+        run: |
+          npm ci
+          npm run lint
+
+      - name: Commit hardening
+        run: |
+          if git diff --quiet -- src/context/AppContext.tsx server.ts; then
+            echo 'No changes to commit'
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/context/AppContext.tsx server.ts
+          git commit -m 'fix: unify new-entry authority and harden server risk defaults'
+          git push origin HEAD:main
