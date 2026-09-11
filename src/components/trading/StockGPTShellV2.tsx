@@ -60,6 +60,7 @@ type PatternFacts = {
 type ReviewSide = "LONG" | "SHORT" | null;
 type ScanMode = "LONG" | "SHORT";
 type NavId = "new" | "history" | "watch" | "portfolio" | "scanner" | "alerts";
+type StockTab = "chart" | "overview" | "analysis" | "financials" | "news" | "community";
 type MarketSummary = {
   market: "KOSPI" | "KOSDAQ";
   averageChange: number | null;
@@ -73,6 +74,15 @@ const NAV_ITEMS: Array<{ id: NavId; label: string; icon: React.ComponentType<{ c
   { id: "portfolio", label: "보유종목", icon: PieChart },
   { id: "scanner", label: "실시간 스캐너", icon: Activity },
   { id: "alerts", label: "알림 기록", icon: Bell },
+];
+
+const STOCK_TABS: Array<{ id: StockTab; label: string }> = [
+  { id: "chart", label: "차트" },
+  { id: "overview", label: "기업 개요" },
+  { id: "analysis", label: "AI 분석 리포트" },
+  { id: "financials", label: "재무 정보" },
+  { id: "news", label: "관련 뉴스" },
+  { id: "community", label: "토론 커뮤니티" },
 ];
 
 const QUICK_PROMPTS = [
@@ -115,6 +125,11 @@ function formatChange(value: number | null | undefined): string {
 function formatCompact(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value) || value < 0) return "NO_DATA";
   return Intl.NumberFormat("ko-KR", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+}
+
+function formatTimestamp(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value <= 0) return "NO_DATA";
+  return new Date(value).toLocaleString("ko-KR", { hour12: false });
 }
 
 function quoteMarketToChart(market: LiveMarketQuote["market"]): VerifiedSnapshot["market"] {
@@ -244,6 +259,19 @@ function PatternOverlay({ facts, market }: { facts: PatternFacts | null; market:
   );
 }
 
+function TruthUnavailablePanel({ title, reason }: { title: string; reason: string }) {
+  return (
+    <div className="flex min-h-[360px] items-center justify-center p-6" data-testid="stock-gpt-no-data-tab">
+      <div className="max-w-xl rounded-2xl border border-amber-500/20 bg-amber-950/10 p-6 text-center">
+        <AlertTriangle className="mx-auto h-7 w-7 text-amber-300" />
+        <div className="mt-3 text-base font-black text-white">{title}: NO_DATA</div>
+        <p className="mt-2 text-sm leading-6 text-slate-400">{reason}</p>
+        <p className="mt-3 text-[11px] leading-5 text-amber-300/80">검증되지 않은 값이나 예시 데이터를 대신 넣지 않습니다.</p>
+      </div>
+    </div>
+  );
+}
+
 export default function StockGPTShellV2() {
   const [activeNav, setActiveNav] = useState<NavId>("new");
   const [query, setQuery] = useState("");
@@ -259,6 +287,7 @@ export default function StockGPTShellV2() {
   const [chartState, setChartState] = useState("NO_TRADE");
   const [technicalScore, setTechnicalScore] = useState<number | null>(null);
   const [reviewSide, setReviewSide] = useState<ReviewSide>(null);
+  const [stockTab, setStockTab] = useState<StockTab>("chart");
   const [now, setNow] = useState(() => new Date());
 
   useEffect(() => {
@@ -341,6 +370,12 @@ export default function StockGPTShellV2() {
 
   const patternFacts = useMemo(() => analyzeRealPatterns(snapshot?.candles ?? []), [snapshot?.candles]);
 
+  const selectedMeta = useMemo(() => {
+    if (!selectedQuote) return null;
+    const clean = selectedQuote.symbol.replace(/^KRW-/, "").toUpperCase();
+    return MASTER_STOCK_UNIVERSE_METADATA.find((item) => item.symbol.replace(/^KRW-/, "").toUpperCase() === clean) ?? null;
+  }, [selectedQuote]);
+
   const loadSnapshot = async (quote: LiveMarketQuote, preferredName?: string) => {
     setSelectedQuote(quote);
     setSelectedName(preferredName || quote.name || quote.symbol);
@@ -350,6 +385,7 @@ export default function StockGPTShellV2() {
     setChartState("NO_TRADE");
     setTechnicalScore(null);
     setReviewSide(null);
+    setStockTab("chart");
 
     realtimeMarketFeedService.registerSymbol(quote.symbol, quote.market);
 
@@ -536,6 +572,7 @@ export default function StockGPTShellV2() {
                     setSelectedQuote(null);
                     setPendingStock(null);
                     setSnapshot(null);
+                    setStockTab("chart");
                   }
                 }}
                 className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-bold transition ${activeNav === id ? "bg-cyan-400/10 text-cyan-200 ring-1 ring-cyan-400/20" : "text-slate-400 hover:bg-slate-900 hover:text-white"}`}
@@ -620,15 +657,87 @@ export default function StockGPTShellV2() {
                 </div>
 
                 <div className="flex gap-1 overflow-x-auto border-b border-slate-800 bg-[#07101b] px-4 text-[11px] font-bold text-slate-500">
-                  {["차트", "기업 개요", "AI 분석 리포트", "재무 정보", "관련 뉴스", "토론 커뮤니티"].map((tab, index) => <button key={tab} type="button" className={`whitespace-nowrap border-b-2 px-3 py-3 ${index === 0 ? "border-cyan-400 text-cyan-300" : "border-transparent text-slate-500"}`} title={index === 0 ? "실시간 차트" : "기존 기능 연결 위치"}>{tab}</button>)}
+                  {STOCK_TABS.map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setStockTab(tab.id)}
+                      data-testid={`stock-tab-${tab.id}`}
+                      className={`whitespace-nowrap border-b-2 px-3 py-3 transition ${stockTab === tab.id ? "border-cyan-400 text-cyan-300" : "border-transparent text-slate-500 hover:text-slate-300"}`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
                 </div>
 
-                <div className="relative bg-[#050a12] p-3 sm:p-4">
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1"><div className="flex items-center gap-2 text-sm font-black"><LineChart className="h-4 w-4 text-cyan-300" />실시간 트레이딩 차트</div><span className="text-[11px] text-slate-500">{snapshotMessage}</span></div>
-                  {chartPrice > 0 ? (
-                    <div className="relative"><RealTimeTradingViewChart symbol={selectedQuote.symbol} name={chartName} market={chartMarket} initialPrice={chartPrice} initialCandles={chartCandles} timeframe="5m" onStateChange={(nextState, score) => { setChartState(nextState); setTechnicalScore(Number.isFinite(score) && score > 0 ? score : null); }} /><PatternOverlay facts={patternFacts} market={chartMarket} /></div>
-                  ) : <div className="flex min-h-[440px] items-center justify-center rounded-xl border border-dashed border-slate-800 text-sm text-slate-500">실제 가격이 확인되지 않아 차트를 만들지 않습니다. NO_DATA</div>}
-                </div>
+                {stockTab === "chart" && (
+                  <div className="relative bg-[#050a12] p-3 sm:p-4" data-testid="stock-tab-panel-chart">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1"><div className="flex items-center gap-2 text-sm font-black"><LineChart className="h-4 w-4 text-cyan-300" />실시간 트레이딩 차트</div><span className="text-[11px] text-slate-500">{snapshotMessage}</span></div>
+                    {chartPrice > 0 ? (
+                      <div className="relative"><RealTimeTradingViewChart symbol={selectedQuote.symbol} name={chartName} market={chartMarket} initialPrice={chartPrice} initialCandles={chartCandles} timeframe="5m" onStateChange={(nextState, score) => { setChartState(nextState); setTechnicalScore(Number.isFinite(score) && score > 0 ? score : null); }} /><PatternOverlay facts={patternFacts} market={chartMarket} /></div>
+                    ) : <div className="flex min-h-[440px] items-center justify-center rounded-xl border border-dashed border-slate-800 text-sm text-slate-500">실제 가격이 확인되지 않아 차트를 만들지 않습니다. NO_DATA</div>}
+                  </div>
+                )}
+
+                {stockTab === "overview" && (
+                  <div className="bg-[#050a12] p-4" data-testid="stock-tab-panel-overview">
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {[
+                        ["종목", `${chartName} (${selectedQuote.symbol})`],
+                        ["시장", String(selectedQuote.market)],
+                        ["현재가", formatPrice(selectedQuote.price, selectedQuote.market)],
+                        ["등락률", formatChange(selectedQuote.changeRate)],
+                        ["거래량", formatCompact(selectedQuote.volume)],
+                        ["거래대금", formatCompact(selectedQuote.tradeValue)],
+                        ["LIVE 출처", selectedQuote.source || "NO_DATA"],
+                        ["시세 수신시각", formatTimestamp(selectedQuote.receivedAt)],
+                        ["검증 OHLCV", snapshot ? `${snapshot.candles.length}개` : "NO_DATA"],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-xl border border-slate-800 bg-[#08111d] p-4"><div className="text-[10px] font-bold text-slate-500">{label}</div><div className="mt-2 break-words text-sm font-black text-slate-200">{value}</div></div>
+                      ))}
+                    </div>
+                    <div className="mt-3 rounded-xl border border-cyan-500/20 bg-cyan-950/10 p-4">
+                      <div className="text-xs font-black text-cyan-300">분류 메타정보</div>
+                      <p className="mt-2 text-sm leading-6 text-slate-400">테마: {selectedMeta?.theme?.trim() || "NO_DATA"}</p>
+                      <p className="mt-1 text-[11px] leading-5 text-slate-500">이 분류는 종목 카탈로그 메타정보이며 실시간 수익률이나 투자판단 값이 아닙니다.</p>
+                    </div>
+                  </div>
+                )}
+
+                {stockTab === "analysis" && (
+                  <div className="bg-[#050a12] p-4" data-testid="stock-tab-panel-analysis">
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="rounded-xl border border-violet-500/20 bg-violet-950/10 p-4">
+                        <div className="text-xs font-black text-violet-300">기술 조건</div>
+                        <div className="mt-3 space-y-2 text-sm text-slate-300">
+                          <div className="flex justify-between gap-3"><span className="text-slate-500">Technical Score</span><strong>{technicalScore != null ? `${technicalScore}/100` : "NO_DATA"}</strong></div>
+                          <div className="flex justify-between gap-3"><span className="text-slate-500">차트 상태</span><strong>{technicalScore != null ? chartState : "NO_DATA"}</strong></div>
+                          <div className="flex justify-between gap-3"><span className="text-slate-500">캔들 표본</span><strong>{snapshot ? `${snapshot.candles.length}개` : "NO_DATA"}</strong></div>
+                          <div className="flex justify-between gap-3"><span className="text-slate-500">데이터 출처</span><strong className="text-emerald-300">{snapshot?.source || selectedQuote.source || "NO_DATA"}</strong></div>
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-cyan-500/20 bg-cyan-950/10 p-4">
+                        <div className="text-xs font-black text-cyan-300">실제 캔들 패턴</div>
+                        <div className="mt-3 space-y-2 text-sm text-slate-300">
+                          <div>돌파: <strong>{patternFacts == null ? "NO_DATA" : patternFacts.breakout ? "확인" : "미확인"}</strong></div>
+                          <div>눌림/리테스트: <strong>{patternFacts == null ? "NO_DATA" : patternFacts.pullback ? "확인" : "미확인"}</strong></div>
+                          <div>거래량 급증: <strong>{patternFacts == null ? "NO_DATA" : patternFacts.volumeSurge ? "확인" : "미확인"}</strong></div>
+                          <div>캔들 패턴: <strong>{patternFacts?.candlePattern || "미확인"}</strong></div>
+                          <div>RVOL 유사 비율(최근 20봉 대비): <strong>{patternFacts?.volumeRatio != null ? `${patternFacts.volumeRatio.toFixed(2)}x` : "NO_DATA"}</strong></div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3 rounded-xl border border-slate-800 bg-[#08111d] p-4">
+                      <div className="text-xs font-black text-slate-300">쉬운 해석</div>
+                      <div className="mt-2 space-y-2 text-sm leading-6 text-slate-400">{explanation.map((line, index) => <p key={`${index}-${line}`}>{index + 1}️⃣ {line}</p>)}</div>
+                      <p className="mt-3 text-[11px] text-amber-300">이 점수와 패턴은 수익 확률이 아닙니다. 실제 입력 데이터에서 조건이 얼마나 맞았는지 보여주는 기술 조건입니다.</p>
+                    </div>
+                  </div>
+                )}
+
+                {stockTab === "financials" && <TruthUnavailablePanel title="재무 정보" reason="현재 Stock GPT에 연결된 검증 재무 공급자를 아직 안전 감사하지 않았습니다." />}
+                {stockTab === "news" && <TruthUnavailablePanel title="관련 뉴스" reason="기존 뉴스 모듈에는 백업 데이터 경로가 있어 그대로 연결하지 않았습니다. 검증된 원문 출처만 쓰도록 정리한 뒤 연결합니다." />}
+                {stockTab === "community" && <TruthUnavailablePanel title="토론 커뮤니티" reason="검증 가능한 커뮤니티 원문 공급자와 출처 표시가 아직 연결되지 않았습니다." />}
 
                 <div className="grid gap-4 border-t border-slate-800 bg-[#08111d] p-4 xl:grid-cols-[minmax(0,1fr)_330px]">
                   <div className="space-y-3"><div className="rounded-xl border border-cyan-500/20 bg-cyan-950/10 p-4"><div className="mb-3 flex items-center gap-2 text-sm font-black"><Sparkles className="h-4 w-4 text-cyan-300" />초등학생도 이해하는 설명</div><div className="space-y-2 text-sm leading-6 text-slate-300">{explanation.map((line, index) => <p key={`${index}-${line}`}>{index + 1}️⃣ {line}</p>)}</div></div><div className="rounded-xl border border-sky-500/20 bg-sky-950/10 p-4"><div className="text-xs font-black text-sky-300">한 줄 요약</div><p className="mt-2 text-sm leading-6 text-slate-300">{oneLineSummary}</p></div></div>
