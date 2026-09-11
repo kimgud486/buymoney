@@ -3,6 +3,10 @@ import type {
   TrueMTFSnapshotV20,
   TrueMTFTimeframeV20
 } from "./TrueMTFSignalGateV20";
+import {
+  sessionVwapV20,
+  type SessionMarketV20,
+} from "./SessionAwareMarketMathV20";
 
 type RawCandle = {
   timestamp?: number | string;
@@ -40,6 +44,8 @@ export interface ServerTrueMTFBuildInputV20 {
   symbol: string;
   baseUrl: string;
   fetchImpl?: typeof fetch;
+  /** Explicit market is supplied by the realtime hub in production. */
+  market?: SessionMarketV20;
 }
 
 const INTERVAL: Record<TrueMTFTimeframeV20, number> = {
@@ -182,7 +188,7 @@ function rvol(candles: NormalizedCandle[], lookback = 20): number | null {
   return average > 0 ? current / average : null;
 }
 
-function vwap(candles: NormalizedCandle[], lookback = 20): number | null {
+function rollingVwap(candles: NormalizedCandle[], lookback = 20): number | null {
   const rows = candles.slice(-lookback);
   if (!rows.length) return null;
   let pv = 0;
@@ -199,7 +205,8 @@ function buildSnapshot(
   timeframe: TrueMTFTimeframeV20,
   candles: NormalizedCandle[],
   source: string,
-  dataStatus: "REALTIME_VERIFIED" | "REALTIME_DERIVED"
+  dataStatus: "REALTIME_VERIFIED" | "REALTIME_DERIVED",
+  market?: SessionMarketV20,
 ): TrueMTFSnapshotV20 | null {
   if (candles.length < 55) return null;
   const closes = candles.map(c => c.close);
@@ -215,6 +222,12 @@ function buildSnapshot(
     ? Math.max(...candles.slice(-21, -1).map(c => c.high))
     : undefined;
 
+  const intradayVwap = timeframe === "D"
+    ? undefined
+    : market
+      ? sessionVwapV20(candles, market)
+      : rollingVwap(candles) ?? undefined;
+
   return {
     timeframe,
     dataStatus,
@@ -229,7 +242,7 @@ function buildSnapshot(
     rsi14: r14!,
     macdHist: macd!,
     rvol: relativeVolume!,
-    vwap: vwap(candles) ?? undefined,
+    vwap: intradayVwap,
     previousHigh20
   };
 }
@@ -271,19 +284,23 @@ export class ServerTrueMTFEvidenceProviderV20 {
 
     const evidence: TrueMTFEvidenceV20 = {};
     if (m1) {
-      const m1Snapshot = buildSnapshot("1m", m1.candles, m1.source, m1.dataStatus);
+      const m1Snapshot = buildSnapshot("1m", m1.candles, m1.source, m1.dataStatus, input.market);
       if (m1Snapshot) evidence["1m"] = m1Snapshot;
       const derived3 = aggregateOneMinuteToThreeMinuteV20(m1.candles);
-      const m3Snapshot = buildSnapshot("3m", derived3, `${m1.source}:DERIVED_3M`, "REALTIME_DERIVED");
+      const m3Snapshot = buildSnapshot("3m", derived3, `${m1.source}:DERIVED_3M`, "REALTIME_DERIVED", input.market);
       if (m3Snapshot) evidence["3m"] = m3Snapshot;
     }
     if (m5) {
-      const snapshot = buildSnapshot("5m", m5.candles, m5.source, m5.dataStatus);
+      const snapshot = buildSnapshot("5m", m5.candles, m5.source, m5.dataStatus, input.market);
       if (snapshot) evidence["5m"] = snapshot;
     }
     if (daily) {
-      const snapshot = buildSnapshot("D", daily.candles, daily.source, daily.dataStatus);
+      const snapshot = buildSnapshot("D", daily.candles, daily.source, daily.dataStatus, input.market);
       if (snapshot) evidence.D = snapshot;
+    }
+
+    if (evidence["1m"] || evidence["3m"] || evidence["5m"] || evidence.D) {
+      evidence.asOfTimestamp = Date.now();
     }
     return evidence;
   }

@@ -234,6 +234,11 @@ export class RealtimeHubCandidateBuilderV20 {
       symbol: built.candidate.symbol,
       baseUrl,
       fetchImpl,
+      market: built.candidate.market === "KR"
+        ? "KOREA"
+        : built.candidate.market === "US"
+          ? "US"
+          : "UPBIT",
     });
 
     return {
