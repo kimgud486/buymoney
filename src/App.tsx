@@ -16,6 +16,7 @@ import RealtimeStreamFeedBridge from "./components/trading/RealtimeStreamFeedBri
 import OperationalTruthMonitorV20 from "./components/trading/OperationalTruthMonitorV20";
 import AiSignalsResponsiveLayoutFix from "./components/trading/AiSignalsResponsiveLayoutFix";
 import VerifiedTimeframeFetchBridge from "./components/trading/VerifiedTimeframeFetchBridge";
+import ScannerGraphButtonBridge from "./components/trading/ScannerGraphButtonBridge";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MainScreenKoreanText } from "./components/MainScreenKoreanText";
 import ElementaryScanExplanationPanel from "./components/ElementaryScanExplanationPanel";
@@ -60,6 +61,7 @@ function MainLayout() {
       <RealtimeStreamFeedBridge />
       <FeedResiliencePolicyBridge />
       <AiSignalsResponsiveLayoutFix />
+      <ScannerGraphButtonBridge />
 
       <ErrorBoundary>
         <RealtimeHubStatusStrip />
