@@ -1,7 +1,7 @@
 // ----------------------------------------------------------------------
 // CHECK FINAL PRODUCTION TRUTH MJS (BUYMONEY FINAL SYSTEM)
-// Verifies production zero-fake posture & V20 BUY/HOLD authority wiring.
-// UI composition follows the current unified main-dashboard contract.
+// Verifies production zero-fake posture, V20 BUY/HOLD authority wiring,
+// and the current Stock GPT verified-data-only UI contract.
 // ----------------------------------------------------------------------
 
 import fs from "fs";
@@ -33,6 +33,7 @@ const requiredFiles = [
   "src/components/VerifiedAiOpportunityScanner.tsx",
   "src/components/VerifiedIntradaySignalPanel.tsx",
   "src/components/trading/MasterAiAutoTradingDashboard.tsx",
+  "src/components/trading/StockGPTShellV2.tsx",
   "src/services/KISRealtimeFieldSchema.ts",
   "src/trading/PositionStateMachine.ts",
   "src/trading/LivePositionRuntimeService.ts"
@@ -120,14 +121,54 @@ if (scannerUi.includes("evaluateVerifiedSignal(")) errors.push("VerifiedAiOpport
 if (scannerUi.includes('verified && score >= 76 ? "BUY"')) errors.push("Browser must never promote PRECHECK score directly to BUY");
 if (!scannerUi.includes("PRECHECK는 후보 압축만 합니다")) errors.push("UI must visibly distinguish PRECHECK from FINAL BUY authority");
 
-// Current main-screen contract: one unified trading dashboard is mounted.
-// Legacy panels remain available as modules but must not be required as separate main-screen mounts.
+// Current main-screen contract: Stock GPT is the visible shell. The old autonomous dashboard
+// remains available as a module, but must not be mounted beside or behind the new UI.
 const appContent = read("src/App.tsx");
-if (!appContent.includes("<MasterAiAutoTradingDashboard")) {
-  errors.push("App must mount the current unified autonomous trading dashboard");
+const stockGptUi = read("src/components/trading/StockGPTShellV2.tsx");
+if (!appContent.includes("StockGPTShellV2") || !appContent.includes("<StockGPTShellV2")) {
+  errors.push("App must mount StockGPTShellV2 as the current main UI");
+}
+if (appContent.includes("<MasterAiAutoTradingDashboard")) {
+  errors.push("Legacy autonomous dashboard must not be mounted behind the Stock GPT UI");
+}
+for (const bridge of [
+  "<VerifiedTimeframeFetchBridge",
+  "<RealtimeMarketStreamManager",
+  "<RealtimeStreamFeedBridge",
+  "<FeedResiliencePolicyBridge",
+  "<OperationalTruthMonitorV20"
+]) {
+  if (!appContent.includes(bridge)) errors.push(`Stock GPT App must preserve live/truth bridge: ${bridge}`);
 }
 if (appContent.includes("<BuyHoldSystemStatusPanel") || appContent.includes("<VerifiedIntradaySignalPanel")) {
-  errors.push("Legacy duplicate trading panels must remain unmounted from the unified main screen");
+  errors.push("Legacy duplicate trading panels must remain unmounted from the Stock GPT main screen");
+}
+
+for (const requiredToken of [
+  "VERIFIED DATA ONLY",
+  "ZERO FAKE DATA",
+  "NO_DATA",
+  "payload?.dataValid !== true",
+  "analyzeRealPatterns",
+  "실제 OHLCV",
+  "합성 캔들은 생성하지 않습니다",
+  "LONG 검토",
+  "SHORT 검토",
+  "검토 단계만 열립니다"
+]) {
+  if (!stockGptUi.includes(requiredToken)) errors.push(`Stock GPT verified-data contract missing: ${requiredToken}`);
+}
+for (const forbiddenToken of [
+  "Math.random(",
+  "Math.sin(",
+  "DEMO_STOCKS",
+  "syntheticCandles",
+  "generateHistory(",
+  "safeStock: StockItem",
+  "Simulated position",
+  "reliabilityScore: 96"
+]) {
+  if (stockGptUi.includes(forbiddenToken)) errors.push(`Stock GPT UI contains forbidden synthetic/fake token: ${forbiddenToken}`);
 }
 
 const finalHttp = read("server/v20/FinalBuyHoldHttpHandlerV20.ts");
