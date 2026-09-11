@@ -14,7 +14,7 @@ import RealtimeStreamFeedBridge from "./components/trading/RealtimeStreamFeedBri
 import OperationalTruthMonitorV20 from "./components/trading/OperationalTruthMonitorV20";
 import VerifiedTimeframeFetchBridge from "./components/trading/VerifiedTimeframeFetchBridge";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import StockGPTShell from "./components/trading/StockGPTShell";
+import StockGPTShellV2 from "./components/trading/StockGPTShellV2";
 import { v11ExecutionEngine } from "./components/AistockV11ExecutionConsole";
 
 function MainLayout() {
@@ -51,13 +51,11 @@ function MainLayout() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans relative">
-      {/* Existing live-data bridges stay mounted behind the redesigned UI. */}
       <VerifiedTimeframeFetchBridge />
       <RealtimeMarketStreamManager />
       <RealtimeStreamFeedBridge />
       <FeedResiliencePolicyBridge />
 
-      {/* Keep operational truth checks alive without exposing the legacy dashboard chrome. */}
       <div className="hidden" aria-hidden="true">
         <ErrorBoundary>
           <OperationalTruthMonitorV20 />
@@ -65,7 +63,7 @@ function MainLayout() {
       </div>
 
       <ErrorBoundary>
-        <StockGPTShell />
+        <StockGPTShellV2 />
       </ErrorBoundary>
 
       <ToastContainer />
