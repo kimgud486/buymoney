@@ -12,6 +12,7 @@ import { PatternTruthEngineV192 } from "./PatternTruthEngineV192";
 import { Candle } from "./StructureBrain";
 import { getExchangeMasterUniverseV20 } from "./ExchangeMasterUniverseSyncV20";
 import { buildRealtimeHubStatusV20, RealtimeHubStatusV20 } from "../../server/v20/RealtimeHubStatusV20";
+import { serverCandleWarmCoordinatorV20 } from "../../server/v20/ServerCandleWarmCoordinatorV20";
 
 export type UsExchange = "NASDAQ" | "NYSE" | "AMEX" | "UNKNOWN";
 
@@ -73,6 +74,9 @@ export interface ScanResultV192 {
   hotItems: HotListItemV192[];
 }
 
+const MIN_ANALYSIS_15M_BARS = 35;
+const MAX_PREWARM_SYMBOLS_PER_MARKET = 8;
+
 const US_EXCHANGE_MAP: Record<string, UsExchange> = {
   NVDA: "NASDAQ", TSLA: "NASDAQ", AAPL: "NASDAQ", MSFT: "NASDAQ",
   AMZN: "NASDAQ", GOOGL: "NASDAQ", META: "NASDAQ", AMD: "NASDAQ",
@@ -89,6 +93,25 @@ export function calculateAbsoluteEvidenceScore(earnedPoints: number, availableEv
     setupScore: Math.round(Math.min(earned, available)),
     coveragePct: Math.round(available),
   };
+}
+
+async function prewarmLiveCandidates(
+  stocks: LiveStockItem[],
+  market: "KOREA" | "US" | "UPBIT"
+): Promise<void> {
+  const requests = stocks
+    .filter((stock) => {
+      const quote = realtimeMarketFeedService.getQuote(stock.symbol);
+      if (!requireLiveData(quote)) return false;
+      const snapshot = realCandleStore.getSnapshot(stock.symbol, "15m");
+      return !snapshot || !snapshot.verified || snapshot.stale || snapshot.candles.length < MIN_ANALYSIS_15M_BARS;
+    })
+    .slice(0, MAX_PREWARM_SYMBOLS_PER_MARKET)
+    .map((stock) => ({ symbol: stock.symbol, market }));
+
+  if (requests.length > 0) {
+    await serverCandleWarmCoordinatorV20.warmBatch(requests, MAX_PREWARM_SYMBOLS_PER_MARKET);
+  }
 }
 
 export class GlobalRealtimeScannerV192 {
@@ -125,7 +148,7 @@ export class GlobalRealtimeScannerV192 {
 
       const price = quote!.price!;
       const candleSnapshot = realCandleStore.getSnapshot(stock.symbol, "15m");
-      if (!candleSnapshot || !candleSnapshot.verified || candleSnapshot.stale || candleSnapshot.candles.length < 35) continue;
+      if (!candleSnapshot || !candleSnapshot.verified || candleSnapshot.stale || candleSnapshot.candles.length < MIN_ANALYSIS_15M_BARS) continue;
       const candles15m = candleSnapshot.candles;
       const rawCandles: Candle[] = candles15m.map(c => ({ timestamp: c.timestamp, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume }));
       const snapshot = IndicatorTruthEngine.computeSnapshot(rawCandles);
@@ -244,12 +267,15 @@ export async function scanGlobalRealtimeHotListV192(options?: {
   const scanOpts = { exchangeFilter, patternFilter, minObjectivePct, minSetupScore };
 
   if (normalizedMarket === "ALL" || normalizedMarket === "KOREA") {
+    await prewarmLiveCandidates(krStocks, "KOREA");
     const krRes = GlobalRealtimeScannerV192.scanMarket(krStocks, "KOREA", scanOpts); hotItems.push(...krRes.items); krCount = krRes.scannedCount; totalScanned += krRes.scannedCount;
   }
   if (normalizedMarket === "ALL" || normalizedMarket === "US") {
+    await prewarmLiveCandidates(usStocks, "US");
     const usRes = GlobalRealtimeScannerV192.scanMarket(usStocks, "US", scanOpts); hotItems.push(...usRes.items); usCount = usRes.scannedCount; totalScanned += usRes.scannedCount;
   }
   if (normalizedMarket === "ALL" || normalizedMarket === "UPBIT") {
+    await prewarmLiveCandidates(upbitStocks, "UPBIT");
     const upbitRes = GlobalRealtimeScannerV192.scanMarket(upbitStocks, "UPBIT", scanOpts); hotItems.push(...upbitRes.items); upbitCount = upbitRes.scannedCount; totalScanned += upbitRes.scannedCount;
   }
 
