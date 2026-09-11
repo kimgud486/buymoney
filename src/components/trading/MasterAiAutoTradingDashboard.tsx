@@ -950,11 +950,11 @@ export const MasterAiAutoTradingDashboard: React.FC<{
           <div>
             <div className="flex items-center gap-2">
               <h1 className={`text-sm font-black tracking-wider ${isWhiteTheme ? "text-slate-900" : "text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-teal-300 to-blue-300"}`}>
-                AI AUTO TRADING
+                AI 자율매매 관제센터
               </h1>
             </div>
             <p className={`text-[10px] ${isWhiteTheme ? "text-slate-500" : "text-slate-400"} font-mono tracking-wide leading-none`}>
-              Autonomous AI Trading System
+              실시간 AI 자율매매 알고리즘
             </p>
           </div>
         </div>
@@ -964,7 +964,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
           <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full ${isWhiteTheme ? "bg-cyan-50 border border-cyan-200 text-cyan-800" : "bg-[#0a182e] border border-cyan-900/60 text-cyan-300"} text-xs font-medium shadow-inner`}>
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping inline-block" />
             <span className="w-2 h-2 rounded-full bg-emerald-500 -ml-3.5 inline-block" />
-            <span className="text-[11px] font-semibold">Real-time Analysis</span>
+            <span className="text-[11px] font-semibold">실시간 시세 분석중</span>
           </div>
 
           <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full ${
@@ -1175,11 +1175,11 @@ export const MasterAiAutoTradingDashboard: React.FC<{
           <div className={`${isWhiteTheme ? "bg-white border-slate-200 shadow-sm" : "bg-[#081222] border-[#13233c] shadow-sm"} border rounded-xl p-3 flex flex-col gap-2 transition-colors`}>
             <div className={`flex items-center justify-between pb-1 border-b ${isWhiteTheme ? "border-slate-200" : "border-[#13233c]/60"}`}>
               <h2 className={`text-xs font-bold tracking-wider ${isWhiteTheme ? "text-slate-800" : "text-slate-300"} font-mono`}>
-                MARKET OVERVIEW
+                시장 주요 지표
               </h2>
               <span className={`text-[10px] ${isWhiteTheme ? "text-cyan-700 font-semibold" : "text-cyan-400"} flex items-center gap-1`}>
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                Live 1s
+                실시간 1초
               </span>
             </div>
 
@@ -1221,7 +1221,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
             <div className={`flex items-center justify-between pb-1 border-b ${isWhiteTheme ? "border-slate-200" : "border-[#13233c]/60"}`}>
               <div className="flex items-center gap-1.5">
                 <h2 className={`text-xs font-bold tracking-wider ${isWhiteTheme ? "text-slate-800" : "text-slate-300"} font-mono`}>
-                  WATCHLIST
+                  관심 종목 리스트
                 </h2>
                 <span className={`text-[9px] px-1.5 py-0.5 rounded ${isWhiteTheme ? "bg-cyan-50 text-cyan-800 border-cyan-300" : "bg-cyan-950 text-cyan-300 border-cyan-800/60"} border font-mono`}>
                   실시간 연동
@@ -1421,19 +1421,19 @@ export const MasterAiAutoTradingDashboard: React.FC<{
           <div className={`${isWhiteTheme ? "bg-white border-slate-200 shadow-sm" : "bg-[#081222] border-[#13233c] shadow-sm"} border rounded-xl p-3 flex flex-col gap-3 transition-colors`}>
             <div className={`flex items-center justify-between pb-1 border-b ${isWhiteTheme ? "border-slate-200" : "border-[#13233c]/60"}`}>
               <h2 className={`text-xs font-bold tracking-wider ${isWhiteTheme ? "text-slate-800" : "text-slate-300"} font-mono`}>
-                PERFORMANCE SUMMARY
+                운용 성과 요약
               </h2>
-              <span className={`text-[10px] ${isWhiteTheme ? "text-slate-500" : "text-slate-400"}`}>Total Account</span>
+              <span className={`text-[10px] ${isWhiteTheme ? "text-slate-500" : "text-slate-400"}`}>전체 계좌</span>
             </div>
 
             <div className="flex items-center justify-between">
               <div>
-                <div className={`text-[10px] font-mono ${isWhiteTheme ? "text-slate-500" : "text-slate-400"}`}>Total P/L</div>
+                <div className={`text-[10px] font-mono ${isWhiteTheme ? "text-slate-500" : "text-slate-400"}`}>총 손익</div>
                 <div className={`text-2xl font-black ${totalTradingPnl >= 0 ? (isWhiteTheme ? "text-emerald-600" : "text-emerald-400") : "text-rose-500"} font-mono tracking-tight`}>
                   {totalTradingPnl >= 0 ? `+${(totalTradingPnl ?? 0).toLocaleString()}원` : `${(totalTradingPnl ?? 0).toLocaleString()}원`}
                 </div>
                 <div className={`text-[11px] ${totalTradingPnl >= 0 ? (isWhiteTheme ? "text-emerald-700" : "text-emerald-300/80") : "text-rose-400"} font-mono`}>
-                  Realized PnL
+                  실현 손익
                 </div>
               </div>
 
@@ -1465,23 +1465,23 @@ export const MasterAiAutoTradingDashboard: React.FC<{
 
             <div className={`grid grid-cols-2 gap-2 pt-1 border-t ${isWhiteTheme ? "border-slate-200" : "border-slate-800/60"} text-xs font-mono`}>
               <div>
-                <span className={`${isWhiteTheme ? "text-slate-500" : "text-slate-500"} text-[10px]`}>Win Rate</span>
+                <span className={`${isWhiteTheme ? "text-slate-500" : "text-slate-500"} text-[10px]`}>승률</span>
                 <div className={`font-bold ${isWhiteTheme ? "text-slate-900" : "text-slate-200"}`}>
                   {trades && trades.length > 0 ? `${Math.round((trades.filter((t: any) => t.pnl > 0).length / trades.length) * 100)}%` : "0%"}
                 </div>
               </div>
               <div>
-                <span className={`${isWhiteTheme ? "text-slate-500" : "text-slate-500"} text-[10px]`}>Total Trades</span>
+                <span className={`${isWhiteTheme ? "text-slate-500" : "text-slate-500"} text-[10px]`}>총 매매 횟수</span>
                 <div className={`font-bold ${isWhiteTheme ? "text-slate-900" : "text-slate-200"}`}>{trades ? trades.length : 0}</div>
               </div>
               <div className={`col-span-2 flex items-center justify-between text-[10px] ${isWhiteTheme ? "text-slate-500" : "text-slate-400"}`}>
                 <span className="flex items-center gap-1">
                   <span className={`w-1.5 h-1.5 rounded-full ${isWhiteTheme ? "bg-emerald-600" : "bg-emerald-400"}`} />
-                  Win {trades ? trades.filter((t: any) => t.pnl > 0).length : 0}
+                  승 {trades ? trades.filter((t: any) => t.pnl > 0).length : 0}
                 </span>
                 <span className="flex items-center gap-1">
                   <span className={`w-1.5 h-1.5 rounded-full ${isWhiteTheme ? "bg-rose-600" : "bg-rose-400"}`} />
-                  Loss {trades ? trades.filter((t: any) => t.pnl < 0).length : 0}
+                  패 {trades ? trades.filter((t: any) => t.pnl < 0).length : 0}
                 </span>
               </div>
             </div>
@@ -1489,7 +1489,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
             {/* Daily Performance Bar Chart */}
             <div className={`pt-2 border-t ${isWhiteTheme ? "border-slate-200" : "border-slate-800/60"}`}>
               <div className={`text-[10px] font-mono ${isWhiteTheme ? "text-slate-500" : "text-slate-400"} mb-1.5`}>
-                Daily Performance
+                일별 성과 추이
               </div>
               <div className={`h-14 flex items-end justify-between gap-1.5 px-1 ${isWhiteTheme ? "bg-slate-50 border border-slate-200" : "bg-[#060e1b]"} rounded-lg p-1.5`}>
                 {[

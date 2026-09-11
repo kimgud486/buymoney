@@ -73,7 +73,7 @@ export default function RealtimeHubStatusStrip() {
     ? "🟢 데이터 정상"
     : status?.health === "DEGRADED"
       ? "🟡 일부 지연"
-      : "⚪ NO DATA";
+      : "⚪ 데이터 없음";
 
   const n = (value: number | undefined) => status ? value ?? 0 : "-";
 

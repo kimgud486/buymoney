@@ -105,7 +105,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onLock }) => {
                 </span>
                 <span className="text-[8px] sm:text-[9px] text-emerald-600 dark:text-emerald-400 font-mono font-bold bg-emerald-50 dark:bg-emerald-950/60 px-1 py-0.2 rounded border border-emerald-150 dark:border-emerald-800">LIVE</span>
               </div>
-              <p className="text-[9px] sm:text-[10px] text-zinc-400 dark:text-zinc-500 font-mono tracking-widest uppercase hidden xs:block">AI Real Auto Trading</p>
+              <p className="text-[9px] sm:text-[10px] text-zinc-400 dark:text-zinc-500 font-mono tracking-widest uppercase hidden xs:block">AI 실전 자율매매 시스템</p>
             </div>
 
             {/* PROMINENT MOCK / REAL MODE TOGGLE SWITCH & CONNECTION HEALTH WIDGET */}
@@ -200,7 +200,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onLock }) => {
               </div>
               <div className="flex items-center gap-1.5 bg-zinc-50 px-2.5 py-1 rounded border border-zinc-200">
                 <Shield className="h-3.5 w-3.5 text-zinc-600" />
-                <span className="text-zinc-500 uppercase text-[10px]">RISK:</span>
+                <span className="text-zinc-500 uppercase text-[10px]">위험도:</span>
                 <span className="font-bold text-zinc-800 text-[10px]">{marketStatus.riskLevel}</span>
               </div>
             </div>
@@ -230,8 +230,8 @@ export const Navbar: React.FC<NavbarProps> = ({ onLock }) => {
               title="포커스 모드: 핵심 AI 예측 차트와 매매 버튼만 강조 표시"
             >
               <Target className={`h-3.5 w-3.5 shrink-0 ${isFocusMode ? "text-cyan-200 animate-spin" : "text-zinc-600"}`} />
-              <span className="hidden sm:inline">{isFocusMode ? "🎯 Focus ON" : "👁️ Focus OFF"}</span>
-              <span className="sm:hidden text-[10px]">{isFocusMode ? "Focus ON" : "Focus"}</span>
+              <span className="hidden sm:inline">{isFocusMode ? "🎯 포커스 ON" : "👁️ 포커스 OFF"}</span>
+              <span className="sm:hidden text-[10px]">{isFocusMode ? "포커스 ON" : "포커스"}</span>
             </button>
 
             {/* Master Pipeline Control Hub Button */}

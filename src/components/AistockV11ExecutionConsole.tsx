@@ -67,10 +67,10 @@ export const AistockV11ExecutionConsole: React.FC = () => {
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="text-xl font-black text-zinc-900 tracking-tight">
-                ⚙️ AISTOCK 24 v11 Autonomous Execution Engine
+                ⚙️ AISTOCK 24 v11 자율 실행 엔진
               </h2>
               <span className="px-2.5 py-0.5 bg-rose-600 text-white rounded-full text-xs font-black">
-                LIVE ONLY
+                실전 전용
               </span>
               <span
                 className={`px-2.5 py-0.5 rounded-full text-xs font-black flex items-center gap-1 ${
@@ -92,7 +92,7 @@ export const AistockV11ExecutionConsole: React.FC = () => {
               </span>
             </div>
             <p className="text-xs text-zinc-500 font-medium mt-0.5">
-              Global Scanner ➔ Unified Shape AI ➔ Risk Gate ➔ KIS Broker ➔ Adaptive Exit
+              글로벌 스캐너 ➔ 통합 차트분석 AI ➔ 리스크 검증 ➔ 증권사 주문 ➔ 적응형 청산
             </p>
           </div>
         </div>
@@ -140,7 +140,7 @@ export const AistockV11ExecutionConsole: React.FC = () => {
           <div className="flex items-center gap-2">
             <Radio className="w-4 h-4 text-cyan-400 animate-pulse" />
             <span className="text-xs font-black text-cyan-300 uppercase tracking-wider">
-              LIVE Autonomous Trading Pipeline
+              실전 자율매매 파이프라인
             </span>
           </div>
           <span className="text-[10px] text-zinc-400 font-mono">
@@ -149,11 +149,11 @@ export const AistockV11ExecutionConsole: React.FC = () => {
         </div>
         <div className="flex items-center gap-2 overflow-x-auto py-1 text-[11px] font-mono">
           {[
-            ["1. Scanner", Globe2],
-            ["2. Unified Shape", Zap],
-            ["3. Risk Gate", ShieldCheck],
-            ["4. Broker Order", Building2],
-            ["5. Position / Exit", Activity],
+            ["1. 마켓 스캐너", Globe2],
+            ["2. 통합 패턴분석", Zap],
+            ["3. 리스크 게이트", ShieldCheck],
+            ["4. 증권사 주문", Building2],
+            ["5. 잔고/청산 관리", Activity],
           ].map(([label, Icon], index) => {
             const C = Icon as React.ComponentType<{ className?: string }>;
             return (
@@ -277,14 +277,14 @@ export const AistockV11ExecutionConsole: React.FC = () => {
             <div className="flex items-center gap-3">
               <Activity className="h-5 w-5 text-cyan-400" />
               <div>
-                <h3 className="text-base font-black text-white">Execution State Machine Monitor</h3>
+                <h3 className="text-base font-black text-white">실행 상태머신 모니터</h3>
                 <p className="text-xs text-zinc-400 mt-0.5">
                   주문 중복 방지, stale signal 차단, 체결 확인 후 포지션 확정 상태머신입니다.
                 </p>
               </div>
             </div>
             <span className="px-2.5 py-0.5 rounded text-xs font-black bg-zinc-800 text-zinc-200">
-              STATE: {currentState}
+              상태: {currentState}
             </span>
           </div>
 
