@@ -123,11 +123,18 @@ function retest(candles: HubCandle[], vwapValue?: number): boolean {
   return touched && last.close >= vwapValue && prev.close >= vwapValue;
 }
 
+function usablePattern(pattern?: string | null): string[] | undefined {
+  const code = String(pattern || "").trim().toUpperCase();
+  if (!code || code === "NO_PATTERN" || code === "WARMING_UP") return undefined;
+  return [code];
+}
+
 export class RealtimeHubCandidateBuilderV20 {
   public static build(symbol: string): RealtimeCandidateBuildResultV20 {
     const key = String(symbol || "").trim().toUpperCase();
     const quote = key ? serverRealtimeMarketHubV20.getQuote(key) : null;
     const candles = key ? (serverRealtimeMarketHubV20.getCandles(key) as HubCandle[]) : [];
+    const unifiedSignal = key ? serverRealtimeMarketHubV20.getLatestSignal(key) : null;
 
     if (!key || !quote) {
       return {
@@ -168,16 +175,21 @@ export class RealtimeHubCandidateBuilderV20 {
     }
 
     const closes = candles.map((c) => c.close);
-    const vwapValue = vwap(candles);
-    const ema9 = ema(closes, 9);
-    const ema20 = ema(closes, 20);
-    const ema50 = ema(closes, 50);
-    const atr14 = atr(candles, 14);
-    const rsi14 = rsi(closes, 14);
+    const signalIndicators = unifiedSignal?.dataStatus === "READY" ? unifiedSignal.indicators : null;
+    const vwapValue = signalIndicators?.vwap ?? vwap(candles);
+    const ema9 = signalIndicators?.ema9 ?? ema(closes, 9);
+    const ema20 = signalIndicators?.ema20 ?? ema(closes, 20);
+    const ema50 = signalIndicators?.ema50 ?? ema(closes, 50);
+    const atr14 = signalIndicators?.atr14 ?? atr(candles, 14);
+    const rsi14 = signalIndicators?.rsi14 ?? rsi(closes, 14);
+    const currentRvol = signalIndicators?.rvol20 ?? rvol(candles, 20);
     const first = candles[0];
     const latest = candles[candles.length - 1];
     const spreadBps = quote.askPrice && quote.bidPrice && quote.askPrice >= quote.bidPrice && quote.price > 0
       ? ((quote.askPrice - quote.bidPrice) / quote.price) * 10_000
+      : undefined;
+    const detectedPatterns = unifiedSignal?.dataStatus === "READY"
+      ? usablePattern(unifiedSignal.pattern)
       : undefined;
 
     const candidate: ScanCandidateInput = {
@@ -192,7 +204,7 @@ export class RealtimeHubCandidateBuilderV20 {
       changePct: quote.changePct,
       volume: quote.volume,
       tradeValue: quote.tradeValue,
-      rvol: rvol(candles, 20),
+      rvol: currentRvol,
       liquiditySource: quote.source,
       vwap: vwapValue,
       ema9,
@@ -201,8 +213,9 @@ export class RealtimeHubCandidateBuilderV20 {
       atr14,
       rsi14,
       spreadBps,
+      patterns: detectedPatterns,
       structureTrend: structure(candles),
-      isBreakout: breakout(candles, 20),
+      isBreakout: unifiedSignal?.pattern === "BREAKOUT_20" || breakout(candles, 20),
       isRetest: retest(candles, vwapValue),
       chaseRisk: rsi14 !== undefined && rsi14 >= 82,
       exhaustionRisk: atr14 !== undefined && quote.price > 0 && atr14 / quote.price >= 0.12,
