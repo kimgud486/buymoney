@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -32,6 +32,16 @@ type TestResult = {
   fingerprint?: string;
 };
 
+type UsScannerDiagnostic = {
+  known: boolean;
+  universe: number;
+  liveQuoteReady: number;
+  candle15mReady: number;
+  passed: number;
+  dataStatus: string;
+  error?: string;
+};
+
 type KisRuntimeStatus = {
   loading: boolean;
   checkedAt: number | null;
@@ -44,7 +54,17 @@ type KisRuntimeStatus = {
   marketSession: string;
   lastPrice: number | null;
   quoteAsOf: string | null;
+  us: UsScannerDiagnostic;
   error?: string;
+};
+
+const EMPTY_US_STATUS: UsScannerDiagnostic = {
+  known: false,
+  universe: 0,
+  liveQuoteReady: 0,
+  candle15mReady: 0,
+  passed: 0,
+  dataStatus: "UNKNOWN"
 };
 
 const EMPTY_KIS_STATUS: KisRuntimeStatus = {
@@ -58,13 +78,19 @@ const EMPTY_KIS_STATUS: KisRuntimeStatus = {
   dataStatus: "NO_DATA",
   marketSession: "UNKNOWN",
   lastPrice: null,
-  quoteAsOf: null
+  quoteAsOf: null,
+  us: EMPTY_US_STATUS
 };
 
 const maskAccount = (value: string) => {
   const clean = value.trim();
   if (clean.length <= 4) return clean;
   return `${clean.slice(0, 3)}****${clean.slice(-2)}`;
+};
+
+const safeCount = (value: unknown) => {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 };
 
 const StatusDot: React.FC<{ ok?: boolean; unknown?: boolean }> = ({ ok, unknown }) => (
@@ -99,7 +125,6 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({ is
   const [koreaSecret, setKoreaSecret] = useState("");
   const [koreaAccountNo, setKoreaAccountNo] = useState(profile?.koreaAccountNo || "");
   const [koreaAccountCode, setKoreaAccountCode] = useState(profile?.koreaAccountCode || "01");
-
   const [upbitKey, setUpbitKey] = useState("");
   const [upbitSecret, setUpbitSecret] = useState("");
 
@@ -118,40 +143,80 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({ is
     testResult.broker === activeTab &&
     testResult.fingerprint === (activeTab === "KOREA" ? koreaFingerprint : upbitFingerprint);
 
-  const fetchKisRuntimeStatus = async () => {
+  const fetchKisRuntimeStatus = useCallback(async () => {
     setKisStatus((prev) => ({ ...prev, loading: true }));
-    try {
-      const res = await fetch("/api/broker/v21/runtime?symbol=005930", { cache: "no-store" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
 
-      const evidence = data?.liveEnvironmentProof?.evidence || {};
-      setKisStatus({
-        loading: false,
-        checkedAt: Date.now(),
-        brokerConfigured: evidence?.brokerConfigured === true || data?.oauth !== "NOT_CONFIGURED",
-        oauthAuthenticated: evidence?.oauthAuthenticated === true || data?.oauth === "AUTHENTICATED",
-        accountQuerySucceeded: evidence?.accountQuerySucceeded === true,
-        quoteQuerySucceeded: evidence?.quoteQuerySucceeded === true,
-        realtimeQuoteVerified: evidence?.realtimeQuoteVerified === true,
-        dataStatus: String(data?.dataStatus || "NO_DATA"),
-        marketSession: String(data?.marketSession || "UNKNOWN"),
-        lastPrice: Number.isFinite(Number(data?.lastPrice)) ? Number(data.lastPrice) : null,
-        quoteAsOf: data?.quoteAsOf ? String(data.quoteAsOf) : null
+    const runtimeRequest = fetch("/api/broker/v21/runtime?symbol=005930", { cache: "no-store" })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || `KIS runtime HTTP ${res.status}`);
+        return data;
       });
-    } catch (error: any) {
-      setKisStatus((prev) => ({
+
+    const usScannerRequest = fetch("/api/ai/hot-list", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ marketFilter: "US" })
+    }).then(async (res) => {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.diagnostics) {
+        throw new Error(`미국 스캐너 진단 HTTP ${res.status}`);
+      }
+      return data;
+    });
+
+    const [runtimeResult, scannerResult] = await Promise.allSettled([runtimeRequest, usScannerRequest]);
+
+    setKisStatus((prev) => {
+      const next: KisRuntimeStatus = {
         ...prev,
         loading: false,
         checkedAt: Date.now(),
-        error: error?.message || "KIS 상태 확인 실패"
-      }));
-    }
-  };
+        error: undefined,
+        us: { ...prev.us, error: undefined }
+      };
+
+      if (runtimeResult.status === "fulfilled") {
+        const data = runtimeResult.value;
+        const evidence = data?.liveEnvironmentProof?.evidence || {};
+        next.brokerConfigured = evidence?.brokerConfigured === true || data?.oauth !== "NOT_CONFIGURED";
+        next.oauthAuthenticated = evidence?.oauthAuthenticated === true || data?.oauth === "AUTHENTICATED";
+        next.accountQuerySucceeded = evidence?.accountQuerySucceeded === true;
+        next.quoteQuerySucceeded = evidence?.quoteQuerySucceeded === true;
+        next.realtimeQuoteVerified = evidence?.realtimeQuoteVerified === true;
+        next.dataStatus = String(data?.dataStatus || "NO_DATA");
+        next.marketSession = String(data?.marketSession || "UNKNOWN");
+        next.lastPrice = Number.isFinite(Number(data?.lastPrice)) ? Number(data.lastPrice) : null;
+        next.quoteAsOf = data?.quoteAsOf ? String(data.quoteAsOf) : null;
+      } else {
+        next.error = runtimeResult.reason instanceof Error ? runtimeResult.reason.message : "KIS 상태 확인 실패";
+      }
+
+      if (scannerResult.status === "fulfilled") {
+        const raw = scannerResult.value?.diagnostics?.US || {};
+        next.us = {
+          known: true,
+          universe: safeCount(raw.universe),
+          liveQuoteReady: safeCount(raw.liveQuoteReady),
+          candle15mReady: safeCount(raw.candle15mReady),
+          passed: safeCount(raw.passed),
+          dataStatus: String(scannerResult.value?.dataStatus || "UNKNOWN")
+        };
+      } else {
+        next.us = {
+          ...prev.us,
+          known: false,
+          error: scannerResult.reason instanceof Error ? scannerResult.reason.message : "미국 스캐너 진단 실패"
+        };
+      }
+
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return;
-
     setTestResult(null);
     setShowSecret(false);
     setShowUpbitSecret(false);
@@ -179,7 +244,7 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({ is
     void fetchKisRuntimeStatus();
     const timer = window.setInterval(() => void fetchKisRuntimeStatus(), 5000);
     return () => window.clearInterval(timer);
-  }, [isOpen, activeTab]);
+  }, [isOpen, activeTab, fetchKisRuntimeStatus]);
 
   const invalidateTest = () => setTestResult(null);
 
@@ -246,7 +311,6 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({ is
         body: JSON.stringify(payload)
       });
       const data = await res.json().catch(() => ({}));
-
       if (!res.ok || data?.success !== true) {
         throw new Error(data?.error || data?.message || `연결 테스트 실패 (HTTP ${res.status})`);
       }
@@ -256,10 +320,9 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({ is
         broker: activeTab,
         fingerprint: activeTab === "KOREA" ? koreaFingerprint : upbitFingerprint,
         message: data?.message || "API 인증에 성공했습니다.",
-        balance:
-          data?.balance !== undefined
-            ? `실시간 조회 잔고: ₩${Number(data.balance).toLocaleString("ko-KR")}`
-            : undefined
+        balance: data?.balance !== undefined
+          ? `실시간 조회 잔고: ₩${Number(data.balance).toLocaleString("ko-KR")}`
+          : undefined
       });
     } catch (error: any) {
       setTestResult({
@@ -302,7 +365,6 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({ is
         body: JSON.stringify(payload)
       });
       const data = await res.json().catch(() => ({}));
-
       if (!res.ok || data?.success === false) {
         throw new Error(data?.error || data?.message || `등록 실패 (HTTP ${res.status})`);
       }
@@ -321,10 +383,9 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({ is
       addToast({
         type: "SUCCESS",
         title: activeTab === "KOREA" ? "KIS API 등록 완료" : "업비트 API 등록 완료",
-        message:
-          activeTab === "KOREA"
-            ? "연결 테스트를 통과한 KIS 인증정보를 서버에 등록했습니다. 실거래 자동주문은 별도로 켜야 합니다."
-            : "연결 테스트를 통과한 업비트 인증정보를 서버에 등록했습니다. 실거래 자동주문은 별도로 켜야 합니다."
+        message: activeTab === "KOREA"
+          ? "연결 테스트를 통과한 KIS 인증정보를 서버에 등록했습니다. 실거래 자동주문은 별도로 켜야 합니다."
+          : "연결 테스트를 통과한 업비트 인증정보를 서버에 등록했습니다. 실거래 자동주문은 별도로 켜야 합니다."
       });
 
       if (syncRealAccountBalance) {
@@ -397,6 +458,8 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({ is
   if (!isOpen) return null;
 
   const brokerError = activeTab === "KOREA" ? brokerApiError?.korea : brokerApiError?.upbit;
+  const usFeedVerified = kisStatus.us.known && kisStatus.us.liveQuoteReady > 0;
+  const usFeedUnknown = !kisStatus.us.known || kisStatus.us.universe <= 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 backdrop-blur-sm">
@@ -462,7 +525,7 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({ is
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
                   <div className="text-sm font-black text-slate-900 dark:text-white">KIS 실제 연결 신호등</div>
-                  <div className="mt-0.5 text-[11px] text-slate-500">서버가 실제로 확인한 값만 초록색으로 표시합니다.</div>
+                  <div className="mt-0.5 text-[11px] text-slate-500">추측하지 않고 서버와 스캐너가 실제로 확인한 값만 초록색으로 표시합니다.</div>
                 </div>
                 <button
                   onClick={() => void fetchKisRuntimeStatus()}
@@ -496,16 +559,28 @@ export const BrokerApiConnectModal: React.FC<BrokerApiConnectModalProps> = ({ is
                   <span className="ml-auto text-slate-500">{kisStatus.realtimeQuoteVerified ? "검증됨" : "미검증"}</span>
                 </div>
                 <div className="flex items-center gap-2 rounded-lg bg-white/80 p-2.5 text-xs dark:bg-slate-950/70 sm:col-span-2">
-                  <StatusDot unknown />
-                  <span className="font-bold">미국 실시간 권한</span>
-                  <span className="ml-auto text-slate-500">별도 KIS 해외 실시간 권한 확인 필요</span>
+                  <StatusDot ok={usFeedVerified} unknown={usFeedUnknown} />
+                  <span className="font-bold">미국 실시간 → 스캐너</span>
+                  <span className="ml-auto text-right text-slate-500">
+                    {usFeedUnknown
+                      ? "확인 근거 없음"
+                      : usFeedVerified
+                        ? `실행등급 ${kisStatus.us.liveQuoteReady}개 수신`
+                        : "실행등급 시세 미수신"}
+                  </span>
                 </div>
               </div>
 
-              <div className="mt-3 text-[11px] leading-5 text-slate-500">
-                시장상태: <strong>{kisStatus.marketSession}</strong> · 데이터: <strong>{kisStatus.dataStatus}</strong>
-                {kisStatus.lastPrice !== null ? ` · 삼성전자 확인가 ${kisStatus.lastPrice.toLocaleString("ko-KR")}` : ""}
-                {kisStatus.error ? ` · 상태확인 오류: ${kisStatus.error}` : ""}
+              <div className="mt-3 rounded-lg bg-slate-950/5 p-2.5 text-[11px] leading-5 text-slate-500 dark:bg-white/5">
+                <div>
+                  국내 시장상태: <strong>{kisStatus.marketSession}</strong> · 데이터: <strong>{kisStatus.dataStatus}</strong>
+                  {kisStatus.lastPrice !== null ? ` · 삼성전자 확인가 ${kisStatus.lastPrice.toLocaleString("ko-KR")}` : ""}
+                </div>
+                <div>
+                  미국 스캐너: 전체 <strong>{kisStatus.us.universe}</strong> · 실행등급 <strong>{kisStatus.us.liveQuoteReady}</strong> · 15분봉 <strong>{kisStatus.us.candle15mReady}</strong> · 조건통과 <strong>{kisStatus.us.passed}</strong>
+                </div>
+                {kisStatus.error ? <div>국내 상태확인 오류: {kisStatus.error}</div> : null}
+                {kisStatus.us.error ? <div>미국 진단 오류: {kisStatus.us.error}</div> : null}
               </div>
             </div>
           )}
