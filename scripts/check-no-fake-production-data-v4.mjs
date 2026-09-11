@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------
-// ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V6 (AISTOCK V21.2 TRUTH-FIRST)
+// ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V7 (AISTOCK V21.2 TRUTH-FIRST)
 // ----------------------------------------------------------------------
 
 import fs from "node:fs";
@@ -25,7 +25,19 @@ const forbidden = [
   /validProjections\[0\]\s*\*\s*1\.0[12]/, /rvol\s*\?\?\s*1\.0/,
   /vwap\s*\?\?\s*price/, /breakoutConfirmed:\s*true\b/, /scannedTotal\s*:\s*3420/,
   /makeMeta\s*\(\s*["']BB_BANDWIDTH["']\s*,\s*3\.5\s*\)/,
-  /aiMatchScore\s*:\s*\+\s*\(\s*8[56]/
+  /aiMatchScore\s*:\s*\+\s*\(\s*8[56]/,
+
+  // Realtime bridge must never invent a healthy stream or plausible market values.
+  /isConnected:\s*true\s*,\s*\n\s*latencyMs:\s*18\b/,
+  /bufferCount:\s*128\b/,
+  /currentTick\?\.price\s*\|\|\s*50000\b/,
+  /changePercent:\s*currentTick\?\.changePct\s*\|\|\s*1\.5\b/,
+  /volume:\s*(?:q\.volume\s*\|\||data\.volume\s*\|\|)\s*["']1\.2M["']/,
+  /rvol:\s*(?:Number\([^)]*\)\s*\|\||)\s*2\.5\b/,
+  /volumePower:\s*Math\.round\(110\s*\+\s*\(Math\.random\(\)/,
+  /Math\.round\(price\s*\*\s*1\.02\)/,
+  /Math\.round\(price\s*\*\s*0\.98\)/,
+  /reason:\s*signal\.reason\s*\|\|\s*`AI 오토트레이딩/,
 ];
 
 const allowedFolders = [
@@ -108,12 +120,12 @@ function scanFile(fullPath) {
   }
 }
 
-console.log("🔍 Running Production Zero Fake Data Audit V6...");
+console.log("🔍 Running Production Zero Fake Data Audit V7...");
 auditPresetFixture();
 auditServerTruthRoutes();
 for (const rootPath of ROOTS) scanPath(rootPath);
 if (failed) {
-  console.error("💥 Zero Fake Data Audit V6 FAILED!");
+  console.error("💥 Zero Fake Data Audit V7 FAILED!");
   process.exit(1);
 }
-console.log("✅ Production Zero Fake Data Audit V6 PASSED cleanly.");
+console.log("✅ Production Zero Fake Data Audit V7 PASSED cleanly.");
