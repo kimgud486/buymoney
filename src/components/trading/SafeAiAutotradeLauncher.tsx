@@ -19,6 +19,7 @@ import {
 
 type ScanMarket = "ALL" | "KOREA" | "US" | "BTC";
 type ExecutionState = "WAITING" | "SUBMITTING" | "EXECUTED" | "SKIPPED" | "FAILED";
+type TradeMarket = "KOREA" | "US" | "BTC";
 
 type SafeAiAutotradeLauncherProps = {
   onSelectSymbolForChart?: (symbol: string) => void;
@@ -99,18 +100,23 @@ const formatPrice = (value: number, market: EnsembleEvaluationResult["market"]):
   return `${Math.round(value).toLocaleString()}원`;
 };
 
+const readMarketCash = (market: TradeMarket, breakdown: any): number | null => {
+  const raw = market === "BTC"
+    ? breakdown?.upbitCash
+    : market === "US"
+      ? breakdown?.usCash
+      : breakdown?.koreaCash;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+};
+
 const getAvailableCash = (
   candidate: EnsembleEvaluationResult,
   cashBreakdown: any,
   profile: any,
 ): number => {
-  const marketCash = candidate.market === "BTC"
-    ? cashBreakdown?.upbitCash
-    : candidate.market === "US"
-      ? cashBreakdown?.usCash
-      : cashBreakdown?.koreaCash;
-
-  if (Number.isFinite(Number(marketCash)) && Number(marketCash) >= 0) return Number(marketCash);
+  const marketCash = readMarketCash(candidate.market, cashBreakdown);
+  if (marketCash !== null) return marketCash;
 
   const fallback = profile?.cash ?? profile?.balance ?? 0;
   return Number.isFinite(Number(fallback)) ? Math.max(0, Number(fallback)) : 0;
@@ -176,8 +182,11 @@ const getAutoOrderSizing = (
   return { qty, availableCash, estimatedCost, riskBudget, riskPerUnit };
 };
 
-const mapMarket = (market: EnsembleEvaluationResult["market"]): "KOREA" | "US" | "BTC" =>
+const mapMarket = (market: EnsembleEvaluationResult["market"]): TradeMarket =>
   market === "BTC" ? "BTC" : market === "US" ? "US" : "KOREA";
+
+const mapBalanceBroker = (market: TradeMarket): "korea" | "us" | "upbit" =>
+  market === "BTC" ? "upbit" : market === "US" ? "us" : "korea";
 
 const normalizeTradingSymbol = (symbol: string): string =>
   String(symbol || "")
@@ -193,6 +202,7 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
     setSelectedSymbol,
     addToast,
     executeTrade,
+    syncRealAccountBalance,
     profile,
     cashBreakdown,
     positions = [],
@@ -270,6 +280,9 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
       return;
     }
 
+    const freshCashByMarket = new Map<TradeMarket, number>();
+    const balanceFailureByMarket = new Map<TradeMarket, string>();
+
     for (const candidate of ready) {
       const candidateMarket = mapMarket(candidate.market);
       const normalizedCandidateSymbol = normalizeTradingSymbol(candidate.symbol);
@@ -312,7 +325,39 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
         continue;
       }
 
-      const availableCash = getAvailableCash(candidate, cashBreakdown, profile);
+      let availableCash = freshCashByMarket.get(candidateMarket);
+      if (availableCash === undefined && !balanceFailureByMarket.has(candidateMarket)) {
+        try {
+          const syncResult = await syncRealAccountBalance(mapBalanceBroker(candidateMarket), true);
+          if (!syncResult?.success) {
+            balanceFailureByMarket.set(candidateMarket, syncResult?.message || "브로커 가용잔고 조회에 실패했습니다.");
+          } else {
+            const syncedBreakdown = syncResult?.cashBreakdown ?? syncResult?.rawResponse?.cashBreakdown;
+            const syncedMarketCash = readMarketCash(candidateMarket, syncedBreakdown);
+            if (syncedMarketCash === null) {
+              balanceFailureByMarket.set(candidateMarket, "브로커 응답에서 시장별 가용잔고를 확인할 수 없습니다.");
+            } else {
+              availableCash = syncedMarketCash;
+              freshCashByMarket.set(candidateMarket, syncedMarketCash);
+            }
+          }
+        } catch (error: any) {
+          balanceFailureByMarket.set(candidateMarket, error?.message || "브로커 가용잔고 조회 중 오류가 발생했습니다.");
+        }
+      }
+
+      const balanceFailure = balanceFailureByMarket.get(candidateMarket);
+      if (balanceFailure || availableCash === undefined) {
+        setExecutionUi((prev) => ({
+          ...prev,
+          [candidate.symbol]: {
+            state: "SKIPPED",
+            message: `실제 가용잔고를 새로 확인하지 못해 자동매수를 차단했습니다. ${balanceFailure || "잔고 미확인"}`,
+          },
+        }));
+        continue;
+      }
+
       const sizing = getAutoOrderSizing(candidate, availableCash, Number(profile?.riskLimitPerTrade ?? 1));
       if (sizing.qty <= 0 || candidate.entryPrice <= 0) {
         setExecutionUi((prev) => ({
@@ -327,7 +372,7 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
         ...prev,
         [candidate.symbol]: {
           state: "SUBMITTING",
-          message: `잔고 ${sizing.availableCash.toLocaleString()} 기준 · 주문예상 ${sizing.estimatedCost.toLocaleString()} · 실주문 안전검사 중`,
+          message: `실시간 잔고 ${sizing.availableCash.toLocaleString()} 기준 · 주문예상 ${sizing.estimatedCost.toLocaleString()} · 실주문 안전검사 중`,
         },
       }));
 
@@ -340,7 +385,7 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
           qty: sizing.qty,
           price: candidate.entryPrice,
           strategyName: "AI 스캔 자율매매 LIVE_RESTRICTED",
-          aiRationale: `Scanner ${candidate.sourceScore}/100 · Ensemble ${candidate.ensembleScore}/100 · R:R ${candidate.rrRatio.toFixed(2)} · RVOL ${candidate.rvol.toFixed(2)}x · AvailableCash ${sizing.availableCash} · RiskBudget ${sizing.riskBudget.toFixed(2)} · Qty ${sizing.qty}`,
+          aiRationale: `Scanner ${candidate.sourceScore}/100 · Ensemble ${candidate.ensembleScore}/100 · R:R ${candidate.rrRatio.toFixed(2)} · RVOL ${candidate.rvol.toFixed(2)}x · FreshAvailableCash ${sizing.availableCash} · RiskBudget ${sizing.riskBudget.toFixed(2)} · Qty ${sizing.qty}`,
           bypassGuard: false,
         });
 
@@ -370,7 +415,7 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
         addToast({ type: "ERROR", title: `AI 자율매매 실패 · ${candidate.name}`, message });
       }
     }
-  }, [addToast, autoScanEnabled, cashBreakdown, executeTrade, isKillSwitchActive, onConfirmOrderApproval, orders, positions, profile]);
+  }, [addToast, autoScanEnabled, executeTrade, isKillSwitchActive, onConfirmOrderApproval, orders, positions, profile, syncRealAccountBalance]);
 
   const runScan = useCallback(async (targetMarket: ScanMarket = market) => {
     if (scanInFlightRef.current) return;
@@ -473,7 +518,7 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
                   {autoScanEnabled ? "LIVE_RESTRICTED · AUTO 15s" : "SCAN ONLY · AUTO OFF"}
                 </span>
               </div>
-              <p className="mt-1 text-xs leading-relaxed text-slate-400">자동감시 ON → 15초마다 스캔 → 앙상블 검증 → 실시간성 확인 → 실제 가용잔고 + 손절위험으로 수량 계산 → 기존 실주문 안전 게이트</p>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400">자동감시 ON → 15초마다 스캔 → 앙상블 검증 → 실시간성 확인 → 브로커 실제잔고 재조회 → 손절위험으로 수량 계산 → 기존 실주문 안전 게이트</p>
             </div>
           </div>
 
@@ -506,7 +551,7 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
             <span>자동매매 후보: <strong className="text-emerald-300">{reviewReadyCount}</strong></span>
             <span>중복주문 방지: <strong className="text-cyan-300">보유·매수대기 차단 + 종목별 60초</strong></span>
           </div>
-          <div className="flex items-center gap-1.5 font-bold text-emerald-300"><ShieldCheck className="h-3.5 w-3.5" />실시간성 · API · 실제잔고 · 손절위험 · 보유/대기주문 · 장시간 · 킬스위치를 통과해야 주문합니다.</div>
+          <div className="flex items-center gap-1.5 font-bold text-emerald-300"><ShieldCheck className="h-3.5 w-3.5" />실시간성 · API · 브로커 실제잔고 · 손절위험 · 보유/대기주문 · 장시간 · 킬스위치를 통과해야 주문합니다.</div>
         </div>
 
         {scanError && <div data-testid="safe-ai-scan-error" className="mt-4 flex items-start gap-2 rounded-xl border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>{scanError}</span></div>}
