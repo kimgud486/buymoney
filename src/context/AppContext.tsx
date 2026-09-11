@@ -1741,15 +1741,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const hasKeys = Boolean(profile.koreaAppKey && profile.koreaAccountNo);
     if (!hasKeys) return;
 
-    // Immediate initial balance query for Korea Investment Securities
-    syncRealAccountBalance('korea', true).catch(err => {
-      console.warn("Initial real-time balance auto-sync notice:", err?.message || err);
+    // Initial unified balance query. The KIS account can hold both domestic and
+    // overseas stocks, so a domestic-only sync is incomplete.
+    syncRealAccountBalance('all', true).catch(err => {
+      console.warn("Initial unified real-account balance auto-sync notice:", err?.message || err);
     });
 
-    // 30-second periodic auto-refresh interval for Korea Investment Securities
+    // 30-second periodic unified refresh keeps KRX + KIS overseas + configured
+    // crypto holdings in one reconciled position set.
     const intervalId = setInterval(() => {
-      syncRealAccountBalance('korea', true).catch(err => {
-        console.warn("Periodic real-time balance auto-sync notice:", err?.message || err);
+      syncRealAccountBalance('all', true).catch(err => {
+        console.warn("Periodic unified real-account balance auto-sync notice:", err?.message || err);
       });
     }, 30000);
 

@@ -5807,8 +5807,14 @@ async function fetchKoreaOverseasBalance(
   secret: string,
   cano: string = "12345678",
   acntPrdtCd: string = "01"
-): Promise<{ balance: number | null; positions: any[] }> {
-  const positions: any[] = [];
+): Promise<{ balance: number | null; positions: any[]; exchangeRate: number | null }> {
+  const positionMap = new Map<string, any>();
+  const parseNum = (v: any) => {
+    if (v === undefined || v === null || v === "") return 0;
+    const n = parseFloat(String(v).replace(/,/g, ""));
+    return Number.isFinite(n) ? n : 0;
+  };
+
   try {
     const rawDigits = String(cano || "").replace(/[^0-9]/g, "");
     let cleanCano = rawDigits;
@@ -5823,64 +5829,165 @@ async function fetchKoreaOverseasBalance(
     cleanCd = cleanCd.padStart(2, "0").slice(0, 2);
 
     const trId = domain.includes("vts") ? "VTTS3012R" : "TTTS3012R";
-    const url = `${domain}/uapi/overseas-stock/v1/trading/inquire-balance?CANO=${cleanCano}&ACNT_PRDT_CD=${cleanCd}&OVRS_EXCG_CD=NASD&TR_CRCY_CD=USD&CTX_AREA_FK200=&CTX_AREA_NK200=`;
-    const res = await fetch(url, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        "authorization": `Bearer ${accessToken}`,
-        "appkey": key,
-        "appsecret": secret,
-        "tr_id": trId
-      },
-      signal: AbortSignal.timeout(3500)
-    });
-    if (res.ok) {
+    let fk200 = "";
+    let nk200 = "";
+    let trCont = "";
+    const seenContinuation = new Set<string>();
+
+    // KIS official samples use tr_cont plus ctx_area_fk200/nk200 for continuation.
+    // Cap at 10 pages to fail closed if the broker ever returns a looping key.
+    for (let page = 0; page < 10; page += 1) {
+      const params = new URLSearchParams({
+        CANO: cleanCano,
+        ACNT_PRDT_CD: cleanCd,
+        OVRS_EXCG_CD: "NASD",
+        TR_CRCY_CD: "USD",
+        CTX_AREA_FK200: fk200,
+        CTX_AREA_NK200: nk200
+      });
+
+      const res = await fetch(`${domain}/uapi/overseas-stock/v1/trading/inquire-balance?${params.toString()}`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "authorization": `Bearer ${accessToken}`,
+          "appkey": key,
+          "appsecret": secret,
+          "tr_id": trId,
+          "custtype": "P",
+          ...(trCont ? { "tr_cont": trCont } : {})
+        },
+        signal: AbortSignal.timeout(5000)
+      });
+
+      if (!res.ok) {
+        console.warn(`[SafetyCheck] KIS overseas balance HTTP ${res.status} (page ${page + 1})`);
+        break;
+      }
+
       const data = await res.json() as any;
-      const out2 = Array.isArray(data?.output2) ? data.output2[0] : data?.output2;
-      const out1 = Array.isArray(data?.output1) ? data.output1 : [];
-      const parseNum = (v: any) => {
-        if (v === undefined || v === null) return 0;
-        const n = parseFloat(String(v).replace(/,/g, ""));
-        return isNaN(n) ? 0 : n;
-      };
+      if (data?.rt_cd !== undefined && String(data.rt_cd) !== "0") {
+        console.warn(`[SafetyCheck] KIS overseas balance rejected: ${data?.msg_cd || "UNKNOWN"} ${data?.msg1 || ""}`);
+        break;
+      }
+
+      const out1 = Array.isArray(data?.output1)
+        ? data.output1
+        : data?.output1
+          ? [data.output1]
+          : [];
 
       for (const item of out1) {
-        const qty = parseNum(item.ovrs_cqty || item.hldg_qty);
-        if (qty > 0) {
-          const avgP = parseNum(item.pchs_avg_pric);
-          const currP = parseNum(item.now_pric2 || item.ovrs_prpr) || avgP;
-          const symbol = item.ovrs_pdno || item.pdno || "US_STOCK";
-          positions.push({
-            id: "kis_ovs_" + symbol,
-            userId: "live_user",
-            symbol,
-            name: item.ovrs_item_name || item.prdt_name || symbol,
-            market: "US",
-            quantity: qty,
-            avgPrice: avgP,
-            currentPrice: currP,
-            updatedAt: new Date().toISOString()
-          });
-        }
+        // Official overseas balance field is ovrs_cblc_qty. Keep legacy aliases only
+        // as compatibility fallbacks, never as the primary field.
+        const qty = parseNum(item.ovrs_cblc_qty ?? item.ovrs_cqty ?? item.hldg_qty);
+        if (!(qty > 0)) continue;
+
+        const avgP = parseNum(item.pchs_avg_pric);
+        const currP = parseNum(item.now_pric2 ?? item.ovrs_prpr) || avgP;
+        const symbol = String(item.ovrs_pdno || item.pdno || "").trim().toUpperCase();
+        if (!symbol) continue;
+
+        positionMap.set(symbol, {
+          id: "kis_ovs_" + symbol,
+          userId: "live_user",
+          symbol,
+          name: item.ovrs_item_name || item.prdt_name || symbol,
+          market: "US",
+          quantity: qty,
+          avgPrice: avgP,
+          currentPrice: currP,
+          currency: item.tr_crcy_cd || "USD",
+          exchange: item.ovrs_excg_cd || "NASD",
+          updatedAt: new Date().toISOString()
+        });
       }
 
-      let balance: number | null = null;
-      if (out2) {
-        const frcr = parseNum(out2.frcr_dncl_amt_2 || out2.frcr_evlu_amt2 || out2.tot_evlu_pfls_amt || out2.ovrs_tot_pfls);
-        if (frcr > 0) balance = frcr * 1350;
+      const nextFk200 = String(data?.ctx_area_fk200 || "").trim();
+      const nextNk200 = String(data?.ctx_area_nk200 || "").trim();
+      const responseTrCont = String(res.headers.get("tr_cont") || "").trim().toUpperCase();
+      const hasNext = responseTrCont === "F" || responseTrCont === "M";
+
+      if (!hasNext || (!nextFk200 && !nextNk200)) break;
+
+      const continuationKey = `${nextFk200}|${nextNk200}`;
+      if (seenContinuation.has(continuationKey)) {
+        console.warn("[SafetyCheck] KIS overseas balance continuation loop detected; stopping pagination.");
+        break;
       }
-      return { balance, positions };
+      seenContinuation.add(continuationKey);
+      fk200 = nextFk200;
+      nk200 = nextNk200;
+      trCont = "N";
+
+      // KIS samples intentionally add a short delay between continuation requests.
+      await new Promise(resolve => setTimeout(resolve, 120));
     }
+
+    const positions = Array.from(positionMap.values());
+
+    // Never convert USD to KRW with a hard-coded FX number. Ask KIS for the
+    // account exchange rate and only expose a KRW valuation when that proof exists.
+    let exchangeRate: number | null = null;
+    try {
+      const fxParams = new URLSearchParams({
+        CANO: cleanCano,
+        ACNT_PRDT_CD: cleanCd,
+        OVRS_EXCG_CD: "NASD",
+        WCRC_FRCR_DVSN_CD: "01",
+        NATN_CD: "840",
+        TR_MKET_CD: "01",
+        INQR_DVSN_CD: "00"
+      });
+      const fxRes = await fetch(`${domain}/uapi/overseas-stock/v1/trading/inquire-present-balance?${fxParams.toString()}`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "authorization": `Bearer ${accessToken}`,
+          "appkey": key,
+          "appsecret": secret,
+          "tr_id": "CTRP6504R",
+          "custtype": "P"
+        },
+        signal: AbortSignal.timeout(5000)
+      });
+      if (fxRes.ok) {
+        const fxData = await fxRes.json() as any;
+        const rows = Array.isArray(fxData?.output2)
+          ? fxData.output2
+          : fxData?.output2
+            ? [fxData.output2]
+            : [];
+        const verifiedRate = rows
+          .map((row: any) => parseNum(row?.frst_bltn_exrt))
+          .find((rate: number) => rate > 0);
+        if (verifiedRate) exchangeRate = verifiedRate;
+      }
+    } catch (fxErr: any) {
+      console.warn("[SafetyCheck] KIS overseas FX proof unavailable:", fxErr?.message || fxErr);
+    }
+
+    const usdInvested = positions.reduce(
+      (sum, p) => sum + Number(p.quantity || 0) * Number(p.currentPrice || p.avgPrice || 0),
+      0
+    );
+    const balance = exchangeRate !== null
+      ? usdInvested * exchangeRate
+      : positions.length === 0
+        ? 0
+        : null;
+
+    return { balance, positions, exchangeRate };
   } catch (err: any) {
-    const isTimeout = err?.name === 'TimeoutError' || err?.name === 'AbortError' || String(err?.message || '').includes('timeout');
+    const isTimeout = err?.name === "TimeoutError" || err?.name === "AbortError" || String(err?.message || "").includes("timeout");
     if (isTimeout) {
-      console.warn("[SafetyCheck] KIS overseas balance fetch timed out (10s threshold reached). Preserving previous cached state.");
+      console.warn("[SafetyCheck] KIS overseas balance fetch timed out. Preserving previous cached state.");
     } else {
       console.warn("[SafetyCheck] KIS overseas balance fetch failed:", err?.message || err);
     }
   }
-  return { balance: null, positions: [] };
+
+  return { balance: null, positions: [], exchangeRate: null };
 }
 
 let cachedServerIps: { data: { ip1: string; ip2: string; ips: string[]; formatted: string; isManual: boolean; manualServerIp1: string; manualServerIp2: string }; timestamp: number } | null = null;
@@ -6662,10 +6769,10 @@ app.post("/api/broker/sync-balance", async (req, res) => {
           const cano = resolved.koreaAccountNo ? String(resolved.koreaAccountNo).replace(/[^0-9]/g, "") : "12345678";
           const code = resolved.koreaAccountCode || "01";
           const ovs = await fetchKoreaOverseasBalance("https://openapi.koreainvestment.com:9443", tokenRes.accessToken, resolved.decKoreaKey, resolved.decKoreaSecret, cano, code);
-          if (ovs.balance !== null) {
+          usPositions = Array.isArray(ovs.positions) ? ovs.positions : [];
+          if (ovs.balance !== null || usPositions.length > 0) {
             usSuccess = true;
-            usBal = ovs.balance;
-            usPositions = Array.isArray(ovs.positions) ? ovs.positions : [];
+            usBal = ovs.balance ?? 0;
           } else {
             lastErrMsg = (ovs as any).error || "해외주식 잔고 조회 실패";
           }
@@ -6685,14 +6792,21 @@ app.post("/api/broker/sync-balance", async (req, res) => {
         });
       }
 
-      const usInvested = usPositions.reduce((sum, p) => sum + (p.quantity * (p.currentPrice || p.avgPrice || 0)), 0);
-      const usCash = Math.max(0, usBal - usInvested);
+      const usFx = usPositions.length > 0 && usBal > 0
+        ? usBal / Math.max(1, usPositions.reduce((sum, p) => sum + (p.quantity * (p.currentPrice || p.avgPrice || 0)), 0))
+        : 0;
+      const usInvested = usFx > 0
+        ? usPositions.reduce((sum, p) => sum + (p.quantity * (p.currentPrice || p.avgPrice || 0) * usFx), 0)
+        : 0;
+      const usCash = 0;
 
       return res.json({
         success: true,
         httpStatus: 200,
         errorCode: "SUCCESS_00",
-        message: `한국투자증권 (국외/미국주식) API 연결 검증 정상 성공! (조회 총액: ${usBal.toLocaleString()}원)`,
+        message: usBal > 0
+          ? `한국투자증권 (국외/미국주식) API 연결 검증 정상 성공! (보유종목 ${usPositions.length}개 / 검증 환산평가액: ${usBal.toLocaleString()}원)`
+          : `한국투자증권 (국외/미국주식) 보유종목 ${usPositions.length}개 동기화 완료. 환율 검증값은 현재 수신 대기 중입니다.`,
         endpoint: "https://openapi.koreainvestment.com:9443/uapi/overseas-stock/v1/trading/inquire-balance",
         timestamp,
         balance: usBal,
@@ -6798,6 +6912,8 @@ app.post("/api/broker/sync-balance", async (req, res) => {
     let allPositions: any[] = [];
     let koreaCash = 0;
     let koreaInvested = 0;
+    let usCash = 0;
+    let usInvested = 0;
     let upbitCash = 0;
     let upbitInvested = 0;
     let tossCash = 0;
@@ -6813,18 +6929,26 @@ app.post("/api/broker/sync-balance", async (req, res) => {
           const kisRes = await fetchKoreaBalance("https://openapi.koreainvestment.com:9443", tokenRes.accessToken, resolved.decKoreaKey, resolved.decKoreaSecret, cano, code);
           const ovs = await fetchKoreaOverseasBalance("https://openapi.koreainvestment.com:9443", tokenRes.accessToken, resolved.decKoreaKey, resolved.decKoreaSecret, cano, code);
           
-          if (kisRes.balance !== null || ovs.balance !== null) {
-            const kBal = (kisRes.balance ?? 0) + (ovs.balance ?? 0);
-            totalVal += kBal;
-            
+          if (kisRes.balance !== null || ovs.balance !== null || (ovs.positions?.length ?? 0) > 0) {
+            const kBal = kisRes.balance ?? 0;
+            const usBal = ovs.balance ?? 0;
+            totalVal += kBal + usBal;
+
             const kisPosList = Array.isArray(kisRes.positions) ? kisRes.positions : [];
             const ovsPosList = Array.isArray(ovs.positions) ? ovs.positions : [];
             allPositions.push(...kisPosList, ...ovsPosList);
 
-            koreaInvested = [...kisPosList, ...ovsPosList].reduce((sum, p) => sum + (p.quantity * (p.currentPrice || p.avgPrice || 0)), 0);
+            koreaInvested = kisPosList.reduce((sum, p) => sum + (p.quantity * (p.currentPrice || p.avgPrice || 0)), 0);
             koreaCash = kisRes.cash > 0 ? kisRes.cash : Math.max(0, kBal - koreaInvested);
+            usInvested = usBal > 0 ? usBal : 0;
+            usCash = 0;
 
-            syncedBrokers.push(`한국투자증권: 예수금 ${koreaCash.toLocaleString()}원 / 주식 ${koreaInvested.toLocaleString()}원 (총 ${kBal.toLocaleString()}원)`);
+            syncedBrokers.push(`한국투자증권 국내: 예수금 ${koreaCash.toLocaleString()}원 / 주식 ${koreaInvested.toLocaleString()}원 (총 ${kBal.toLocaleString()}원)`);
+            if (ovsPosList.length > 0) {
+              syncedBrokers.push(usBal > 0
+                ? `한국투자증권 미국: 보유 ${ovsPosList.length}종목 / 검증 환산평가액 ${usBal.toLocaleString()}원`
+                : `한국투자증권 미국: 보유 ${ovsPosList.length}종목 / 환율 검증값 수신 대기`);
+            }
           }
         }
       } catch (e) {}
@@ -6868,17 +6992,22 @@ app.post("/api/broker/sync-balance", async (req, res) => {
 
     // Comprehensive Cash & Asset Breakdown
     const koreaTotal = koreaCash + koreaInvested;
+    const usTotal = usCash + usInvested;
     const upbitTotal = upbitCash + upbitInvested;
     const tossTotal = tossCash + tossInvested;
 
-    const totalCash = koreaCash + upbitCash + tossCash;
-    const totalInvested = koreaInvested + upbitInvested + tossInvested;
+    const totalCash = koreaCash + usCash + upbitCash + tossCash;
+    const totalInvested = koreaInvested + usInvested + upbitInvested + tossInvested;
     const grandTotalAssets = totalCash + totalInvested;
 
     const breakdownObj = {
       koreaCash,
       koreaInvested,
       koreaTotal,
+
+      usCash,
+      usInvested,
+      usTotal,
 
       upbitCash,
       upbitInvested,

@@ -82,6 +82,19 @@ import {
 
 export type CandleData = ChartCandle;
 
+function buildSparklinePoints(values: number[]): string {
+  const clean = (Array.isArray(values) ? values : []).map(Number).filter(Number.isFinite);
+  if (clean.length < 2) return "";
+  const min = Math.min(...clean);
+  const max = Math.max(...clean);
+  const range = max - min || 1;
+  return clean.map((value, index) => {
+    const x = (index / (clean.length - 1)) * 60;
+    const y = 14 - ((value - min) / range) * 12;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" " );
+}
+
 export const MasterAiAutoTradingDashboard: React.FC<{
   onOpenConsensusModal?: (symbol: string) => void;
 }> = ({ onOpenConsensusModal }) => {
@@ -111,7 +124,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
   }, [rawSelectedSymbol]);
 
   // Real-time 1-second clock state
-  const [currentTimeStr, setCurrentTimeStr] = useState<string>("09:45:32 KST");
+  const [currentTimeStr, setCurrentTimeStr] = useState<string>("--:--:-- KST");
   const [heartbeatTick, setHeartbeatTick] = useState<number>(0);
 
   // Theme mode: White (light background as requested) or Dark
@@ -120,6 +133,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
   // Timeframe state: 1m, 5m, 15m, 30m, 1H, 4H, D, W
   const [selectedTimeframe, setSelectedTimeframe] = useState<string>("D");
   const [mainChartDisplayMode, setMainChartDisplayMode] = useState<"TRADINGVIEW_REALTIME" | "DUAL_SPLIT" | "CANDLE_OVERLAY">("TRADINGVIEW_REALTIME");
+  const [isMainTechnicalChartExpanded, setIsMainTechnicalChartExpanded] = useState<boolean>(false);
   const [patternTrackingOn, setPatternTrackingOn] = useState<boolean>(true);
   const [selectedPatternCategory, setSelectedPatternCategory] = useState<PatternCategory>("ALL");
   const [selectedPatternId, setSelectedPatternId] = useState<string | null>(null);
@@ -392,9 +406,9 @@ export const MasterAiAutoTradingDashboard: React.FC<{
           updated.high = Math.max(last.high, activeQuote.price);
           updated.low = Math.min(last.low, activeQuote.price);
           updated.isUp = updated.close >= updated.open;
-          if (typeof activeQuote.volume === "number" && activeQuote.volume > 0) {
-            updated.volume = activeQuote.volume;
-          }
+          // Keep candle volume from verified candle data. activeQuote.volume may
+          // be session/cumulative volume, so treating it as this candle's volume
+          // would corrupt VWAP/RVOL and pattern calculations.
 
           const copy = [...prev];
           copy[lastIdx] = updated;
@@ -935,6 +949,79 @@ export const MasterAiAutoTradingDashboard: React.FC<{
     return [];
   }, [detectedPatterns]);
 
+  const livePatternConfidence = useMemo(() => {
+    const valid = patterns
+      .filter((p: any) => p.isValidForSignal !== false && Number.isFinite(Number(p.confidence)))
+      .map((p: any) => Number(p.confidence));
+    if (valid.length === 0) return null;
+    return Math.round(Math.max(...valid));
+  }, [patterns]);
+
+  const latestAtr = atrValues.length > 0 ? atrValues[atrValues.length - 1] : null;
+  const liveVolatilityPct = latestAtr !== null && currentStock.price > 0
+    ? (latestAtr / currentStock.price) * 100
+    : null;
+
+  const momentumBars = liveTechnicalScore === null
+    ? 0
+    : Math.max(0, Math.min(5, Math.ceil(liveTechnicalScore / 20)));
+
+  const candleAxisLabels = useMemo(() => {
+    if (!candles.length) return [] as string[];
+    const count = Math.min(5, candles.length);
+    const indices = Array.from({ length: count }, (_, i) =>
+      Math.round((i / Math.max(1, count - 1)) * (candles.length - 1))
+    );
+    return Array.from(new Set(indices)).map((index) => {
+      const candle: any = candles[index];
+      const raw = candle?.time ?? candle?.timestamp;
+      let millis = typeof raw === "number" ? raw : Number(raw);
+      if (!Number.isFinite(millis)) millis = Date.parse(String(raw || ""));
+      if (Number.isFinite(millis) && millis > 0 && millis < 10_000_000_000) millis *= 1000;
+      const date = new Date(millis);
+      if (!Number.isFinite(date.getTime())) return "";
+      return new Intl.DateTimeFormat("ko-KR", {
+        timeZone: "Asia/Seoul",
+        month: "short",
+        day: "numeric"
+      }).format(date);
+    }).filter(Boolean);
+  }, [candles]);
+
+  const dailyPerformanceBars = useMemo(() => {
+    const dayMap = new Map<string, { day: string; pnl: number; order: number }>();
+    for (const trade of Array.isArray(trades) ? trades : []) {
+      const rawTime = (trade as any)?.timestamp ?? (trade as any)?.createdAt;
+      const time = Date.parse(String(rawTime || ""));
+      const pnl = Number((trade as any)?.pnl ?? (trade as any)?.pnlAmount ?? (trade as any)?.profit);
+      if (!Number.isFinite(time) || !Number.isFinite(pnl)) continue;
+      const date = new Date(time);
+      const key = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Seoul",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      }).format(date);
+      const day = new Intl.DateTimeFormat("ko-KR", {
+        timeZone: "Asia/Seoul",
+        month: "numeric",
+        day: "numeric"
+      }).format(date);
+      const current = dayMap.get(key) || { day, pnl: 0, order: time };
+      current.pnl += pnl;
+      current.order = Math.max(current.order, time);
+      dayMap.set(key, current);
+    }
+    const rows = Array.from(dayMap.values()).sort((a, b) => a.order - b.order).slice(-7);
+    const maxAbs = Math.max(1, ...rows.map(row => Math.abs(row.pnl)));
+    return rows.map(row => ({
+      day: row.day,
+      pnl: row.pnl,
+      h: Math.max(3, Math.round((Math.abs(row.pnl) / maxAbs) * 44)),
+      isUp: row.pnl >= 0
+    }));
+  }, [trades]);
+
   return (
     <div className={`min-h-screen ${isWhiteTheme ? "bg-[#f8fafc] text-slate-800" : "bg-[#060B13] text-slate-100"} font-sans select-none flex flex-col justify-between overflow-x-hidden transition-colors duration-200`}>
       
@@ -1179,7 +1266,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
               </h2>
               <span className={`text-[10px] ${isWhiteTheme ? "text-cyan-700 font-semibold" : "text-cyan-400"} flex items-center gap-1`}>
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                실시간 1초
+                지수 12초 동기화
               </span>
             </div>
 
@@ -1207,7 +1294,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                         fill="none"
                         stroke={item.isUp ? (isWhiteTheme ? "#059669" : "#10b981") : (isWhiteTheme ? "#e11d48" : "#f43f5e")}
                         strokeWidth="1.5"
-                        points="0,12 10,10 20,6 30,8 40,4 50,2 60,3"
+                        points={buildSparklinePoints(item.sparkline)}
                       />
                     </svg>
                   </div>
@@ -1492,16 +1579,8 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                 일별 성과 추이
               </div>
               <div className={`h-14 flex items-end justify-between gap-1.5 px-1 ${isWhiteTheme ? "bg-slate-50 border border-slate-200" : "bg-[#060e1b]"} rounded-lg p-1.5`}>
-                {[
-                  { day: "7/1", h: 32, isUp: true },
-                  { day: "7/2", h: 44, isUp: true },
-                  { day: "7/3", h: 26, isUp: true },
-                  { day: "7/4", h: 38, isUp: true },
-                  { day: "7/5", h: 18, isUp: false },
-                  { day: "7/8", h: 48, isUp: true },
-                  { day: "7/9", h: 35, isUp: true },
-                ].map((bar, bidx) => (
-                  <div key={`${bar.day}_${bidx}`} className="flex-1 flex flex-col items-center gap-1">
+                {dailyPerformanceBars.length > 0 ? dailyPerformanceBars.map((bar, bidx) => (
+                  <div key={`${bar.day}_${bidx}`} className="flex-1 flex flex-col items-center gap-1" title={`실현손익 ${bar.pnl.toLocaleString()}원`}>
                     <div
                       style={{ height: `${bar.h}px` }}
                       className={`w-full rounded-t-xs transition-all ${
@@ -1510,7 +1589,11 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                     />
                     <span className={`text-[8px] font-mono ${isWhiteTheme ? "text-slate-500" : "text-slate-400"}`}>{bar.day}</span>
                   </div>
-                ))}
+                )) : (
+                  <div className={`w-full h-full flex items-center justify-center text-[9px] font-mono ${isWhiteTheme ? "text-slate-400" : "text-slate-500"}`}>
+                    실제 실현손익 데이터 대기
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1520,7 +1603,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
         {/* ============================================================ */}
         {/* CENTER COLUMN: MAIN CANDLESTICK CHART, MULTI INDICATORS, AI INSIGHTS */}
         {/* ============================================================ */}
-        <div className="lg:col-span-6 flex flex-col gap-2">
+        <div className={`${isMainTechnicalChartExpanded ? "lg:col-span-12" : "lg:col-span-6"} flex flex-col gap-2 transition-all duration-200`}>
           
           {/* 1. TOP STOCK & TIMEFRAME & PATTERN TRACKING TOOLBAR */}
           <div className={`${isWhiteTheme ? "bg-white border-slate-200 shadow-sm" : "bg-[#081222] border-[#13233c] shadow-sm"} border rounded-xl p-3 flex flex-col gap-2.5 transition-colors`}>
@@ -1762,7 +1845,10 @@ export const MasterAiAutoTradingDashboard: React.FC<{
               <span className={`text-[10px] font-extrabold ${isWhiteTheme ? "text-slate-600" : "text-slate-400"} uppercase pl-1`}>메인 차트 뷰:</span>
               <button
                 type="button"
-                onClick={() => setMainChartDisplayMode("TRADINGVIEW_REALTIME")}
+                onClick={() => {
+                  setMainChartDisplayMode("TRADINGVIEW_REALTIME");
+                  setIsMainTechnicalChartExpanded(false);
+                }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
                   mainChartDisplayMode === "TRADINGVIEW_REALTIME"
                     ? "bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 text-white shadow-md ring-1 ring-emerald-400"
@@ -1775,7 +1861,13 @@ export const MasterAiAutoTradingDashboard: React.FC<{
 
               <button
                 type="button"
-                onClick={() => setMainChartDisplayMode("CANDLE_OVERLAY")}
+                onClick={() => {
+                  const alreadyTechnical = mainChartDisplayMode === "CANDLE_OVERLAY";
+                  setMainChartDisplayMode("CANDLE_OVERLAY");
+                  setIsMainTechnicalChartExpanded(alreadyTechnical ? !isMainTechnicalChartExpanded : true);
+                }}
+                aria-pressed={mainChartDisplayMode === "CANDLE_OVERLAY" && isMainTechnicalChartExpanded}
+                title={isMainTechnicalChartExpanded ? "메인 기술 차트 원래 크기로 축소" : "메인 기술 차트 크게 확대"}
                 className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
                   mainChartDisplayMode === "CANDLE_OVERLAY"
                     ? "bg-gradient-to-r from-purple-600 to-blue-600 text-white shadow-md ring-1 ring-purple-400"
@@ -1783,12 +1875,15 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                 }`}
               >
                 <BarChart2 className="w-3.5 h-3.5 text-purple-300" />
-                <span>📈 캔들 차트 + 기술적 지표</span>
+                <span>{mainChartDisplayMode === "CANDLE_OVERLAY" && isMainTechnicalChartExpanded ? "↙ 차트 축소" : "📈 캔들 차트 + 기술적 지표"}</span>
               </button>
 
               <button
                 type="button"
-                onClick={() => setMainChartDisplayMode("DUAL_SPLIT")}
+                onClick={() => {
+                  setMainChartDisplayMode("DUAL_SPLIT");
+                  setIsMainTechnicalChartExpanded(false);
+                }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
                   mainChartDisplayMode === "DUAL_SPLIT"
                     ? "bg-gradient-to-r from-cyan-600 via-indigo-600 to-purple-600 text-white shadow-md ring-1 ring-cyan-400"
@@ -1914,7 +2009,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
             </div>
 
             {/* MAIN CHART SVG CANVAS */}
-            <div className={`relative w-full h-[470px] ${isWhiteTheme ? "bg-white border-slate-200" : "bg-[#050a14] border-slate-900"} rounded-xl border overflow-hidden flex flex-col`}>
+            <div className={`relative w-full ${isMainTechnicalChartExpanded ? "h-[72vh] min-h-[620px] max-h-[900px]" : "h-[470px]"} ${isWhiteTheme ? "bg-white border-slate-200" : "bg-[#050a14] border-slate-900"} rounded-xl border overflow-hidden flex flex-col transition-[height] duration-200`}>
               
               {/* Top Main Candlestick Panel */}
               <div className={`relative flex-1 ${isWhiteTheme ? "border-b border-slate-200" : "border-b border-slate-850"}`}>
@@ -2890,11 +2985,9 @@ export const MasterAiAutoTradingDashboard: React.FC<{
 
               {/* X-Axis Date Timeline */}
               <div className={`h-5 ${isWhiteTheme ? "border-t border-slate-200 text-slate-500 bg-slate-50" : "border-t border-slate-850 text-slate-500 bg-[#060b13]"} px-4 flex items-center justify-between text-[9px] font-mono`}>
-                <span>Mar 14</span>
-                <span>Apr 14</span>
-                <span>May 14</span>
-                <span>Jun 14</span>
-                <span>Jul 14</span>
+                {candleAxisLabels.length > 0
+                  ? candleAxisLabels.map((label, index) => <span key={`axis_${index}`}>{label}</span>)
+                  : <span>캔들 데이터 대기</span>}
               </div>
             </div>
           </div>
@@ -2910,9 +3003,9 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                 <span>TREND ANALYSIS</span>
               </div>
               <div>
-                <div className={`text-sm font-bold ${isWhiteTheme ? "text-slate-900" : "text-white"}`}>상승 추세</div>
+                <div className={`text-sm font-bold ${isWhiteTheme ? "text-slate-900" : "text-white"}`}>{candles.length > 0 ? unifiedMarketShape.overallShapeLabel : "데이터 수신 대기"}</div>
                 <div className={`text-[10px] font-mono font-bold ${isWhiteTheme ? "text-emerald-600" : "text-emerald-400"} tracking-wider`}>
-                  STRONG BULLISH
+                  {candles.length > 0 ? `SHAPE SCORE ${unifiedMarketShape.overallShapeScore}` : "WAIT"}
                 </div>
               </div>
             </div>
@@ -2924,12 +3017,12 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                 <span>MOMENTUM</span>
               </div>
               <div>
-                <div className={`text-sm font-bold ${isWhiteTheme ? "text-slate-900" : "text-white"}`}>강한 모멘텀</div>
+                <div className={`text-sm font-bold ${isWhiteTheme ? "text-slate-900" : "text-white"}`}>{liveTechnicalScore === null ? "데이터 수신 대기" : liveTechnicalScore >= 75 ? "강한 모멘텀" : liveTechnicalScore >= 55 ? "보통 모멘텀" : "약한 모멘텀"}</div>
                 <div className="flex items-center gap-1 mt-1">
                   <span className={`text-[8px] font-mono ${isWhiteTheme ? "text-slate-500" : "text-slate-500"}`}>STRENGTH</span>
                   <div className="flex gap-0.5">
                     {[1, 2, 3, 4, 5].map((bar) => (
-                      <div key={bar} className={`w-2 h-2 rounded-xs ${isWhiteTheme ? "bg-emerald-500" : "bg-emerald-400"}`} />
+                      <div key={bar} className={`w-2 h-2 rounded-xs ${bar <= momentumBars ? (isWhiteTheme ? "bg-emerald-500" : "bg-emerald-400") : (isWhiteTheme ? "bg-slate-200" : "bg-slate-700")}`} />
                     ))}
                   </div>
                 </div>
@@ -2943,9 +3036,9 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                 <span>VOLATILITY</span>
               </div>
               <div>
-                <div className={`text-sm font-bold ${isWhiteTheme ? "text-slate-900" : "text-white"}`}>보통 변동성</div>
+                <div className={`text-sm font-bold ${isWhiteTheme ? "text-slate-900" : "text-white"}`}>{liveVolatilityPct === null ? "데이터 수신 대기" : liveVolatilityPct >= 3 ? "높은 변동성" : liveVolatilityPct >= 1 ? "보통 변동성" : "낮은 변동성"}</div>
                 <div className={`text-[10px] font-mono ${isWhiteTheme ? "text-slate-500" : "text-slate-400"}`}>
-                  안정적인 시장
+                  {liveVolatilityPct === null ? "ATR 계산 대기" : `ATR ${liveVolatilityPct.toFixed(2)}%`}
                 </div>
               </div>
             </div>
@@ -2954,7 +3047,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
             <div className={`${isWhiteTheme ? "bg-white border-slate-200 shadow-sm" : "bg-[#081222] border-[#13233c] shadow-sm"} border rounded-xl p-2.5 flex items-center justify-between transition-colors`}>
               <div>
                 <div className={`text-[10px] font-mono ${isWhiteTheme ? "text-slate-500" : "text-slate-400"}`}>CONFIDENCE</div>
-                <div className={`text-sm font-bold ${isWhiteTheme ? "text-slate-900" : "text-white"}`}>신뢰도 높음</div>
+                <div className={`text-sm font-bold ${isWhiteTheme ? "text-slate-900" : "text-white"}`}>{livePatternConfidence === null ? "패턴 데이터 대기" : livePatternConfidence >= 80 ? "신뢰도 높음" : livePatternConfidence >= 60 ? "신뢰도 보통" : "신뢰도 낮음"}</div>
               </div>
               <div className="relative w-10 h-10 flex items-center justify-center">
                 <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
@@ -2967,7 +3060,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                   />
                   <path
                     className={isWhiteTheme ? "text-cyan-600" : "text-cyan-400"}
-                    strokeDasharray="87, 100"
+                    strokeDasharray={`${livePatternConfidence ?? 0}, 100`}
                     strokeWidth="3.5"
                     strokeLinecap="round"
                     stroke="currentColor"
@@ -2976,7 +3069,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
                   />
                 </svg>
                 <div className={`absolute text-[10px] font-mono font-bold ${isWhiteTheme ? "text-cyan-800" : "text-cyan-300"}`}>
-                  87%
+                  {livePatternConfidence !== null ? `${livePatternConfidence}%` : "--"}
                 </div>
               </div>
             </div>
@@ -2989,9 +3082,9 @@ export const MasterAiAutoTradingDashboard: React.FC<{
               </div>
               <div>
                 <div className={`text-xs font-bold ${isWhiteTheme ? "text-slate-700" : "text-slate-300"}`}>AI 추천 행동</div>
-                <div className={`text-sm font-black ${isWhiteTheme ? "text-emerald-600" : "text-emerald-400"} flex items-center gap-1`}>
-                  <span>BUY</span>
-                  <span className={`text-[10px] font-normal ${isWhiteTheme ? "text-slate-500" : "text-slate-400"}`}>매수 유효</span>
+                <div className={`text-sm font-black ${liveTradingState === "BUY" ? (isWhiteTheme ? "text-emerald-600" : "text-emerald-400") : liveTradingState === "SELL" ? "text-rose-500" : (isWhiteTheme ? "text-slate-600" : "text-slate-300")} flex items-center gap-1`}>
+                  <span>{liveTradingState === "BUY" ? "BUY" : liveTradingState === "SELL" ? "SELL" : "WAIT"}</span>
+                  <span className={`text-[10px] font-normal ${isWhiteTheme ? "text-slate-500" : "text-slate-400"}`}>{liveTradingState === "BUY" ? "매수 후보" : liveTradingState === "SELL" ? "매도 후보" : "신호 대기"}</span>
                 </div>
               </div>
             </div>
@@ -3317,7 +3410,7 @@ export const MasterAiAutoTradingDashboard: React.FC<{
             <span className={`${isWhiteTheme ? "text-slate-600" : "text-slate-400"} truncate text-[11px]`}>
               {decisionLogs && decisionLogs.length > 1
                 ? decisionLogs[1].message
-                : "증권사 WebSocket / REST 실시간 데이터 피드 동기화 완료"}
+                : currentStock.price > 0 ? "실시간 데이터 피드 수신 중" : "실시간 데이터 피드 상태 확인 중"}
             </span>
           </div>
         </div>
