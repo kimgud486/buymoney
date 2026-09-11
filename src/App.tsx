@@ -12,6 +12,7 @@ import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecur
 import { MasterAiAutoTradingDashboard } from "./components/trading/MasterAiAutoTradingDashboard";
 import RealtimeHubStatusStrip from "./components/trading/RealtimeHubStatusStrip";
 import FeedResiliencePolicyBridge from "./components/trading/FeedResiliencePolicyBridge";
+import RealtimeStreamFeedBridge from "./components/trading/RealtimeStreamFeedBridge";
 import OperationalTruthMonitorV20 from "./components/trading/OperationalTruthMonitorV20";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MainScreenKoreanText } from "./components/MainScreenKoreanText";
@@ -49,9 +50,6 @@ function MainLayout() {
     };
   }, []);
 
-  // Main chart expand-in-place bridge.
-  // Reuses the existing chart and open-source lightweight-charts instance.
-  // No duplicate chart, no popup, no synthetic data.
   useEffect(() => {
     const handleChartExpandClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
@@ -127,6 +125,7 @@ function MainLayout() {
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans relative">
       <MainScreenKoreanText />
       <RealtimeMarketStreamManager />
+      <RealtimeStreamFeedBridge />
       <FeedResiliencePolicyBridge />
 
       <ErrorBoundary>
