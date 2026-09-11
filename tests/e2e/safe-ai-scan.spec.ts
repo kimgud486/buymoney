@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 
 async function openStockGpt(page: import("@playwright/test").Page) {
+  await page.setViewportSize({ width: 1440, height: 1000 });
   const response = await page.goto("/", { waitUntil: "domcontentloaded" });
   expect(response?.ok()).toBeTruthy();
   await page.waitForTimeout(750);
@@ -9,7 +10,7 @@ async function openStockGpt(page: import("@playwright/test").Page) {
 test.describe("Stock GPT verified-data safety E2E", () => {
   test.describe.configure({ retries: 0 });
 
-  test("approved Stock GPT reference layout mounts while operational truth stays mounted", async ({ page }) => {
+  test("approved Stock GPT desktop composition mounts while operational truth stays mounted", async ({ page }) => {
     await openStockGpt(page);
 
     await expect(page.getByTestId("stock-gpt-approved-layout")).toBeVisible();
@@ -17,8 +18,34 @@ test.describe("Stock GPT verified-data safety E2E", () => {
     await expect(page.getByPlaceholder(/무엇을 분석할까요/)).toBeVisible();
     await expect(page.getByRole("button", { name: /오늘의 강한 종목 찾아줘/ })).toBeVisible();
 
+    // Approved reference rails must remain visible on an ordinary desktop viewport.
+    await expect(page.getByRole("button", { name: "새 분석" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "관심종목" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "보유종목" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "실시간 스캐너" })).toBeVisible();
+    await expect(page.getByText("시장 상태", { exact: true })).toBeVisible();
+    await expect(page.getByText("강한 섹터/테마 TOP 5", { exact: true })).toBeVisible();
+    await expect(page.getByText("실시간 급상승 종목", { exact: true })).toBeVisible();
+    await expect(page.getByText("위험 신호 종목", { exact: true })).toBeVisible();
+
     // Runtime truth checks stay mounted behind the approved UI.
     await expect(page.getByTestId("operational-truth-monitor-v20")).toHaveCount(1);
+  });
+
+  test("existing features open in the approved center workspace instead of a replacement dashboard", async ({ page }) => {
+    await openStockGpt(page);
+
+    await page.getByRole("button", { name: "관심종목" }).click();
+    await expect(page.getByTestId("stock-gpt-watchlist-panel")).toBeVisible();
+
+    await page.getByRole("button", { name: "보유종목" }).click();
+    await expect(page.getByTestId("stock-gpt-holdings-panel")).toBeVisible();
+
+    await page.getByRole("button", { name: "실시간 스캐너" }).click();
+    await expect(page.getByTestId("stock-gpt-real-scanner-panel")).toBeVisible();
+
+    await page.getByRole("button", { name: "알림 기록" }).click();
+    await expect(page.getByTestId("stock-gpt-alerts-panel")).toBeVisible();
   });
 
   test("direct auto-order controls are absent from the Stock GPT landing screen", async ({ page }) => {
@@ -45,6 +72,7 @@ test.describe("Stock GPT verified-data safety E2E", () => {
       await expect(page.getByText(/검토 단계만 열립니다/)).toBeVisible();
       await expect(page.getByRole("button", { name: /주문.*실행|실행.*주문|매수.*확인|매도.*확인/ })).toHaveCount(0);
     } else {
+      // CI can legitimately have no broker/provider credentials. That must stay NO_DATA.
       await expect(page.getByText(/NO_DATA|실제 시세를 요청했습니다|가짜 캔들을 대신 넣지 않습니다/).first()).toBeVisible();
     }
   });
