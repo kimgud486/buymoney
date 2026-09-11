@@ -11,6 +11,7 @@ import { RealtimeMarketStreamManager } from "./components/RealtimeMarketStreamMa
 import { MultiModelSecuritiesConsensusModal } from "./components/MultiModelSecuritiesConsensusModal";
 import { MasterAiAutoTradingDashboard } from "./components/trading/MasterAiAutoTradingDashboard";
 import RealtimeHubStatusStrip from "./components/trading/RealtimeHubStatusStrip";
+import FeedResiliencePolicyBridge from "./components/trading/FeedResiliencePolicyBridge";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MainScreenKoreanText } from "./components/MainScreenKoreanText";
 import ElementaryScanExplanationPanel from "./components/ElementaryScanExplanationPanel";
@@ -125,6 +126,7 @@ function MainLayout() {
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans relative">
       <MainScreenKoreanText />
       <RealtimeMarketStreamManager />
+      <FeedResiliencePolicyBridge />
 
       <ErrorBoundary>
         <RealtimeHubStatusStrip />
