@@ -11,6 +11,7 @@ import { PatternTruthEngineV192 } from "./PatternTruthEngineV192";
 import { Candle } from "./StructureBrain";
 import { getExchangeMasterUniverseV20 } from "./ExchangeMasterUniverseSyncV20";
 import { buildRealtimeHubStatusV20, RealtimeHubStatusV20 } from "../../server/v20/RealtimeHubStatusV20";
+import { serverCandleWarmCoordinatorV20 } from "../../server/v20/ServerCandleWarmCoordinatorV20";
 
 export type UsExchange = "NASDAQ" | "NYSE" | "AMEX" | "UNKNOWN";
 
@@ -65,6 +66,13 @@ export interface HotListItemV192 {
   metrics: ScannerMetricsV192;
 }
 
+export interface MarketScanDiagnosticV192 {
+  universe: number;
+  liveQuoteReady: number;
+  candle15mReady: number;
+  passed: number;
+}
+
 export interface ScanResultV192 {
   scanTimestamp: string;
   scannedTotal: number;
@@ -74,6 +82,11 @@ export interface ScanResultV192 {
     KOREA: number;
     US: number;
     UPBIT: number;
+  };
+  diagnostics: {
+    KOREA: MarketScanDiagnosticV192;
+    US: MarketScanDiagnosticV192;
+    UPBIT: MarketScanDiagnosticV192;
   };
   hubStatus: RealtimeHubStatusV20;
   hotItems: HotListItemV192[];
@@ -107,7 +120,7 @@ export class GlobalRealtimeScannerV192 {
       minObjectivePct?: number;
       minSetupScore?: number;
     }
-  ): { items: HotListItemV192[]; scannedCount: number } {
+  ): { items: HotListItemV192[]; scannedCount: number; liveQuoteReady: number; candle15mReady: number } {
     const exchangeFilter = options?.exchangeFilter || "ALL";
     const patternFilter = options?.patternFilter || "ALL";
     const minObjectivePct = options?.minObjectivePct ?? 0;
@@ -115,6 +128,8 @@ export class GlobalRealtimeScannerV192 {
 
     const results: HotListItemV192[] = [];
     let scannedCount = 0;
+    let liveQuoteReady = 0;
+    let candle15mReady = 0;
 
     for (const stock of stocks) {
       scannedCount++;
@@ -133,12 +148,14 @@ export class GlobalRealtimeScannerV192 {
       if (!requireLiveData(quote)) {
         continue;
       }
+      liveQuoteReady++;
 
       const price = quote!.price!;
       const candles15m = realCandleStore.getCachedCandles(stock.symbol, "15m");
       if (!candles15m || candles15m.length < 35) {
         continue;
       }
+      candle15mReady++;
 
       const rawCandles: Candle[] = candles15m.map(c => ({
         timestamp: c.timestamp,
@@ -304,7 +321,26 @@ export class GlobalRealtimeScannerV192 {
     }
 
     results.sort((a, b) => b.setupScore - a.setupScore);
-    return { items: results, scannedCount };
+    return { items: results, scannedCount, liveQuoteReady, candle15mReady };
+  }
+}
+
+function emptyDiagnostic(universe = 0): MarketScanDiagnosticV192 {
+  return { universe, liveQuoteReady: 0, candle15mReady: 0, passed: 0 };
+}
+
+async function prewarmKoreaLiveCandidates(krStocks: LiveStockItem[]): Promise<void> {
+  const requests = krStocks
+    .filter((stock) => {
+      const quote = realtimeMarketFeedService.getQuote(stock.symbol);
+      if (!requireLiveData(quote)) return false;
+      return realCandleStore.getCachedCandles(stock.symbol, "15m").length < 35;
+    })
+    .slice(0, 6)
+    .map((stock) => ({ symbol: stock.symbol, market: "KOREA" as const }));
+
+  if (requests.length > 0) {
+    await serverCandleWarmCoordinatorV20.warmBatch(requests, 6);
   }
 }
 
@@ -334,13 +370,25 @@ export async function scanGlobalRealtimeHotListV192(options?: {
   let krCount = 0;
   let usCount = 0;
   let upbitCount = 0;
+  const diagnostics = {
+    KOREA: emptyDiagnostic(krStocks.length),
+    US: emptyDiagnostic(usStocks.length),
+    UPBIT: emptyDiagnostic(upbitStocks.length),
+  };
   const scanOpts = { exchangeFilter, patternFilter, minObjectivePct, minSetupScore };
 
   if (normalizedMarket === "ALL" || normalizedMarket === "KOREA") {
+    await prewarmKoreaLiveCandidates(krStocks);
     const krRes = GlobalRealtimeScannerV192.scanMarket(krStocks, "KOREA", scanOpts);
     hotItems.push(...krRes.items);
     krCount = krRes.scannedCount;
     totalScanned += krRes.scannedCount;
+    diagnostics.KOREA = {
+      universe: krStocks.length,
+      liveQuoteReady: krRes.liveQuoteReady,
+      candle15mReady: krRes.candle15mReady,
+      passed: krRes.items.length,
+    };
   }
 
   if (normalizedMarket === "ALL" || normalizedMarket === "US") {
@@ -348,6 +396,12 @@ export async function scanGlobalRealtimeHotListV192(options?: {
     hotItems.push(...usRes.items);
     usCount = usRes.scannedCount;
     totalScanned += usRes.scannedCount;
+    diagnostics.US = {
+      universe: usStocks.length,
+      liveQuoteReady: usRes.liveQuoteReady,
+      candle15mReady: usRes.candle15mReady,
+      passed: usRes.items.length,
+    };
   }
 
   if (normalizedMarket === "ALL" || normalizedMarket === "UPBIT") {
@@ -355,6 +409,12 @@ export async function scanGlobalRealtimeHotListV192(options?: {
     hotItems.push(...upbitRes.items);
     upbitCount = upbitRes.scannedCount;
     totalScanned += upbitRes.scannedCount;
+    diagnostics.UPBIT = {
+      universe: upbitStocks.length,
+      liveQuoteReady: upbitRes.liveQuoteReady,
+      candle15mReady: upbitRes.candle15mReady,
+      passed: upbitRes.items.length,
+    };
   }
 
   hotItems.sort((a, b) => b.setupScore - a.setupScore);
@@ -370,6 +430,7 @@ export async function scanGlobalRealtimeHotListV192(options?: {
       US: usCount,
       UPBIT: upbitCount
     },
+    diagnostics,
     hubStatus: buildRealtimeHubStatusV20(),
     hotItems
   };
