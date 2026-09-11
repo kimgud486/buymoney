@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------
-// ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V7 (AISTOCK V21.2 TRUTH-FIRST)
+// ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V8 (AISTOCK V21.2 TRUTH-FIRST)
 // ----------------------------------------------------------------------
 
 import fs from "node:fs";
@@ -75,6 +75,22 @@ function auditRealtimeMarketBridge() {
   }
 }
 
+function auditScannerUiTruth() {
+  const scannerPath = path.resolve("src/components/ExplainableOpportunityScanner.tsx");
+  if (!fs.existsSync(scannerPath)) return;
+  const text = fs.readFileSync(scannerPath, "utf8");
+  const forbiddenScannerShapes = [
+    "data.totalScanned || 29",
+    "data.totalScanned ?? 29",
+    "15개 하드조건",
+    "YES 승인 조건: Profit Opportunity Score 82점",
+    "ON (🔥 82점+)"
+  ];
+  for (const shape of forbiddenScannerShapes) {
+    if (text.includes(shape)) fail(`SCANNER UI TRUTH VIOLATION FOUND: ${shape}`);
+  }
+}
+
 function auditServerTruthRoutes() {
   const serverPath = path.resolve("server.ts");
   if (!fs.existsSync(serverPath)) return;
@@ -131,13 +147,14 @@ function scanFile(fullPath) {
   }
 }
 
-console.log("🔍 Running Production Zero Fake Data Audit V7...");
+console.log("🔍 Running Production Zero Fake Data Audit V8...");
 auditPresetFixture();
 auditRealtimeMarketBridge();
+auditScannerUiTruth();
 auditServerTruthRoutes();
 for (const rootPath of ROOTS) scanPath(rootPath);
 if (failed) {
-  console.error("💥 Zero Fake Data Audit V7 FAILED!");
+  console.error("💥 Zero Fake Data Audit V8 FAILED!");
   process.exit(1);
 }
-console.log("✅ Production Zero Fake Data Audit V7 PASSED cleanly.");
+console.log("✅ Production Zero Fake Data Audit V8 PASSED cleanly.");
