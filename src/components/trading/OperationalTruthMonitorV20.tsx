@@ -176,14 +176,17 @@ export default function OperationalTruthMonitorV20() {
         }`}
       >
         <div className="min-w-0">
-          <div className={`font-black ${evidenceReady ? "text-emerald-300" : "text-amber-300"}`}>
+          <div className="font-black text-amber-300">
+            🔒 안전 잠금 중 · 주문권한 현재: DRY_RUN
+          </div>
+          <div className={`mt-1 font-bold ${evidenceReady ? "text-emerald-300" : "text-amber-200"}`}>
             {evidenceReady
-              ? "✅ 실계좌 읽기 검증 완료 · 주문 승인은 별도 잠금"
-              : "🔒 실계좌 검증 대기 · 주문 전송 차단"}
+              ? "✅ KIS 읽기 증거 확인 완료 · 실제 주문 승인은 아직 별도 잠금"
+              : "KIS 실계좌 증거 검증 대기 · 주문 전송 차단"}
           </div>
           <div className="mt-0.5 text-[11px] leading-relaxed text-slate-400">
-            이 칸은 DRY_RUN/LIVE 모드를 표시하는 곳이 아니라 KIS 연결·계좌·실시간 시세가 진짜인지 확인하는 안전 검증판입니다.
-            모든 증거가 확인되기 전에는 실거래 준비 완료로 표시하지 않습니다.
+            여기의 DRY_RUN은 <strong className="text-slate-300">자율 감시 엔진 모드가 아니라 주문 권한 잠금 상태</strong>를 뜻합니다.
+            RUNNING/LIVE 감시는 켜져 있어도 주문 권한은 잠겨 있을 수 있습니다. 이중 승인 해제 시에만 실제 증권사 매수 주문이 실행됩니다.
           </div>
           {blockers.length > 0 && (
             <div className="mt-1 text-[10px] text-amber-200/80 break-words">
