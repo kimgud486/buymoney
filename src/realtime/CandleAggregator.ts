@@ -1,8 +1,7 @@
-// AISTOCK v13.8 REAL-TIME CANDLE AGGREGATOR
-// Aggregates real-time trade ticks into OHLCV candles (1m, 3m, 5m, 15m).
-// STRICT DIRECTIVE: Uses REAL ticks ONLY. No synthetic bars, no fake gap fills.
+// AISTOCK REAL-TIME CANDLE AGGREGATOR
+// Aggregates real ticks only. No synthetic bars or fake gap fills.
 
-import { NormalizedTick } from "../../server/market/KISRealtimeWebSocketService";
+import type { FeedQuality, LiveTick } from "./types";
 
 export type Timeframe = "1m" | "3m" | "5m" | "15m" | "60m" | string;
 
@@ -15,15 +14,26 @@ export interface AggregatedCandle {
   low: number;
   close: number;
   volume: number;
-  time: number; // bar start timestamp in seconds (Unix epoch sec)
-  startedAt: number; // bar start timestamp in ms
-  endedAt: number; // bar end timestamp in ms
-  isFinal: boolean; // true when bar is officially completed by new time slot tick
-  isClosed: boolean; // compatibility alias
-  source: "KIS_WS" | "KIS_REALTIME_WS" | "KIS_REST_HISTORY" | string;
-  quality: "REALTIME_TICK_AGGREGATED";
+  time: number;
+  startedAt: number;
+  endedAt: number;
+  isFinal: boolean;
+  isClosed: boolean;
+  source: string;
+  quality: FeedQuality;
+  feedQuality: FeedQuality;
+  receivedAt: number;
+  providerTimestamp: number;
   tickCount: number;
   lastSequence?: string;
+}
+
+export interface CandleUpdateResult {
+  updatedCandle: AggregatedCandle;
+  completedCandle: AggregatedCandle | null;
+  // Compatibility aliases used by the existing chart layer.
+  candle: AggregatedCandle;
+  closed: boolean;
 }
 
 export class CandleAggregator {
@@ -31,7 +41,6 @@ export class CandleAggregator {
   private timeframeMs: number;
   private currentCandle: AggregatedCandle | null = null;
   private currentSlotMs = 0;
-  private prevCumulativeVolume: number | null = null;
 
   constructor(timeframe: Timeframe = "1m") {
     this.timeframe = timeframe;
@@ -40,132 +49,123 @@ export class CandleAggregator {
 
   public static getTimeframeMs(timeframe: Timeframe): number {
     switch (timeframe) {
-      case "1m":
-        return 60_000;
-      case "3m":
-        return 3 * 60_000;
-      case "5m":
-        return 5 * 60_000;
-      case "15m":
-        return 15 * 60_000;
-      default:
-        return 60_000;
+      case "1m": return 60_000;
+      case "3m": return 3 * 60_000;
+      case "5m": return 5 * 60_000;
+      case "15m": return 15 * 60_000;
+      case "60m": return 60 * 60_000;
+      default: return 60_000;
     }
   }
 
-  public reset(timeframe?: Timeframe): void {
-    if (timeframe) {
-      this.timeframe = timeframe;
-      this.timeframeMs = CandleAggregator.getTimeframeMs(timeframe);
+  public reset(timeframeOrMs?: Timeframe | number): void {
+    if (typeof timeframeOrMs === "number") {
+      this.timeframeMs = timeframeOrMs > 0 ? timeframeOrMs : 60_000;
+    } else if (timeframeOrMs) {
+      this.timeframe = timeframeOrMs;
+      this.timeframeMs = CandleAggregator.getTimeframeMs(timeframeOrMs);
     }
     this.currentCandle = null;
     this.currentSlotMs = 0;
-    this.prevCumulativeVolume = null;
   }
 
   public getCurrentCandle(): AggregatedCandle | null {
     return this.currentCandle;
   }
 
-  public update(tick: NormalizedTick): {
-    updatedCandle: AggregatedCandle;
-    completedCandle: AggregatedCandle | null;
-  } {
+  public update(tick: LiveTick): CandleUpdateResult {
     return this.processTick(tick);
   }
 
-  public processTick(tick: NormalizedTick): {
-    updatedCandle: AggregatedCandle;
-    completedCandle: AggregatedCandle | null;
-  } {
-    const tickTime = tick.providerTimestamp || tick.receivedAt;
-    const slotStartMs = Math.floor(tickTime / this.timeframeMs) * this.timeframeMs;
+  public processTick(tick: LiveTick): CandleUpdateResult {
+    const providerTimestamp = tick.providerTimestamp || tick.exchangeTimestamp || tick.timestamp || Date.now();
+    const receivedAt = tick.receivedAt || tick.receivedTimestamp || Date.now();
+    const slotStartMs = Math.floor(providerTimestamp / this.timeframeMs) * this.timeframeMs;
     const slotStartSec = Math.floor(slotStartMs / 1000);
+    const market = tick.market === "UPBIT" || tick.market === "CRYPTO" ? "CRYPTO" : tick.market || "KOREA";
+    const source = tick.source || "SERVER_STREAM";
+    const quality: FeedQuality = tick.feedQuality || tick.quality || (tick.isRealtime ? "BROKER_REALTIME" : "POLLING_DELAYED");
+    const volumeToAdd = Math.max(0, Number(tick.volume) || 0);
 
-    // Calculate volume delta if cumulativeVolume provided
-    let volumeToAdd = tick.tradeVolume;
-    if (tick.cumulativeVolume != null && tick.cumulativeVolume > 0) {
-      if (this.prevCumulativeVolume != null && tick.cumulativeVolume >= this.prevCumulativeVolume) {
-        volumeToAdd = tick.cumulativeVolume - this.prevCumulativeVolume;
-      }
-      this.prevCumulativeVolume = tick.cumulativeVolume;
-    }
+    const makeCandle = (): AggregatedCandle => ({
+      timeframe: this.timeframe,
+      symbol: tick.symbol,
+      market,
+      open: tick.price,
+      high: tick.price,
+      low: tick.price,
+      close: tick.price,
+      volume: volumeToAdd,
+      time: slotStartSec,
+      startedAt: slotStartMs,
+      endedAt: slotStartMs + this.timeframeMs,
+      isFinal: false,
+      isClosed: false,
+      source,
+      quality,
+      feedQuality: quality,
+      receivedAt,
+      providerTimestamp,
+      tickCount: 1,
+      lastSequence: tick.sequence != null ? String(tick.sequence) : undefined
+    });
 
-    // Case 1: First tick ever
     if (!this.currentCandle) {
       this.currentSlotMs = slotStartMs;
-      this.currentCandle = {
-        timeframe: this.timeframe,
-        symbol: tick.symbol,
-        market: tick.market,
-        open: tick.price,
-        high: tick.price,
-        low: tick.price,
-        close: tick.price,
-        volume: Math.max(0, volumeToAdd),
-        time: slotStartSec,
-        startedAt: slotStartMs,
-        endedAt: slotStartMs + this.timeframeMs,
-        isFinal: false,
-        isClosed: false,
-        source: "KIS_WS",
-        quality: "REALTIME_TICK_AGGREGATED",
-        tickCount: 1,
-        lastSequence: tick.sequence,
-      };
-
+      this.currentCandle = makeCandle();
       return {
         updatedCandle: this.currentCandle,
         completedCandle: null,
+        candle: this.currentCandle,
+        closed: false
       };
     }
 
-    // Case 2: Tick belongs to a NEW time slot -> complete existing candle and start new one
     if (slotStartMs > this.currentSlotMs) {
       const completedCandle: AggregatedCandle = {
         ...this.currentCandle,
         isFinal: true,
-        isClosed: true,
+        isClosed: true
       };
 
       this.currentSlotMs = slotStartMs;
-      this.currentCandle = {
-        timeframe: this.timeframe,
-        symbol: tick.symbol,
-        market: tick.market,
-        open: tick.price,
-        high: tick.price,
-        low: tick.price,
-        close: tick.price,
-        volume: Math.max(0, volumeToAdd),
-        time: slotStartSec,
-        startedAt: slotStartMs,
-        endedAt: slotStartMs + this.timeframeMs,
-        isFinal: false,
-        isClosed: false,
-        source: "KIS_WS",
-        quality: "REALTIME_TICK_AGGREGATED",
-        tickCount: 1,
-        lastSequence: tick.sequence,
-      };
+      this.currentCandle = makeCandle();
 
       return {
         updatedCandle: this.currentCandle,
         completedCandle,
+        candle: this.currentCandle,
+        closed: true
       };
     }
 
-    // Case 3: Tick belongs to CURRENT ongoing bar -> update high/low/close/volume
+    // Ignore seriously out-of-order ticks from an older candle slot.
+    if (slotStartMs < this.currentSlotMs) {
+      return {
+        updatedCandle: this.currentCandle,
+        completedCandle: null,
+        candle: this.currentCandle,
+        closed: false
+      };
+    }
+
     this.currentCandle.high = Math.max(this.currentCandle.high, tick.price);
     this.currentCandle.low = Math.min(this.currentCandle.low, tick.price);
     this.currentCandle.close = tick.price;
-    this.currentCandle.volume += Math.max(0, volumeToAdd);
+    this.currentCandle.volume += volumeToAdd;
+    this.currentCandle.receivedAt = receivedAt;
+    this.currentCandle.providerTimestamp = providerTimestamp;
+    this.currentCandle.source = source;
+    this.currentCandle.quality = quality;
+    this.currentCandle.feedQuality = quality;
     this.currentCandle.tickCount += 1;
-    this.currentCandle.lastSequence = tick.sequence;
+    this.currentCandle.lastSequence = tick.sequence != null ? String(tick.sequence) : this.currentCandle.lastSequence;
 
     return {
       updatedCandle: this.currentCandle,
       completedCandle: null,
+      candle: this.currentCandle,
+      closed: false
     };
   }
 }
