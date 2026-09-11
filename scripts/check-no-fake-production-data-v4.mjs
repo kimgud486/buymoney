@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------
-// ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V6 (AISTOCK V21.2 TRUTH-FIRST)
+// ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V7 (AISTOCK V21.2 TRUTH-FIRST)
 // ----------------------------------------------------------------------
 
 import fs from "node:fs";
@@ -25,7 +25,10 @@ const forbidden = [
   /validProjections\[0\]\s*\*\s*1\.0[12]/, /rvol\s*\?\?\s*1\.0/,
   /vwap\s*\?\?\s*price/, /breakoutConfirmed:\s*true\b/, /scannedTotal\s*:\s*3420/,
   /makeMeta\s*\(\s*["']BB_BANDWIDTH["']\s*,\s*3\.5\s*\)/,
-  /aiMatchScore\s*:\s*\+\s*\(\s*8[56]/
+  /aiMatchScore\s*:\s*\+\s*\(\s*8[56]/,
+  /rvol\s*\|\|\s*1\.2/,
+  /tradingValue\s*:\s*[^\n]*\|\|\s*500/,
+  /adx\s*:\s*32\.5\b/
 ];
 
 const allowedFolders = [
@@ -108,12 +111,12 @@ function scanFile(fullPath) {
   }
 }
 
-console.log("🔍 Running Production Zero Fake Data Audit V6...");
+console.log("🔍 Running Production Zero Fake Data Audit V7...");
 auditPresetFixture();
 auditServerTruthRoutes();
 for (const rootPath of ROOTS) scanPath(rootPath);
 if (failed) {
-  console.error("💥 Zero Fake Data Audit V6 FAILED!");
+  console.error("💥 Zero Fake Data Audit V7 FAILED!");
   process.exit(1);
 }
-console.log("✅ Production Zero Fake Data Audit V6 PASSED cleanly.");
+console.log("✅ Production Zero Fake Data Audit V7 PASSED cleanly.");
