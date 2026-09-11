@@ -29,7 +29,9 @@ test.describe("Stock GPT verified-data safety E2E", () => {
     await expect(page.getByText("실시간 급상승 종목", { exact: true })).toBeVisible();
     await expect(page.getByText("위험 신호 종목", { exact: true })).toBeVisible();
 
-    await expect(page.getByTestId("operational-truth-monitor-v20")).toHaveCount(1);
+    const truthMonitor = page.getByTestId("operational-truth-monitor-v20");
+    await expect(truthMonitor).toHaveCount(1);
+    await expect(truthMonitor).toContainText("종목 미선택");
   });
 
   test("existing features open in the approved center workspace and truth modules stay connected", async ({ page }) => {
