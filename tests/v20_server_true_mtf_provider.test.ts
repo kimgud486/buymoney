@@ -80,3 +80,24 @@ test("provider omits frames when verified OHLCV history is insufficient", async 
   });
   assert.deepEqual(evidence, {});
 });
+
+test("provider rejects candle payloads that omit explicit dataStatus", async () => {
+  const fakeFetch: typeof fetch = (async (input: any) => {
+    const url = new URL(String(input));
+    const tf = url.searchParams.get("timeframe");
+    const interval = tf === "1m" ? 60_000 : tf === "5m" ? 300_000 : 86_400_000;
+    return new Response(JSON.stringify({
+      provider: "UNLABELED_PROVIDER",
+      source: "UNLABELED_OHLCV",
+      candles: makeCandles(210, interval)
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  const evidence = await ServerTrueMTFEvidenceProviderV20.build({
+    symbol: "005930",
+    baseUrl: "http://localhost:3001",
+    fetchImpl: fakeFetch
+  });
+
+  assert.deepEqual(evidence, {});
+});
