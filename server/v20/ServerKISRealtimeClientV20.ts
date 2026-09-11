@@ -27,6 +27,11 @@ export interface KISRealtimeClientConfig {
   overseasRealtimeEntitled?: boolean;
 }
 
+type UsRealtimeTargetV20 = {
+  symbol: string;
+  trKey: string;
+};
+
 const ROTATION_INTERVAL_MS = 45_000;
 const DOMESTIC_ROTATION_BATCH = 18;
 const US_ROTATION_BATCH = 18;
@@ -76,8 +81,6 @@ const readStoredRealtimeConfig = (): KISRealtimeClientConfig | null => {
     appSecret,
     approvalKey: approvalKey || undefined,
     htsId: htsId || undefined,
-    // This repository's broker gateway is LIVE-only. Never silently route saved
-    // production credentials to the KIS virtual-trading WebSocket endpoint.
     isPaper: false,
     overseasRealtimeEntitled,
   };
@@ -95,19 +98,14 @@ export class ServerKISRealtimeClientV20 {
   private rotationTimer: NodeJS.Timeout | null = null;
   private closedIntentionally = false;
   private koreaUniverse: string[] = [];
-  private usUniverse: string[] = [];
+  private usUniverse: UsRealtimeTargetV20[] = [];
   private koreaCursor = 0;
   private usCursor = 0;
   private rotationBusy = false;
   private approvalRequestInFlight: Promise<string | null> | null = null;
 
   constructor(config: KISRealtimeClientConfig) {
-    this.config = {
-      ...config,
-      // V12/V21 broker runtime is LIVE-only. The previous server startup passed
-      // isPaper:true here, which pointed valid live credentials at the VTS socket.
-      isPaper: false,
-    };
+    this.config = { ...config, isPaper: false };
   }
 
   private credentialFingerprint(): string {
@@ -134,19 +132,16 @@ export class ServerKISRealtimeClientV20 {
             secretkey: this.config.appSecret,
           }),
         });
-
         if (!res.ok) {
           console.warn(`[ServerKISRealtimeClientV20] approval key HTTP ${res.status}`);
           return null;
         }
-
         const data = await res.json().catch(() => null);
         const approvalKey = String(data?.approval_key || "").trim();
         if (!approvalKey) {
           console.warn("[ServerKISRealtimeClientV20] KIS approval response did not include approval_key.");
           return null;
         }
-
         this.config.approvalKey = approvalKey;
         console.log("[ServerKISRealtimeClientV20] KIS WebSocket approval key acquired.");
         return approvalKey;
@@ -157,7 +152,6 @@ export class ServerKISRealtimeClientV20 {
         this.approvalRequestInFlight = null;
       }
     })();
-
     return this.approvalRequestInFlight;
   }
 
@@ -178,15 +172,11 @@ export class ServerKISRealtimeClientV20 {
 
     activeRealtimeClient = this;
     activeRealtimeFingerprint = fingerprint;
-
-    const domain = "ops.koreainvestment.com:21000";
-    const url = `ws://${domain}/tryitout/H0STCNT0`;
-
+    const url = "ws://ops.koreainvestment.com:21000/tryitout/H0STCNT0";
     this.closedIntentionally = false;
 
     try {
       this.ws = new WebSocket(url);
-
       this.ws.on("open", () => {
         this.isConnected = true;
         console.log("[ServerKISRealtimeClientV20] KIS LIVE WebSocket connected.");
@@ -194,9 +184,7 @@ export class ServerKISRealtimeClientV20 {
         this.resubscribeAll();
         void this.initializeWholeMarketRotation();
       });
-
       this.ws.on("message", (data: WebSocket.Data) => this.handleMessage(data.toString()));
-
       this.ws.on("close", () => {
         this.isConnected = false;
         this.ws = null;
@@ -204,10 +192,7 @@ export class ServerKISRealtimeClientV20 {
         console.log("[ServerKISRealtimeClientV20] KIS WebSocket closed.");
         if (!this.closedIntentionally) this.scheduleReconnect();
       });
-
-      this.ws.on("error", (err) => {
-        console.error("[ServerKISRealtimeClientV20] KIS WebSocket error:", err);
-      });
+      this.ws.on("error", (err) => console.error("[ServerKISRealtimeClientV20] KIS WebSocket error:", err));
     } catch (err) {
       console.error("[ServerKISRealtimeClientV20] Connection initialization failed:", err);
       this.scheduleReconnect();
@@ -218,8 +203,17 @@ export class ServerKISRealtimeClientV20 {
     const cleanSymbol = String(symbol || "").trim().toUpperCase();
     if (!cleanSymbol) return;
 
-    const market = trId === "HDFSCNT0" ? "US" : "KR";
-    realtimeSubscriptionRegistryV20.register({ symbol: cleanSymbol, market });
+    if (trId === "HDFSCNT0") {
+      if (!/^D[A-Z]{3}[A-Z0-9]{1,5}$/.test(cleanSymbol)) {
+        console.warn(`[ServerKISRealtimeClientV20] skipped unverified US realtime tr_key: ${cleanSymbol}`);
+        return;
+      }
+      this.subscribedSymbols.add(`${trId}:${cleanSymbol}`);
+      this.sendSubscription(trId, cleanSymbol);
+      return;
+    }
+
+    realtimeSubscriptionRegistryV20.register({ symbol: cleanSymbol, market: "KR" });
     this.subscribedSymbols.add(`${trId}:${cleanSymbol}`);
     this.sendSubscription(trId, cleanSymbol);
   }
@@ -258,8 +252,7 @@ export class ServerKISRealtimeClientV20 {
       const idx = item.indexOf(":");
       if (idx <= 0) continue;
       const trId = item.slice(0, idx) as "H0STCNT0" | "HDFSCNT0";
-      const symbol = item.slice(idx + 1);
-      this.sendSubscription(trId, symbol);
+      this.sendSubscription(trId, item.slice(idx + 1));
     }
   }
 
@@ -270,8 +263,8 @@ export class ServerKISRealtimeClientV20 {
         .filter((item) => item.market === "KOSPI" || item.market === "KOSDAQ")
         .map((item) => item.symbol);
       this.usUniverse = snapshot.symbols
-        .filter((item) => item.market === "US")
-        .map((item) => item.symbol);
+        .filter((item) => item.market === "US" && typeof item.kisRealtimeKey === "string" && item.kisRealtimeKey.length > 0)
+        .map((item) => ({ symbol: item.symbol, trKey: item.kisRealtimeKey! }));
     } catch (error) {
       console.warn("[ServerKISRealtimeClientV20] exchange master unavailable; pinned subscriptions only", error);
       this.koreaUniverse = [];
@@ -292,9 +285,9 @@ export class ServerKISRealtimeClientV20 {
     this.rotatingSymbols.clear();
   }
 
-  private takeRotationBatch(universe: string[], cursor: number, size: number): { batch: string[]; cursor: number } {
+  private takeRotationBatch<T>(universe: T[], cursor: number, size: number): { batch: T[]; cursor: number } {
     if (!universe.length) return { batch: [], cursor: 0 };
-    const batch: string[] = [];
+    const batch: T[] = [];
     for (let i = 0; i < Math.min(size, universe.length); i++) {
       batch.push(universe[(cursor + i) % universe.length]);
     }
@@ -312,7 +305,7 @@ export class ServerKISRealtimeClientV20 {
 
       const desired = new Set<string>([
         ...kr.batch.map((symbol) => `H0STCNT0:${symbol}`),
-        ...(this.config.overseasRealtimeEntitled === true ? us.batch.map((symbol) => `HDFSCNT0:${symbol}`) : []),
+        ...(this.config.overseasRealtimeEntitled === true ? us.batch.map((target) => `HDFSCNT0:${target.trKey}`) : []),
       ]);
 
       for (const item of this.rotatingSymbols) {
@@ -322,20 +315,26 @@ export class ServerKISRealtimeClientV20 {
         this.sendUnsubscription(item.slice(0, idx) as "H0STCNT0" | "HDFSCNT0", item.slice(idx + 1));
       }
 
-      for (const item of desired) {
-        if (this.rotatingSymbols.has(item) || this.subscribedSymbols.has(item)) continue;
-        const idx = item.indexOf(":");
-        if (idx <= 0) continue;
-        const trId = item.slice(0, idx) as "H0STCNT0" | "HDFSCNT0";
-        const symbol = item.slice(idx + 1);
-        realtimeSubscriptionRegistryV20.register({ symbol, market: trId === "HDFSCNT0" ? "US" : "KR" });
-        this.sendSubscription(trId, symbol);
+      for (const symbol of kr.batch) {
+        const subscriptionId = `H0STCNT0:${symbol}`;
+        if (this.rotatingSymbols.has(subscriptionId) || this.subscribedSymbols.has(subscriptionId)) continue;
+        realtimeSubscriptionRegistryV20.register({ symbol, market: "KR" });
+        this.sendSubscription("H0STCNT0", symbol);
+      }
+
+      if (this.config.overseasRealtimeEntitled === true) {
+        for (const target of us.batch) {
+          const subscriptionId = `HDFSCNT0:${target.trKey}`;
+          if (this.rotatingSymbols.has(subscriptionId) || this.subscribedSymbols.has(subscriptionId)) continue;
+          realtimeSubscriptionRegistryV20.register({ symbol: target.symbol, market: "US" });
+          this.sendSubscription("HDFSCNT0", target.trKey);
+        }
       }
       this.rotatingSymbols = desired;
 
       const warmRequests = [
         ...kr.batch.map((symbol) => ({ symbol, market: "KOREA" as const })),
-        ...(this.config.overseasRealtimeEntitled === true ? us.batch.map((symbol) => ({ symbol, market: "US" as const })) : []),
+        ...(this.config.overseasRealtimeEntitled === true ? us.batch.map((target) => ({ symbol: target.symbol, market: "US" as const })) : []),
       ];
       await serverCandleWarmCoordinatorV20.warmBatch(warmRequests, WARM_PER_ROTATION);
     } finally {
@@ -358,7 +357,6 @@ export class ServerKISRealtimeClientV20 {
 
   private handleMessage(msg: string): void {
     if (!msg) return;
-
     if (msg.startsWith("{")) {
       try {
         const parsed = JSON.parse(msg);
@@ -367,9 +365,7 @@ export class ServerKISRealtimeClientV20 {
           this.secretKeyHex = output.key;
           this.secretIvHex = output.iv;
         }
-      } catch {
-        // Ignore malformed control packets.
-      }
+      } catch {}
       return;
     }
 
@@ -435,7 +431,6 @@ export class ServerKISRealtimeClientV20 {
 async function ensureStoredKISRealtimeClient(): Promise<void> {
   const config = readStoredRealtimeConfig();
   if (!config) return;
-
   const fingerprint = [
     config.appKey.trim(),
     config.appSecret.trim(),
@@ -456,14 +451,10 @@ async function ensureStoredKISRealtimeClient(): Promise<void> {
 export function startStoredKISRealtimeCredentialWatcherV20(): void {
   if (storedCredentialsWatcherStarted) return;
   storedCredentialsWatcherStarted = true;
-
   const firstRun = setTimeout(() => void ensureStoredKISRealtimeClient(), 1000);
   firstRun.unref?.();
-
   const watcher = setInterval(() => void ensureStoredKISRealtimeClient(), STORED_CREDENTIALS_WATCH_MS);
   watcher.unref?.();
 }
 
-// server.ts already imports this module. Start a lightweight watcher so a KIS key
-// saved from the UI can activate realtime streaming without requiring a restart.
 startStoredKISRealtimeCredentialWatcherV20();
