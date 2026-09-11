@@ -36,6 +36,10 @@ export interface CandleUpdateResult {
   closed: boolean;
 }
 
+type CompatibleRealtimeTick = LiveTick & {
+  tradeVolume?: number;
+};
+
 export class CandleAggregator {
   private timeframe: Timeframe;
   private timeframeMs: number;
@@ -85,7 +89,12 @@ export class CandleAggregator {
     const market = tick.market === "UPBIT" || tick.market === "CRYPTO" ? "CRYPTO" : tick.market || "KOREA";
     const source = tick.source || "SERVER_STREAM";
     const quality: FeedQuality = tick.feedQuality || tick.quality || (tick.isRealtime ? "BROKER_REALTIME" : "POLLING_DELAYED");
-    const volumeToAdd = Math.max(0, Number(tick.volume) || 0);
+
+    // KIS legacy normalized ticks use tradeVolume while the unified realtime model uses volume.
+    // Both are per-trade quantities. Never substitute cumulative/accumulated volume here.
+    const compatibleTick = tick as CompatibleRealtimeTick;
+    const rawTradeVolume = compatibleTick.volume ?? compatibleTick.tradeVolume;
+    const volumeToAdd = Math.max(0, Number(rawTradeVolume) || 0);
 
     const makeCandle = (): AggregatedCandle => ({
       timeframe: this.timeframe,
