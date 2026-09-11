@@ -1,5 +1,6 @@
 // ----------------------------------------------------------------------
 // ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V9 (AISTOCK V21.2 TRUTH-FIRST)
+// Protects realtime truth, scanner counts, and market-readiness diagnostics.
 // ----------------------------------------------------------------------
 
 import fs from "node:fs";
