@@ -3,7 +3,6 @@ import {
   Activity,
   AlertTriangle,
   Bell,
-  BriefcaseBusiness,
   History,
   Radio,
   ShieldAlert,
@@ -17,6 +16,7 @@ import { VerifiedAiOpportunityScanner } from "../VerifiedAiOpportunityScanner";
 import { VerifiedIntradaySignalPanel } from "../VerifiedIntradaySignalPanel";
 import { AiHighVolatilityAlertSystem } from "./AiHighVolatilityAlertSystem";
 import { BotStatusDashboard } from "./BotStatusDashboard";
+import { RealBrokerDetailedBalanceAndHoldings } from "./RealBrokerDetailedBalanceAndHoldings";
 
 type NavId = "new" | "history" | "watch" | "portfolio" | "scanner" | "alerts";
 
@@ -65,7 +65,6 @@ function changeText(value: number | null | undefined): string {
 export default function StockGPTFeaturePanels({ activeNav, quotes, onSelectQuote }: Props) {
   const {
     watchlist = [],
-    positions = [],
     decisionLogs = [],
     blockedSymbolDetails = [],
     brokerApiStatus,
@@ -186,50 +185,13 @@ export default function StockGPTFeaturePanels({ activeNav, quotes, onSelectQuote
 
   if (activeNav === "portfolio") {
     return (
-      <section className="mt-6 rounded-2xl border border-slate-800 bg-[#08111d]/96 p-5 shadow-2xl" data-testid="stock-gpt-holdings-panel">
-        <div className="flex items-center gap-2 text-base font-black"><BriefcaseBusiness className="h-5 w-5 text-emerald-300" />보유종목</div>
-        <p className="mt-1 text-xs text-slate-500">수량·평단은 기존 계좌 상태를 사용하고 현재가와 평가손익은 검증 LIVE 시세가 있을 때만 계산합니다.</p>
-        <div className="mt-4 space-y-2">
-          {positions.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-slate-800 py-12 text-center text-sm text-slate-500">현재 저장된 보유종목이 없습니다.</div>
-          ) : (
-            positions.map((position: any) => {
-              const quote = getQuote(position.symbol);
-              const quantity = Number(position.quantity);
-              const avgPrice = Number(position.avgPrice);
-              const current = quote?.price ?? null;
-              const pnl = quote && Number.isFinite(quantity) && Number.isFinite(avgPrice) && avgPrice > 0 && current != null
-                ? (current - avgPrice) * quantity
-                : null;
-              const pnlRate = quote && avgPrice > 0 && current != null ? ((current - avgPrice) / avgPrice) * 100 : null;
-              return (
-                <button
-                  key={position.id || `${position.market}-${position.symbol}`}
-                  type="button"
-                  onClick={() => openItem(position.symbol, position.name, position.market)}
-                  className="w-full rounded-xl border border-slate-800 bg-[#07101b] p-4 text-left hover:border-cyan-400/30"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <div className="text-sm font-black text-white">{position.name}</div>
-                      <div className="mt-0.5 text-[10px] font-mono text-slate-500">{position.symbol} · {position.market}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-xs font-black">{quote ? priceText(quote.price, quote.market) : "NO_DATA"}</div>
-                      <div className={pnlRate == null ? "mt-1 text-[10px] text-slate-500" : pnlRate >= 0 ? "mt-1 text-[10px] font-black text-rose-300" : "mt-1 text-[10px] font-black text-blue-300"}>{pnlRate == null ? "평가손익 NO_DATA" : `${pnlRate > 0 ? "+" : ""}${pnlRate.toFixed(2)}%`}</div>
-                    </div>
-                  </div>
-                  <div className="mt-3 grid grid-cols-3 gap-2 text-[11px]">
-                    <div className="rounded-lg bg-slate-950/70 p-2"><div className="text-slate-500">수량</div><strong>{Number.isFinite(quantity) ? quantity.toLocaleString(undefined, { maximumFractionDigits: 6 }) : "NO_DATA"}</strong></div>
-                    <div className="rounded-lg bg-slate-950/70 p-2"><div className="text-slate-500">평단</div><strong>{Number.isFinite(avgPrice) && avgPrice > 0 ? priceText(avgPrice, position.market) : "NO_DATA"}</strong></div>
-                    <div className="rounded-lg bg-slate-950/70 p-2"><div className="text-slate-500">평가손익</div><strong className={pnl == null ? "text-slate-500" : pnl >= 0 ? "text-rose-300" : "text-blue-300"}>{pnl == null ? "NO_DATA" : `${pnl > 0 ? "+" : ""}${pnl.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}</strong></div>
-                  </div>
-                </button>
-              );
-            })
-          )}
-        </div>
-      </section>
+      <div className="mt-6" data-testid="stock-gpt-holdings-panel">
+        <RealBrokerDetailedBalanceAndHoldings
+          onSelectAssetForChart={(symbol, name, market) => {
+            openItem(symbol, name || symbol, market);
+          }}
+        />
+      </div>
     );
   }
 
@@ -264,16 +226,20 @@ export default function StockGPTFeaturePanels({ activeNav, quotes, onSelectQuote
   return (
     <section className="mt-6 rounded-2xl border border-slate-800 bg-[#08111d]/96 p-5 shadow-2xl" data-testid="stock-gpt-alerts-panel">
       <div className="flex items-center gap-2 text-base font-black"><Bell className="h-5 w-5 text-amber-300" />알림 기록</div>
-      <p className="mt-1 text-xs text-slate-500">브로커 연결 오류, 위험 차단, 검증 LIVE 변동성 경보만 모아서 보여줍니다.</p>
+      <p className="mt-1 text-xs text-slate-500">API 통신 오류, 위험 차단, 검증 LIVE 변동성 경보를 보여줍니다. 여기의 CONNECTED는 계좌 잔고 검증 완료를 뜻하지 않습니다.</p>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <div className="rounded-xl border border-slate-800 bg-[#07101b] p-4">
-          <div className="flex items-center gap-2 text-xs font-black text-slate-300"><Activity className="h-4 w-4 text-cyan-300" />브로커 상태</div>
+        <div className="rounded-xl border border-slate-800 bg-[#07101b] p-4" data-testid="stock-gpt-broker-transport-status">
+          <div className="flex items-center gap-2 text-xs font-black text-slate-300"><Activity className="h-4 w-4 text-cyan-300" />API 통신 상태 · 계좌 검증 아님</div>
           <div className="mt-3 space-y-2 text-xs">
             {Object.entries(brokerApiStatus || {}).map(([broker, status]) => (
-              <div key={broker} className="flex items-center justify-between"><span className="uppercase text-slate-500">{broker}</span><strong className={status === "CONNECTED" ? "text-emerald-300" : status === "FAILED" ? "text-rose-300" : "text-amber-300"}>{String(status)}</strong></div>
+              <div key={broker} className="flex items-center justify-between gap-3">
+                <span className="uppercase text-slate-500">{broker}</span>
+                <strong className={status === "FAILED" ? "text-rose-300" : "text-cyan-300"}>{String(status)} · TRANSPORT</strong>
+              </div>
             ))}
           </div>
+          <p className="mt-3 text-[10px] leading-5 text-amber-300/80">ACCOUNT VERIFIED 판정은 보유종목 화면의 브로커 원본증거 게이트에서만 표시합니다.</p>
         </div>
         <div className="rounded-xl border border-slate-800 bg-[#07101b] p-4">
           <div className="flex items-center gap-2 text-xs font-black text-slate-300"><ShieldAlert className="h-4 w-4 text-rose-300" />위험 차단</div>
@@ -285,7 +251,7 @@ export default function StockGPTFeaturePanels({ activeNav, quotes, onSelectQuote
       <div className="mt-3 space-y-2">
         {Object.entries(brokerApiError || {}).map(([broker, error]: [string, any]) => error ? (
           <div key={`error-${broker}`} className="rounded-xl border border-rose-500/20 bg-rose-950/10 p-3">
-            <div className="flex items-center gap-2 text-xs font-black text-rose-300"><AlertTriangle className="h-4 w-4" />{broker.toUpperCase()} 연결 오류</div>
+            <div className="flex items-center gap-2 text-xs font-black text-rose-300"><AlertTriangle className="h-4 w-4" />{broker.toUpperCase()} API 통신 오류</div>
             <div className="mt-2 text-xs text-slate-400">{error.errorMessage || error.message || "오류 상세 없음"}</div>
           </div>
         ) : null)}
@@ -296,7 +262,7 @@ export default function StockGPTFeaturePanels({ activeNav, quotes, onSelectQuote
           </div>
         ))}
         {blockedSymbolDetails.length === 0 && Object.values(brokerApiError || {}).every((value) => !value) && (
-          <div className="rounded-xl border border-dashed border-slate-800 py-8 text-center text-sm text-slate-500">현재 기록된 브로커/위험 차단 알림이 없습니다.</div>
+          <div className="rounded-xl border border-dashed border-slate-800 py-8 text-center text-sm text-slate-500">현재 기록된 API 통신/위험 차단 알림이 없습니다.</div>
         )}
       </div>
 
