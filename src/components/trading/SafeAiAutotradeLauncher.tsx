@@ -179,6 +179,12 @@ const getAutoOrderSizing = (
 const mapMarket = (market: EnsembleEvaluationResult["market"]): "KOREA" | "US" | "BTC" =>
   market === "BTC" ? "BTC" : market === "US" ? "US" : "KOREA";
 
+const normalizeTradingSymbol = (symbol: string): string =>
+  String(symbol || "")
+    .trim()
+    .toUpperCase()
+    .replace(/^KRW-/, "");
+
 export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = ({
   onSelectSymbolForChart,
   onConfirmOrderApproval,
@@ -189,6 +195,8 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
     executeTrade,
     profile,
     cashBreakdown,
+    positions = [],
+    orders = [],
     isKillSwitchActive,
   } = useApp() as any;
 
@@ -263,8 +271,39 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
     }
 
     for (const candidate of ready) {
+      const candidateMarket = mapMarket(candidate.market);
+      const normalizedCandidateSymbol = normalizeTradingSymbol(candidate.symbol);
+
+      const hasPosition = positions.some((position: any) =>
+        position?.market === candidateMarket &&
+        Number(position?.quantity) > 0 &&
+        normalizeTradingSymbol(position?.symbol) === normalizedCandidateSymbol,
+      );
+      if (hasPosition) {
+        setExecutionUi((prev) => ({
+          ...prev,
+          [candidate.symbol]: { state: "SKIPPED", message: "이미 보유 중인 종목이라 자동 추가매수를 차단했습니다." },
+        }));
+        continue;
+      }
+
+      const hasPendingBuy = orders.some((order: any) =>
+        order?.market === candidateMarket &&
+        order?.side === "BUY" &&
+        order?.status === "PENDING" &&
+        normalizeTradingSymbol(order?.symbol) === normalizedCandidateSymbol,
+      );
+      if (hasPendingBuy) {
+        setExecutionUi((prev) => ({
+          ...prev,
+          [candidate.symbol]: { state: "SKIPPED", message: "이미 매수 주문이 대기 중인 종목이라 중복주문을 차단했습니다." },
+        }));
+        continue;
+      }
+
       const now = Date.now();
-      const previousAttemptAt = lastOrderAttemptRef.current.get(candidate.symbol) || 0;
+      const cooldownKey = `${candidateMarket}:${normalizedCandidateSymbol}`;
+      const previousAttemptAt = lastOrderAttemptRef.current.get(cooldownKey) || 0;
       if (now - previousAttemptAt < SAME_SYMBOL_ORDER_COOLDOWN_MS) {
         setExecutionUi((prev) => ({
           ...prev,
@@ -283,7 +322,7 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
         continue;
       }
 
-      lastOrderAttemptRef.current.set(candidate.symbol, now);
+      lastOrderAttemptRef.current.set(cooldownKey, now);
       setExecutionUi((prev) => ({
         ...prev,
         [candidate.symbol]: {
@@ -296,7 +335,7 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
         const tradeResult = await executeTrade({
           symbol: candidate.symbol,
           name: candidate.name,
-          market: mapMarket(candidate.market),
+          market: candidateMarket,
           side: "BUY",
           qty: sizing.qty,
           price: candidate.entryPrice,
@@ -331,7 +370,7 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
         addToast({ type: "ERROR", title: `AI 자율매매 실패 · ${candidate.name}`, message });
       }
     }
-  }, [addToast, autoScanEnabled, cashBreakdown, executeTrade, isKillSwitchActive, onConfirmOrderApproval, profile]);
+  }, [addToast, autoScanEnabled, cashBreakdown, executeTrade, isKillSwitchActive, onConfirmOrderApproval, orders, positions, profile]);
 
   const runScan = useCallback(async (targetMarket: ScanMarket = market) => {
     if (scanInFlightRef.current) return;
@@ -465,9 +504,9 @@ export const SafeAiAutotradeLauncher: React.FC<SafeAiAutotradeLauncherProps> = (
           <div className="flex flex-wrap gap-4 text-slate-400">
             <span>최근 스캔: <strong className="text-slate-200">{scannedAt || "-"}</strong></span>
             <span>자동매매 후보: <strong className="text-emerald-300">{reviewReadyCount}</strong></span>
-            <span>반복주문 방지: <strong className="text-cyan-300">종목별 60초</strong></span>
+            <span>중복주문 방지: <strong className="text-cyan-300">보유·매수대기 차단 + 종목별 60초</strong></span>
           </div>
-          <div className="flex items-center gap-1.5 font-bold text-emerald-300"><ShieldCheck className="h-3.5 w-3.5" />실시간성 · API · 실제잔고 · 손절위험 · 장시간 · 킬스위치를 통과해야 주문합니다.</div>
+          <div className="flex items-center gap-1.5 font-bold text-emerald-300"><ShieldCheck className="h-3.5 w-3.5" />실시간성 · API · 실제잔고 · 손절위험 · 보유/대기주문 · 장시간 · 킬스위치를 통과해야 주문합니다.</div>
         </div>
 
         {scanError && <div data-testid="safe-ai-scan-error" className="mt-4 flex items-start gap-2 rounded-xl border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>{scanError}</span></div>}
