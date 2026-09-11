@@ -97,7 +97,7 @@ export function calculatePatternHistory(
   currentPattern: string,
   currentDirection: VerifiedSignalResult["direction"],
   horizonBars = 8,
-  minSamples = 5,
+  minSamples = 20,
 ): PatternHistoryStats {
   const candles: ScannerCandle[] = inputCandles
     .map((raw: any) => ({
@@ -113,6 +113,9 @@ export function calculatePatternHistory(
 
   if (!currentPattern || currentPattern === "NONE") {
     return emptyHistory("NONE", horizonBars, "아직 비교할 뚜렷한 패턴이 없어요.");
+  }
+  if (currentDirection === "NEUTRAL") {
+    return emptyHistory(currentPattern, horizonBars, "방향이 아직 정해지지 않아 과거 적중률을 계산하지 않아요.");
   }
   if (candles.length < 70 + horizonBars) {
     return emptyHistory(currentPattern, horizonBars, "과거 캔들이 더 모이면 같은 모양의 성적을 보여줄게요.");
@@ -187,7 +190,7 @@ export function calculatePatternHistory(
     sufficient,
     message: sufficient
       ? `같은 모양 ${events.length}번 중 ${successCount}번이 정한 방향으로 움직였어요.`
-      : `같은 모양이 ${events.length}번만 보여서 아직 자료가 적어요.`,
+      : `같은 모양이 ${events.length}번만 보여서 아직 자료가 적어요. 최소 ${minSamples}번은 모여야 적중률을 신뢰 표시해요.`,
   };
 }
 
