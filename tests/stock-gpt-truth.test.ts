@@ -61,6 +61,12 @@ test("realtime feed never stamps missing provider time as now", () => {
   assert.match(realtimeFeed, /ageMs\s*=\s*providerTimestamp\s*==\s*null\s*\?\s*null/);
 });
 
+test("realtime feed never injects a hidden default KRX ticker universe", () => {
+  assert.doesNotMatch(realtimeFeed, /const\s+defaults\s*=\s*\[/);
+  assert.doesNotMatch(realtimeFeed, /\.\.\.registered,\s*\.\.\.defaults/);
+  assert.match(realtimeFeed, /const\s+codes\s*=\s*Array\.from\(new\s+Set\(registered\)\)/);
+});
+
 test("market integrity gate fails closed on missing timestamps and candle volume", () => {
   assert.doesNotMatch(integrityGate, /quote\.providerTimestamp\s*\|\|\s*quote\.timestamp\s*\|\|\s*now/);
   assert.doesNotMatch(integrityGate, /quote\.volume\s*\|\|\s*0/);
