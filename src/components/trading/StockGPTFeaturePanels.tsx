@@ -3,20 +3,18 @@ import {
   Activity,
   AlertTriangle,
   Bell,
-  Bot,
   BriefcaseBusiness,
-  ChevronRight,
-  Clock3,
   History,
   Radio,
   ShieldAlert,
   Star,
-  TrendingDown,
-  TrendingUp,
 } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import { LiveMarketQuote, realtimeMarketFeedService } from "../../services/realtimeMarketFeedService";
 import { RealtimeScannerTileBoard } from "../RealtimeScannerTileBoard";
+import { VerifiedAiOpportunityScanner } from "../VerifiedAiOpportunityScanner";
+import { VerifiedIntradaySignalPanel } from "../VerifiedIntradaySignalPanel";
+import { BotStatusDashboard } from "./BotStatusDashboard";
 
 type NavId = "new" | "history" | "watch" | "portfolio" | "scanner" | "alerts";
 
@@ -111,19 +109,39 @@ export default function StockGPTFeaturePanels({ activeNav, quotes, onSelectQuote
       <section className="mt-6 overflow-hidden rounded-2xl border border-slate-800 bg-[#08111d]/96 shadow-2xl" data-testid="stock-gpt-real-scanner-panel">
         <div className="border-b border-slate-800 px-5 py-4">
           <div className="flex items-center gap-2 text-base font-black text-white">
-            <Radio className="h-5 w-5 text-cyan-300" /> 실시간 스캐너
+            <Radio className="h-5 w-5 text-cyan-300" /> 검증 실시간 스캐너 허브
           </div>
-          <p className="mt-1 text-xs leading-5 text-slate-500">기존 서버 PRECHECK와 실제 멀티타임프레임 캔들 검증을 그대로 사용합니다.</p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">새 가짜 스캐너를 만들지 않고 기존 실제 엔진을 한 화면에 다시 연결했습니다. PRECHECK와 FINAL BUY는 구분됩니다.</p>
         </div>
-        <div className="p-3">
-          <RealtimeScannerTileBoard
-            isWhiteTheme={false}
-            onSelectStock={(symbol, market) => {
-              const quote = getQuote(symbol);
-              if (quote) onSelectQuote(quote, quote.name || symbol);
-              else requestQuote(symbol, market);
-            }}
-          />
+
+        <div className="space-y-4 p-3">
+          <div className="rounded-xl border border-slate-800 bg-[#07101b] p-3">
+            <div className="mb-3 text-xs font-black text-cyan-300">1. 실시간 타일 스캐너</div>
+            <RealtimeScannerTileBoard
+              isWhiteTheme={false}
+              onSelectStock={(symbol, market) => {
+                const quote = getQuote(symbol);
+                if (quote) onSelectQuote(quote, quote.name || symbol);
+                else requestQuote(symbol, market);
+              }}
+            />
+          </div>
+
+          <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/10 p-3" data-testid="stock-gpt-v20-final-scanner">
+            <div className="mb-3 text-xs font-black text-emerald-300">2. V20 서버 최종판단 스캐너</div>
+            <VerifiedAiOpportunityScanner />
+          </div>
+
+          <div className="rounded-xl border border-cyan-500/20 bg-cyan-950/10 p-3" data-testid="stock-gpt-intraday-pattern-panel">
+            <div className="mb-2 text-xs font-black text-cyan-300">3. 실제 완료 5분봉 패턴 검증</div>
+            <div className="mb-3 text-[11px] leading-5 text-slate-500">V20 후보를 선택하면 ORB / Opening Drive / VWAP Retest / First Pullback을 실제 완료봉으로만 검사합니다.</div>
+            <VerifiedIntradaySignalPanel />
+          </div>
+
+          <div className="rounded-xl border border-violet-500/20 bg-violet-950/10 p-3" data-testid="stock-gpt-bot-truth-panel">
+            <div className="mb-3 text-xs font-black text-violet-300">4. AI 봇 실제 상태</div>
+            <BotStatusDashboard />
+          </div>
         </div>
       </section>
     );
