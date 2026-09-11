@@ -29,7 +29,7 @@ test("manual buy is blocked when user cancels confirmation", async () => {
   assert.equal(actionCalled, false);
 });
 
-test("manual sell executes only after explicit confirmation", async () => {
+test("manual sell executes only after explicit confirmation and verified broker fill proof", async () => {
   let confirmCalled = false;
   let actionCalled = false;
   (globalThis as any).window = {
@@ -45,13 +45,25 @@ test("manual sell executes only after explicit confirmation", async () => {
     () => null,
     async () => {
       actionCalled = true;
-      return { ok: true, status: "SUCCESS" as const, code: "SUCCESS" };
+      return {
+        ok: true,
+        status: "FILLED" as const,
+        code: "BROKER_FILLED",
+        data: {
+          status: "FILLED",
+          orderNo: "TEST-SELL-001",
+          filledQty: 1,
+          filledPrice: 100000,
+        },
+      };
     }
   );
 
   assert.equal(confirmCalled, true);
   assert.equal(actionCalled, true);
   assert.equal(result.ok, true);
+  assert.equal(result.status, "FILLED");
+  assert.equal(result.code, "BROKER_FILLED");
 });
 
 test("autonomous action ids are not interrupted by manual confirmation guard", async () => {
