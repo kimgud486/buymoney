@@ -394,7 +394,9 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
     return { valuation, cost, pnl, pnlRate };
   }, [positionFacts]);
 
-  const readyCount = Object.values(syncTruth).filter((truth) => truth.state === "READY").length;
+  const readyCount = [syncTruth.korea, syncTruth.us, syncTruth.upbit]
+    .filter((truth) => truth.state === "READY")
+    .length;
   const latestObserved = [syncTruth.korea.observedAt, syncTruth.us.observedAt, syncTruth.upbit.observedAt]
     .filter(Boolean)
     .join(" / ") || "동기화 전";
