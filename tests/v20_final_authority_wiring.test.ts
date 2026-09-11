@@ -31,3 +31,28 @@ test("final HTTP decision rebuilds True MTF on the server and never trusts clien
   assert.doesNotMatch(provider, /derived \? "REALTIME_DERIVED" : "REALTIME_VERIFIED"/);
   assert.match(provider, /rows\.length !== 3/);
 });
+
+test("AppContext never weakens configured risk limits after a Holdings Limit rejection", () => {
+  const appContext = read("src/context/AppContext.tsx");
+
+  assert.doesNotMatch(appContext, /\[SafetyCheck Auto-Bypass\]/);
+  assert.doesNotMatch(appContext, /dailyLossLimit:\s*100[\s\S]{0,160}maxPositionWeight:\s*100/);
+  assert.match(appContext, /dailyLossLimit:\s*Math\.max\(0\.1, Number\(profile\?\.dailyLossLimit \?\? 2\)\)/);
+  assert.match(appContext, /maxPositionWeight:\s*Math\.min\(100, Math\.max\(1, Number\(profile\?\.maxPositionWeight \?\? 20\)\)\)/);
+  assert.match(appContext, /Holdings\/risk safety failures are final\. Never weaken limits and retry automatically\./);
+});
+
+test("legacy 4-second scanner cannot submit new BUY entries", () => {
+  const appContext = read("src/context/AppContext.tsx");
+
+  assert.match(appContext, /SafeAiAutotradeLauncher is the sole new-entry execution authority/);
+  assert.match(appContext, /const allowLegacyNewEntryExecution = false;/);
+  assert.match(appContext, /if \(allowLegacyNewEntryExecution && isFullConsensusApproved/);
+});
+
+test("trade safety middleware fails closed when callers omit risk limits", () => {
+  const server = read("server.ts");
+
+  assert.match(server, /dailyLossLimit\s*=\s*2,\s*currentLossPct\s*=\s*0,\s*marketRiskLevel\s*=\s*"NORMAL",\s*maxPositionWeight\s*=\s*20,/);
+  assert.doesNotMatch(server, /dailyLossLimit\s*=\s*100,\s*currentLossPct\s*=\s*0,\s*marketRiskLevel\s*=\s*"NORMAL",\s*maxPositionWeight\s*=\s*100,/);
+});
