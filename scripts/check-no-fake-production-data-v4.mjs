@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------
-// ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V7 (AISTOCK V21.2 TRUTH-FIRST)
+// ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V8 (AISTOCK V21.2 TRUTH-FIRST)
 // ----------------------------------------------------------------------
 
 import fs from "node:fs";
@@ -29,7 +29,12 @@ const forbidden = [
   // Scanner compatibility paths must never manufacture plausible missing metrics.
   /rvol\s*\|\|\s*1\.2/,
   /tradingValue\s*:\s*[^\n]*\|\|\s*500/,
-  /adx\s*:\s*32\.5\b/
+  /adx\s*:\s*32\.5\b/,
+  // Removed legacy scanner shapes must never re-enter production.
+  /FRESH_SURGING_POOL/,
+  /Math\.sin\([^\n]*\)\s*\*\s*\(baseP/,
+  /price:\s*s\.price\s*\|\|\s*1000/,
+  /executionPower:\s*115\s*\+/
 ];
 
 const allowedFolders = [
@@ -47,13 +52,32 @@ function auditPresetFixture() {
   const presetPath = path.resolve("src/data/presetStocks.ts");
   if (!fs.existsSync(presetPath)) return;
   const text = fs.readFileSync(presetPath, "utf8");
-  const requiredEmptyExports = [
-    /export const PRESET_CATALOG_STOCKS:\s*PresetStock\[\]\s*=\s*\[\s*\];/,
-    /export const DEMO_FIXTURE_STOCKS:\s*PresetStock\[\]\s*=\s*\[\s*\];/
+
+  const requiredTruthMarkers = [
+    /from\s+["']\.\/krxMasterUniverse["']/, 
+    /function\s+toTruthOnlyPreset\b/,
+    /price:\s*0\b/,
+    /change:\s*0\b/,
+    /changePct:\s*0\b/,
+    /news:\s*\[\s*\]/,
+    /rsi:\s*0\b/,
+    /macd:\s*["']NO_DATA["']/,
+    /DEFAULT_KOREA_QUOTE_LIMIT\s*=\s*\d+\s*;/,
+    /DEFAULT_US_QUOTE_LIMIT\s*=\s*\d+\s*;/
   ];
-  if (requiredEmptyExports.some((rule) => !rule.test(text))) {
-    fail("src/data/presetStocks.ts must keep production preset/demo stock arrays empty");
+  for (const rule of requiredTruthMarkers) {
+    if (!rule.test(text)) fail(`src/data/presetStocks.ts missing truth-only metadata rule: ${rule}`);
   }
+
+  const nonZeroQuotedPrice = /\bprice:\s*(?!0\b)\d+(?:\.\d+)?\b/;
+  const nonZeroFundamental = /\b(?:per|pbr|roe|debtRatio|revenueGrowth|operatingMargin):\s*(?!0\b)\d+(?:\.\d+)?\b/;
+  const literalNewsRow = /news:\s*\[\s*\{/;
+  const believableRsi = /rsi:\s*(?!0\b)\d+(?:\.\d+)?\b/;
+
+  if (nonZeroQuotedPrice.test(text)) fail("presetStocks.ts contains a non-zero quoted price");
+  if (nonZeroFundamental.test(text)) fail("presetStocks.ts contains fabricated fundamental values");
+  if (literalNewsRow.test(text)) fail("presetStocks.ts contains fabricated news rows");
+  if (believableRsi.test(text)) fail("presetStocks.ts contains a fabricated RSI value");
 }
 
 function auditServerTruthRoutes() {
@@ -112,12 +136,12 @@ function scanFile(fullPath) {
   }
 }
 
-console.log("🔍 Running Production Zero Fake Data Audit V7...");
+console.log("🔍 Running Production Zero Fake Data Audit V8...");
 auditPresetFixture();
 auditServerTruthRoutes();
 for (const rootPath of ROOTS) scanPath(rootPath);
 if (failed) {
-  console.error("💥 Zero Fake Data Audit V7 FAILED!");
+  console.error("💥 Zero Fake Data Audit V8 FAILED!");
   process.exit(1);
 }
-console.log("✅ Production Zero Fake Data Audit V7 PASSED cleanly.");
+console.log("✅ Production Zero Fake Data Audit V8 PASSED cleanly.");
