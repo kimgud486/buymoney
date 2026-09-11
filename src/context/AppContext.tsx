@@ -1406,7 +1406,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               initialBalance: 0,
               riskLimitPerTrade: 10,
               dailyLossLimit: 2,
-              maxPositionWeight: 100,
+              maxPositionWeight: 20,
               autoTradingEnabled: true,
               isDemoMode: false,
               isRealTrade: true,
@@ -1473,10 +1473,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               loaded.isRealTrade = true;
               updated = true;
             }
-            if (!loaded.maxPositionWeight || loaded.maxPositionWeight < 100) {
-              loaded.maxPositionWeight = 100;
-              updated = true;
-            }
+            if (!Number.isFinite(Number(loaded.maxPositionWeight)) || Number(loaded.maxPositionWeight) <= 0) {
+    loaded.maxPositionWeight = 20;
+    updated = true;
+  }
             // Ensure permanent saved keys are merged into profile
             if (!loaded.koreaAppKey && (serverCreds.koreaAppKey || savedCreds.koreaAppKey)) {
               loaded.koreaAppKey = serverCreds.koreaAppKey || savedCreds.koreaAppKey;
@@ -1543,7 +1543,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   initialBalance: 1000000,
                   riskLimitPerTrade: 10,
                   dailyLossLimit: 2,
-                  maxPositionWeight: 100,
+                  maxPositionWeight: 20,
                   autoTradingEnabled: true,
                   isDemoMode: false,
                   tradingMode: "approval",
@@ -1558,7 +1558,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 initialBalance: 1000000,
                 riskLimitPerTrade: 10,
                 dailyLossLimit: 2,
-                maxPositionWeight: 100,
+                maxPositionWeight: 20,
                 autoTradingEnabled: true,
                 isDemoMode: false,
                 tradingMode: "approval",
@@ -2521,10 +2521,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           isSimulated: !isRealMode,
           portfolioValue: isRealMode ? portfolioValue : 50000000,
           currentPositions: positions,
-          dailyLossLimit: 100,
-          currentLossPct,
-          marketRiskLevel: marketStatus?.riskLevel || "NORMAL",
-          maxPositionWeight: 100
+          dailyLossLimit: Math.max(0.1, Number(profile?.dailyLossLimit ?? 2)),
+currentLossPct,
+marketRiskLevel: marketStatus?.riskLevel || "NORMAL",
+maxPositionWeight: Math.min(100, Math.max(1, Number(profile?.maxPositionWeight ?? 20)))
         };
 
         const performTradeFetch = async (attempt = 1): Promise<{ resp: Response | null; data: any }> => {
@@ -2589,52 +2589,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         }
 
-        // Auto retry if Holdings Limit was hit with lower limit
-        if (response && !response.ok && (resData?.error?.includes("Holdings Limit") || resData?.error?.includes("Step 1"))) {
-          console.log("[SafetyCheck Auto-Bypass] Holdings Limit error detected, updating profile to 100% and retrying...");
-          setProfile(prev => prev ? { ...prev, maxPositionWeight: 100 } : prev);
-          try {
-            const retryRes = await fetch("/api/trade/execute", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                symbol,
-                name,
-                market,
-                side: tradeSide,
-                qty: tradeQty,
-                price: tradePrice,
-                balance: profile.balance,
-                koreaAppKey: profile.koreaAppKey,
-                koreaAppSecret: profile.koreaAppSecret,
-                koreaAccountNo: profile.koreaAccountNo,
-                koreaAccountCode: profile.koreaAccountCode || "01",
-                accountNo: profile.koreaAccountNo,
-                cano: profile.koreaAccountNo,
-                acntPrdtCd: profile.koreaAccountCode || "01",
-                upbitAccessKey: profile.upbitAccessKey,
-                upbitSecretKey: profile.upbitSecretKey,
-                upbitAccessKey2: (profile as any)?.upbitAccessKey2,
-                upbitSecretKey2: (profile as any)?.upbitSecretKey2,
-                isRealTrade: isRealMode,
-                isSimulated: !isRealMode,
-                portfolioValue,
-                currentPositions: positions,
-                dailyLossLimit: 100,
-                currentLossPct,
-                marketRiskLevel: "NORMAL",
-                maxPositionWeight: 100
-              })
-            });
-            resData = await retryRes.json();
-            if (retryRes.ok) {
-              response = retryRes;
-            }
-          } catch (retryErr) {
-            console.warn("[Broker Trade Retry Fetch Error]:", retryErr);
-          }
-        }
-
+        // Holdings/risk safety failures are final. Never weaken limits and retry automatically.
         if (response && !response.ok && resData?.error) {
           // Log safety check reject immediately
           const failLog: AIDecisionLog = {
