@@ -15,6 +15,7 @@ import FeedResiliencePolicyBridge from "./components/trading/FeedResiliencePolic
 import RealtimeStreamFeedBridge from "./components/trading/RealtimeStreamFeedBridge";
 import OperationalTruthMonitorV20 from "./components/trading/OperationalTruthMonitorV20";
 import AiSignalsResponsiveLayoutFix from "./components/trading/AiSignalsResponsiveLayoutFix";
+import VerifiedTimeframeFetchBridge from "./components/trading/VerifiedTimeframeFetchBridge";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MainScreenKoreanText } from "./components/MainScreenKoreanText";
 import ElementaryScanExplanationPanel from "./components/ElementaryScanExplanationPanel";
@@ -54,6 +55,7 @@ function MainLayout() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans relative">
       <MainScreenKoreanText />
+      <VerifiedTimeframeFetchBridge />
       <RealtimeMarketStreamManager />
       <RealtimeStreamFeedBridge />
       <FeedResiliencePolicyBridge />
