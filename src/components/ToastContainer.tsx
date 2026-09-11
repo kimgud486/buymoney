@@ -32,13 +32,18 @@ const renderSafeString = (val: any): string => {
 
 const isAiScanToast = (toast: any): boolean => {
   const text = `${renderSafeString(toast?.title)} ${renderSafeString(toast?.message)}`;
-  return text.includes("AI 스캔 완료") || text.includes("스캔 AI") || text.includes("검토 가능");
+  return text.includes("AI 스캔 완료") ||
+    text.includes("스캔 AI") ||
+    text.includes("검토 가능") ||
+    text.includes("스캔 종목 발견") ||
+    text.includes("자동매매 조건 확인 중");
 };
 
 const openAiScanResult = () => {
   const firstCandidate = document.querySelector('[data-testid="safe-ai-candidate-1"]') as HTMLElement | null;
+  const section = document.getElementById("safe-ai-autotrade-section");
   const launcher = document.querySelector('[data-testid="safe-ai-autotrade-launcher"]') as HTMLElement | null;
-  const target = firstCandidate || launcher;
+  const target = firstCandidate || section || launcher;
   target?.scrollIntoView({ behavior: "smooth", block: "center" });
   if (firstCandidate instanceof HTMLButtonElement) firstCandidate.click();
 };
@@ -104,14 +109,14 @@ export const ToastContainer: React.FC = () => {
         const isWarning = toast.type === "WARNING";
         const scanToast = isAiScanToast(toast);
 
-        const bgClass = isSuccess 
+        const bgClass = scanToast
+          ? "bg-slate-950/95 border-cyan-400/70 text-white shadow-xl ring-1 ring-cyan-400/40"
+          : isSuccess 
           ? "bg-slate-950/95 border-emerald-500/60 text-white shadow-xl ring-1 ring-emerald-500/30"
           : isError
           ? "bg-slate-950/95 border-rose-500/70 text-white shadow-xl ring-1 ring-rose-500/30"
           : isWarning
           ? "bg-slate-950/95 border-amber-500/60 text-white shadow-xl ring-1 ring-amber-500/30"
-          : scanToast
-          ? "bg-slate-950/95 border-cyan-400/70 text-white shadow-xl ring-1 ring-cyan-400/40"
           : "bg-slate-950/95 border-indigo-500/60 text-white shadow-xl ring-1 ring-indigo-500/30";
 
         const iconComponent = scanToast ? (
@@ -153,42 +158,16 @@ export const ToastContainer: React.FC = () => {
                     <h4 className="text-[12px] font-black tracking-tight text-white">
                       {scanToast ? "✨ 스캔 종목 발견" : renderSafeString(toast.title)}
                     </h4>
-                    
-                    {isApiKeyError && (
-                      <span className="px-1.5 py-0.2 bg-rose-500/30 text-rose-300 border border-rose-500/50 rounded text-[9px] font-mono font-bold">
-                        🔑 API Key 오류
-                      </span>
-                    )}
-                    {isFundFail && (
-                      <span className="px-1.5 py-0.2 bg-amber-500/30 text-amber-300 border border-amber-500/50 rounded text-[9px] font-mono font-bold">
-                        ⚠️ 잔고 부족
-                      </span>
-                    )}
-                    {isPurchaseFail && !isApiKeyError && !isFundFail && (
-                      <span className="px-1.5 py-0.2 bg-rose-500/30 text-rose-300 border border-rose-500/50 rounded text-[9px] font-mono font-bold">
-                        ❌ 주문 실패
-                      </span>
-                    )}
-
-                    <span className="text-[9px] text-zinc-400 font-mono flex items-center gap-0.5 ml-auto">
-                      <Clock className="h-2.5 w-2.5" />
-                      {renderSafeString(toast.timestamp)}
-                    </span>
+                    {isApiKeyError && <span className="px-1.5 py-0.2 bg-rose-500/30 text-rose-300 border border-rose-500/50 rounded text-[9px] font-mono font-bold">🔑 API Key 오류</span>}
+                    {isFundFail && <span className="px-1.5 py-0.2 bg-amber-500/30 text-amber-300 border border-amber-500/50 rounded text-[9px] font-mono font-bold">⚠️ 잔고 부족</span>}
+                    {isPurchaseFail && !isApiKeyError && !isFundFail && <span className="px-1.5 py-0.2 bg-rose-500/30 text-rose-300 border border-rose-500/50 rounded text-[9px] font-mono font-bold">❌ 주문 실패</span>}
+                    <span className="text-[9px] text-zinc-400 font-mono flex items-center gap-0.5 ml-auto"><Clock className="h-2.5 w-2.5" />{renderSafeString(toast.timestamp)}</span>
                   </div>
-
-                  <p className="text-[11px] text-zinc-200 font-sans leading-relaxed break-words">
-                    {renderSafeString(toast.message)}
-                  </p>
+                  <p className="text-[11px] text-zinc-200 font-sans leading-relaxed break-words">{renderSafeString(toast.message)}</p>
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => removeToast(toast.id)}
-                className="text-zinc-400 hover:text-white p-1 rounded transition cursor-pointer shrink-0"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              <button type="button" onClick={() => removeToast(toast.id)} className="text-zinc-400 hover:text-white p-1 rounded transition cursor-pointer shrink-0"><X className="h-4 w-4" /></button>
             </div>
 
             {scanToast && (
@@ -207,32 +186,14 @@ export const ToastContainer: React.FC = () => {
             {toast.orderInfo && (
               <div className="bg-slate-900/90 border border-slate-800 rounded-lg px-2.5 py-1.5 flex items-center justify-between text-[10px] font-mono">
                 <div className="flex items-center gap-1.5 truncate">
-                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                    toast.orderInfo.side === "BUY" 
-                      ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" 
-                      : "bg-rose-500/20 text-rose-300 border border-rose-500/30"
-                  }`}>
-                    {toast.orderInfo.side === "BUY" ? "매수" : "매도"}
-                  </span>
+                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${toast.orderInfo.side === "BUY" ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "bg-rose-500/20 text-rose-300 border border-rose-500/30"}`}>{toast.orderInfo.side === "BUY" ? "매수" : "매도"}</span>
                   <span className="font-bold text-white truncate max-w-[100px]">{renderSafeString(toast.orderInfo.name)}</span>
                   <span className="text-zinc-400">({renderSafeString(toast.orderInfo.symbol)})</span>
                 </div>
-
                 <div className="flex items-center gap-1.5 text-zinc-200 shrink-0">
-                  <span>{(toast.orderInfo.qty ?? 0).toLocaleString()}{toast.orderInfo.market === "BTC" ? "코인" : "주"}</span>
-                  <span>@</span>
-                  <span className="font-bold text-cyan-300">
-                    {(toast.orderInfo.price ?? 0).toLocaleString()}{toast.orderInfo.market === "US" ? "$" : "원"}
-                  </span>
-                  {toast.orderInfo.status && (
-                    <span className={`px-1 py-0.2 rounded text-[8px] font-bold ${
-                      toast.orderInfo.status === "FAILED"
-                        ? "bg-rose-500/30 text-rose-300 border border-rose-500/40"
-                        : "bg-emerald-500/30 text-emerald-300 border border-emerald-500/40"
-                    }`}>
-                      {toast.orderInfo.status === "FAILED" ? "체결거부/실패" : "체결성공"}
-                    </span>
-                  )}
+                  <span>{(toast.orderInfo.qty ?? 0).toLocaleString()}{toast.orderInfo.market === "BTC" ? "코인" : "주"}</span><span>@</span>
+                  <span className="font-bold text-cyan-300">{(toast.orderInfo.price ?? 0).toLocaleString()}{toast.orderInfo.market === "US" ? "$" : "원"}</span>
+                  {toast.orderInfo.status && <span className={`px-1 py-0.2 rounded text-[8px] font-bold ${toast.orderInfo.status === "FAILED" ? "bg-rose-500/30 text-rose-300 border border-rose-500/40" : "bg-emerald-500/30 text-emerald-300 border border-emerald-500/40"}`}>{toast.orderInfo.status === "FAILED" ? "체결거부/실패" : "체결성공"}</span>}
                 </div>
               </div>
             )}
