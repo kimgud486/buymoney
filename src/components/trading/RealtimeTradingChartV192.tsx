@@ -89,23 +89,31 @@ export const RealtimeTradingChartV192: React.FC<RealtimeTradingChartV192Props> =
 
     // Format time for lightweight charts
     const formattedCandles = candles.map((c, idx) => {
-      let timeVal: any = c.time;
+      let timeVal: number;
       if (typeof c.time === "number") {
-        timeVal = Math.floor(c.time / 1000);
-      } else if (typeof c.time === "string" && !c.time.includes("-")) {
-        // "09:00" string -> synthesize monotonically increasing string or index date
-        const baseDate = new Date();
-        baseDate.setHours(9, 0, 0, 0);
-        timeVal = Math.floor((baseDate.getTime() + idx * 300000) / 1000);
+        timeVal = c.time > 10_000_000_000 ? Math.floor(c.time / 1000) : c.time;
+      } else if (typeof c.time === "string") {
+        const pNum = Number(c.time);
+        if (Number.isFinite(pNum) && pNum > 0) {
+          timeVal = pNum > 10_000_000_000 ? Math.floor(pNum / 1000) : pNum;
+        } else {
+          timeVal = Math.floor(new Date(c.time).getTime() / 1000);
+        }
+      } else {
+        timeVal = 0;
+      }
+      if (!Number.isFinite(timeVal) || timeVal <= 0) {
+        timeVal = Math.floor(Date.now() / 1000) - (candles.length - idx) * 300;
       }
       return {
         time: timeVal,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
+        open: Number(c.open) || 0,
+        high: Number(c.high) || 0,
+        low: Number(c.low) || 0,
+        close: Number(c.close) || 0,
       };
-    });
+    }).filter(c => Number.isFinite(c.time) && c.time > 0)
+      .sort((a, b) => a.time - b.time);
 
     candleSeries.setData(formattedCandles);
 
