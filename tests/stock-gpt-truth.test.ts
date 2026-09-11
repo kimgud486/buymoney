@@ -2,10 +2,18 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
+const appEntry = readFileSync("src/App.tsx", "utf8");
 const stockSearch = readFileSync("src/components/trading/StockSearchAndAddModal.tsx", "utf8");
 const stockShell = readFileSync("src/components/trading/StockGPTShellV2.tsx", "utf8");
 const featurePanels = readFileSync("src/components/trading/StockGPTFeaturePanels.tsx", "utf8");
 const operationalTruth = readFileSync("src/components/trading/OperationalTruthMonitorV20.tsx", "utf8");
+
+test("Stock GPT startup clears legacy selected ticker before passive market effects", () => {
+  assert.match(appEntry, /useLayoutEffect\(\(\)\s*=>\s*\{\s*setSelectedSymbol\(["']["']\)/s);
+  assert.match(appEntry, /consensusSelectedSymbol,\s*setConsensusSelectedSymbol\]\s*=\s*useState<string>\(["']["']\)/);
+  assert.doesNotMatch(appEntry, /consensusSelectedSymbol,\s*setConsensusSelectedSymbol\]\s*=\s*useState<string>\(["']005930["']\)/);
+  assert.match(appEntry, /if\s*\(!explicitSymbol\)\s*return/);
+});
 
 test("Stock GPT search never converts missing market data into zero prices", () => {
   assert.doesNotMatch(stockSearch, /price\s*:\s*0\b/);
