@@ -54,6 +54,16 @@ function formatRate(quote: LiveMarketQuote | null): string {
   return `${quote.changeRate > 0 ? "+" : ""}${quote.changeRate.toFixed(2)}%`;
 }
 
+function rebuildSelectedStock(stock: StockItem): StockItem {
+  return buildLiveStockItem(stock.symbol, stock.name, stock.market, {
+    category: stock.category,
+    categoryLabel: stock.categoryLabel,
+    theme: stock.theme,
+    strategy: stock.strategy,
+    isCustom: stock.isCustom,
+  });
+}
+
 export const StockSearchAndAddModal: React.FC<StockSearchAndAddModalProps> = ({
   isOpen,
   onClose,
@@ -136,7 +146,7 @@ export const StockSearchAndAddModal: React.FC<StockSearchAndAddModalProps> = ({
     setRegSymbol("");
     setRegTheme("");
     setIsRegisterOpen(false);
-    onSelectStock({ ...newStock, price: 0, changeRate: 0 });
+    onSelectStock(newStock);
     onClose();
   };
 
@@ -205,11 +215,7 @@ export const StockSearchAndAddModal: React.FC<StockSearchAndAddModalProps> = ({
             const rate = live?.changeRate != null && Number.isFinite(live.changeRate) ? live.changeRate : null;
             return (
               <div key={`${stock.market}-${stock.symbol}`} className="flex cursor-pointer flex-col gap-2 rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition hover:border-blue-300 hover:bg-blue-50/50 sm:flex-row sm:items-center sm:justify-between" onClick={() => {
-                if (live) {
-                  onSelectStock({ ...stock, price: Number(live.price), changeRate: rate ?? 0 });
-                } else {
-                  onSelectStock({ ...stock, price: 0, changeRate: 0 });
-                }
+                onSelectStock(rebuildSelectedStock(stock));
                 onClose();
               }}>
                 <div className="min-w-0">
