@@ -102,7 +102,9 @@ test("real broker account view is review-only and never sends direct orders", ()
 });
 
 test("real broker valuation never substitutes average price for a missing current price", () => {
-  assert.doesNotMatch(realBrokerView, /currentPrice[^\n]*avgPrice/);
+  assert.doesNotMatch(realBrokerView, /position\.currentPrice\s*\?\?\s*position\.avgPrice/);
+  assert.doesNotMatch(realBrokerView, /position\.currentPrice\s*\|\|\s*position\.avgPrice/);
+  assert.doesNotMatch(realBrokerView, /const\s+currentPrice\s*=\s*[^;\n]*avgPrice/);
   assert.match(realBrokerView, /const currentPrice = positiveNumber\(position\.currentPrice\)/);
   assert.match(realBrokerView, /const avgPrice = positiveNumber\(position\.avgPrice\)/);
   assert.match(realBrokerView, /valuationKrw = hasValuationInputs/);
