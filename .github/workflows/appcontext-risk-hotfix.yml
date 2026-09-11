@@ -24,30 +24,22 @@ jobs:
           let s = fs.readFileSync(path, 'utf8');
           const original = s;
 
-          const migrationOld = `            if (!loaded.maxPositionWeight || loaded.maxPositionWeight < 100) {
-              loaded.maxPositionWeight = 100;
-              updated = true;
-            }`;
-          const migrationNew = `            if (!Number.isFinite(Number(loaded.maxPositionWeight)) || Number(loaded.maxPositionWeight) <= 0) {
+          const migrationPattern = /if \(!loaded\.maxPositionWeight \|\| loaded\.maxPositionWeight < 100\) \{\s*loaded\.maxPositionWeight = 100;\s*updated = true;\s*\}/;
+          if (!migrationPattern.test(s)) throw new Error('Expected maxPositionWeight 100% migration block not found');
+          s = s.replace(migrationPattern, `if (!Number.isFinite(Number(loaded.maxPositionWeight)) || Number(loaded.maxPositionWeight) <= 0) {
               loaded.maxPositionWeight = 20;
               updated = true;
-            }`;
-          if (!s.includes(migrationOld)) throw new Error('Expected maxPositionWeight 100% migration block not found');
-          s = s.replace(migrationOld, migrationNew);
+            }`);
 
-          const payloadOld = `          dailyLossLimit: 100,
+          const payloadPattern = /dailyLossLimit: 100,\s*currentLossPct,\s*marketRiskLevel: marketStatus\?\.riskLevel \|\| "NORMAL",\s*maxPositionWeight: 100/;
+          if (!payloadPattern.test(s)) throw new Error('Expected hardcoded trade risk payload not found');
+          s = s.replace(payloadPattern, `dailyLossLimit: Math.max(0.1, Number(profile?.dailyLossLimit ?? 2)),
           currentLossPct,
           marketRiskLevel: marketStatus?.riskLevel || "NORMAL",
-          maxPositionWeight: 100`;
-          const payloadNew = `          dailyLossLimit: Math.max(0.1, Number(profile?.dailyLossLimit ?? 2)),
-          currentLossPct,
-          marketRiskLevel: marketStatus?.riskLevel || "NORMAL",
-          maxPositionWeight: Math.min(100, Math.max(1, Number(profile?.maxPositionWeight ?? 20)))`;
-          if (!s.includes(payloadOld)) throw new Error('Expected hardcoded trade risk payload not found');
-          s = s.replace(payloadOld, payloadNew);
+          maxPositionWeight: Math.min(100, Math.max(1, Number(profile?.maxPositionWeight ?? 20)))`);
 
-          const retryStart = '        // Auto retry if Holdings Limit was hit with lower limit';
-          const nextMarker = '        if (response && !response.ok && resData?.error) {';
+          const retryStart = '// Auto retry if Holdings Limit was hit with lower limit';
+          const nextMarker = 'if (response && !response.ok && resData?.error) {';
           const start = s.indexOf(retryStart);
           const next = s.indexOf(nextMarker, start);
           if (start < 0 || next < 0 || next <= start) throw new Error('Expected Holdings Limit auto-bypass block not found');
@@ -55,7 +47,7 @@ jobs:
           if (!removed.includes('[SafetyCheck Auto-Bypass]') || !removed.includes('maxPositionWeight: 100')) {
             throw new Error('Auto-bypass block shape changed; refusing unsafe patch');
           }
-          s = s.slice(0, start) + '        // Holdings/risk safety failures are final. Never weaken limits and retry automatically.\n' + s.slice(next);
+          s = s.slice(0, start) + '// Holdings/risk safety failures are final. Never weaken limits and retry automatically.\n        ' + s.slice(next);
 
           const defaultPattern = /dailyLossLimit: 2,\n(\s*)maxPositionWeight: 100,/g;
           let defaultReplacements = 0;
