@@ -26,6 +26,7 @@ class RealtimePatternScannerConfig:
     min_net_ev_pct: float = 0.0
 
     require_volume_confirmation: bool = True
+    reject_exhaustion_risk: bool = True
     require_multi_timeframe_confirmation: bool = False
     max_results: int = 20
 
@@ -152,6 +153,21 @@ class RealtimePatternScanner:
             return None
         if self.cfg.require_volume_confirmation and not enhanced.volume_confirmation:
             return None
+
+        # Hard chase/exhaustion guard. A strong pattern must not override a bad entry location.
+        if self.cfg.reject_exhaustion_risk:
+            hard_risk_prefixes = (
+                "VWAP +",
+                "EMA20 대비 ATR 과대이격",
+                "-DI 우위 하락 추세",
+                "RSI ",
+                "MFI ",
+            )
+            if any(
+                any(flag.startswith(prefix) for prefix in hard_risk_prefixes)
+                for flag in enhanced.risk_flags
+            ):
+                return None
 
         # Stage 3: optional cross-timeframe confirmation. Existing callers need no change.
         mtf_score: Optional[float] = None
