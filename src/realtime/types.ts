@@ -1,14 +1,24 @@
 export type FeedQuality =
   | "BROKER_REALTIME"
+  | "EXCHANGE_REALTIME"
   | "POLLING_DELAYED"
   | "STALE"
   | "DISCONNECTED";
 
+export type FeedSource =
+  | "KIS_REALTIME_WS"
+  | "US_BROKER_WS"
+  | "UPBIT_WS"
+  | "SERVER_STREAM"
+  | "NAVER_POLLING"
+  | "UPBIT_PUBLIC_TICKER"
+  | "API_STOCKS";
+
 export interface MarketDataEnvelope {
-  source: "KIS_REALTIME_WS" | "US_BROKER_WS" | "NAVER_POLLING";
+  source: FeedSource;
   quality: FeedQuality;
   symbol: string;
-  market?: "KOSPI" | "KOSDAQ" | "UPBIT" | "US" | "KOREA";
+  market?: "KOSPI" | "KOSDAQ" | "UPBIT" | "US" | "KOREA" | "CRYPTO";
   exchangeTimestamp: number;
   receivedTimestamp: number;
   sequence?: number;
@@ -21,13 +31,17 @@ export interface MarketDataEnvelope {
 
 export interface LiveTick {
   symbol: string;
-  timestamp: number; // Unix ms
+  timestamp: number;
   exchangeTimestamp?: number;
   receivedTimestamp?: number;
+  receivedAt?: number;
+  providerTimestamp?: number;
   price: number;
   volume: number;
-  source?: "KIS_REALTIME_WS" | "US_BROKER_WS" | "NAVER_POLLING";
+  accumulatedVolume?: number;
+  source?: FeedSource;
   quality?: FeedQuality;
+  feedQuality?: FeedQuality;
   isRealtime?: boolean;
   isDelayed?: boolean;
   sequence?: number;
@@ -35,10 +49,11 @@ export interface LiveTick {
   ask?: number;
   bidVolume?: number;
   askVolume?: number;
+  market?: "KOREA" | "US" | "UPBIT" | "CRYPTO";
 }
 
 export interface LiveCandle {
-  time: number; // Unix timestamp in seconds (for Lightweight Charts) or ms
+  time: number;
   open: number;
   high: number;
   low: number;
@@ -50,28 +65,31 @@ export interface LiveCandle {
   sessionKey?: string;
   source?: string;
   quality?: FeedQuality;
+  feedQuality?: FeedQuality;
+  receivedAt?: number;
+  providerTimestamp?: number;
 }
 
 export interface IndicatorSnapshot {
   ema9: number;
   ema20: number;
   ema50: number;
-  ema200: number; // NaN if < 200 bars
-  vwap: number; // Session VWAP
+  ema200: number;
+  vwap: number;
   rsi14: number;
   macd: number;
   macdSignal: number;
   macdHistogram: number;
   atr14: number;
-  rvol: number; // Excludes current bar from baseline
-  todRvol?: number; // Time-of-day normalized volume ratio
+  rvol: number;
+  todRvol?: number;
   trendStrength: number;
   bollingerUpper?: number;
   bollingerMiddle?: number;
   bollingerLower?: number;
   stochK?: number;
   stochD?: number;
-  indicatorsReady: boolean; // True if candles >= 220 and finite EMA200
+  indicatorsReady: boolean;
   warmupReason?: string;
 }
 
@@ -110,48 +128,10 @@ export interface DecisionInput {
 }
 
 export interface ForecastPoint {
-  time: number; // seconds
+  time: number;
   predicted: number;
   upper: number;
   lower: number;
   probabilityUp: number;
   probabilityDown: number;
-}
-
-export interface TradingMarker {
-  time: number; // seconds
-  position: "aboveBar" | "belowBar" | "inBar";
-  color: string;
-  shape: "arrowUp" | "arrowDown" | "circle" | "square";
-  text: string;
-  size?: number;
-}
-
-export interface MarketStructureSnapshot {
-  trend: "BULLISH" | "BEARISH" | "SIDEWAYS";
-  hhhlValid: boolean;
-  lhllValid: boolean;
-
-  higherHigh: boolean;
-  higherLow: boolean;
-  lowerHigh: boolean;
-  lowerLow: boolean;
-
-  lastHigherHigh?: number;
-  lastHigherLow?: number;
-  lastLowerHigh?: number;
-  lastLowerLow?: number;
-
-  lastConfirmedSwingHigh?: number;
-  lastConfirmedSwingLow?: number;
-  confirmedSupport?: number;
-
-  structure: "HH_HL" | "LH_LL" | "SIDEWAYS";
-
-  breakoutValid: boolean;
-  pullbackValid: boolean;
-  vwapReclaim: boolean;
-  volumeExpansion: boolean;
-  chochDetected: boolean;
-  bosDetected: boolean;
 }
