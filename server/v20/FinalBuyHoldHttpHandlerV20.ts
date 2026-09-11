@@ -225,6 +225,22 @@ export function createFinalBuyHoldHttpHandlerV20(
         indicatorAuthority: "SERVER_UNIFIED_OHLCV_ENGINE",
         mtfAuthority: "SERVER_OWNED",
         realtimeAuthority: "SERVER_MARKET_HUB",
+        serverEvidence: {
+          symbol,
+          source: serverQuote.source,
+          dataGrade: serverQuote.grade,
+          price: serverQuote.price,
+          changePct: serverQuote.changePct,
+          volume: serverQuote.volume,
+          tradeValue: serverQuote.tradeValue,
+          rvol: serverSignal.indicators.rvol20,
+          vwap: serverSignal.indicators.vwap,
+          ema20: serverSignal.indicators.ema20,
+          atr14: serverSignal.indicators.atr14,
+          rsi14: serverSignal.indicators.rsi14,
+          pattern: serverSignal.pattern,
+          updatedAt: serverQuote.updatedAt
+        },
         realtimeTruth,
         decision
       });
