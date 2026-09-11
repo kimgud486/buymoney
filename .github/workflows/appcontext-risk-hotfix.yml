@@ -1,0 +1,90 @@
+name: AppContext Risk Hotfix
+
+on:
+  push:
+    paths:
+      - '.github/workflows/appcontext-risk-hotfix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-risk-guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply guarded AppContext risk patch
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'src/context/AppContext.tsx';
+          let s = fs.readFileSync(path, 'utf8');
+          const original = s;
+
+          const migrationOld = `            if (!loaded.maxPositionWeight || loaded.maxPositionWeight < 100) {
+              loaded.maxPositionWeight = 100;
+              updated = true;
+            }`;
+          const migrationNew = `            if (!Number.isFinite(Number(loaded.maxPositionWeight)) || Number(loaded.maxPositionWeight) <= 0) {
+              loaded.maxPositionWeight = 20;
+              updated = true;
+            }`;
+          if (!s.includes(migrationOld)) throw new Error('Expected maxPositionWeight 100% migration block not found');
+          s = s.replace(migrationOld, migrationNew);
+
+          const payloadOld = `          dailyLossLimit: 100,
+          currentLossPct,
+          marketRiskLevel: marketStatus?.riskLevel || "NORMAL",
+          maxPositionWeight: 100`;
+          const payloadNew = `          dailyLossLimit: Math.max(0.1, Number(profile?.dailyLossLimit ?? 2)),
+          currentLossPct,
+          marketRiskLevel: marketStatus?.riskLevel || "NORMAL",
+          maxPositionWeight: Math.min(100, Math.max(1, Number(profile?.maxPositionWeight ?? 20)))`;
+          if (!s.includes(payloadOld)) throw new Error('Expected hardcoded trade risk payload not found');
+          s = s.replace(payloadOld, payloadNew);
+
+          const retryStart = '        // Auto retry if Holdings Limit was hit with lower limit';
+          const nextMarker = '        if (response && !response.ok && resData?.error) {';
+          const start = s.indexOf(retryStart);
+          const next = s.indexOf(nextMarker, start);
+          if (start < 0 || next < 0 || next <= start) throw new Error('Expected Holdings Limit auto-bypass block not found');
+          const removed = s.slice(start, next);
+          if (!removed.includes('[SafetyCheck Auto-Bypass]') || !removed.includes('maxPositionWeight: 100')) {
+            throw new Error('Auto-bypass block shape changed; refusing unsafe patch');
+          }
+          s = s.slice(0, start) + '        // Holdings/risk safety failures are final. Never weaken limits and retry automatically.\n' + s.slice(next);
+
+          const defaultPattern = /dailyLossLimit: 2,\n(\s*)maxPositionWeight: 100,/g;
+          let defaultReplacements = 0;
+          s = s.replace(defaultPattern, (_m, indent) => {
+            defaultReplacements++;
+            return `dailyLossLimit: 2,\n${indent}maxPositionWeight: 20,`;
+          });
+          if (defaultReplacements < 1) throw new Error('No default 100% position-weight profiles were found');
+
+          if (s.includes('[SafetyCheck Auto-Bypass]')) throw new Error('Auto-bypass marker still present after patch');
+          if (s === original) throw new Error('Patch made no changes');
+
+          fs.writeFileSync(path, s);
+          console.log(`Patched AppContext safely. Default profile replacements: ${defaultReplacements}`);
+          NODE
+
+      - name: TypeScript check
+        run: |
+          npm ci
+          npm run lint
+
+      - name: Commit guarded risk fix
+        run: |
+          if git diff --quiet -- src/context/AppContext.tsx; then
+            echo 'No changes to commit'
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/context/AppContext.tsx
+          git commit -m 'fix: enforce configured trade risk limits without auto bypass'
+          git push origin HEAD:main
