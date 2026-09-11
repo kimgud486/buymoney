@@ -1228,6 +1228,7 @@ app.get(["/api/explainable-scanner", "/api/yes-only-scanner"], async (req, res) 
         item.patternType !== "NO_PATTERN";
       const strongPrecheck = evidenceComplete && (item.grade === "S" || item.grade === "A");
       return {
+        id: `explainable-${item.market}-${item.symbol}`,
         symbol: item.symbol,
         name: item.name,
         market: item.market === "BTC" ? "BTC" : item.market,

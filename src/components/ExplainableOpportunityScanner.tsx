@@ -262,10 +262,11 @@ Opportunity Score: ${idea.score}/100 [${idea.grade}]
           {ideas.map((idea, index) => {
             const dec = getDecisionBadge(idea.decision);
             const isSelected = selectedIdea?.symbol === idea.symbol;
+            const itemKey = idea.id || `${idea.market}-${idea.symbol}-${index}`;
 
             return (
               <div
-                key={idea.id}
+                key={itemKey}
                 className={`bg-slate-900/90 border rounded-2xl p-5 shadow-xl transition-all duration-200 flex flex-col justify-between space-y-4 ${
                   idea.wouldBuy
                     ? "border-emerald-500/40 hover:border-emerald-500/70 shadow-emerald-950/20"
