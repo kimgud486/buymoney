@@ -50,7 +50,7 @@ test.describe("Stock GPT verified-data safety E2E", () => {
     await expect(page.getByTestId("stock-gpt-v20-final-scanner")).toBeVisible();
     await expect(page.getByTestId("stock-gpt-intraday-pattern-panel")).toBeVisible();
     await expect(page.getByTestId("stock-gpt-bot-truth-panel")).toBeVisible();
-    await expect(page.getByText("PRECHECK ≠ FINAL BUY")).toBeVisible();
+    await expect(page.getByText(/PRECHECK와 FINAL BUY는 구분됩니다/)).toBeVisible();
 
     await page.getByRole("button", { name: "알림 기록" }).click();
     await expect(page.getByTestId("stock-gpt-alerts-panel")).toBeVisible();
