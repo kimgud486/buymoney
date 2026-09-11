@@ -304,8 +304,7 @@ class RealtimeMarketFeedService {
     const registered = Array.from(this.registeredSymbols.entries())
       .filter(([sym, m]) => /^\d{6}$/.test(sym) && (m === "KOSPI" || m === "KOSDAQ"))
       .map(([sym]) => sym);
-    const defaults = ["005930", "000660", "005380", "000270", "035420", "035720", "068270", "005490", "373220", "006400", "012450", "277810", "034020", "080220", "064350", "042700", "247540", "086520"];
-    const codes = Array.from(new Set([...registered, ...defaults]));
+    const codes = Array.from(new Set(registered));
     if (codes.length === 0) return;
 
     try {
