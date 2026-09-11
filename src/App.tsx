@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
-import { AppProvider } from "./context/AppContext";
+import React, { useState, useEffect, useLayoutEffect } from "react";
+import { AppProvider, useApp } from "./context/AppContext";
 import { PricePulseProvider } from "./context/PricePulseContext";
 import { ToastContainer } from "./components/ToastContainer";
 import { RealtimeMarketStreamManager } from "./components/RealtimeMarketStreamManager";
@@ -18,8 +18,15 @@ import StockGPTShellV2 from "./components/trading/StockGPTShellV2";
 import { v11ExecutionEngine } from "./components/AistockV11ExecutionConsole";
 
 function MainLayout() {
+  const { setSelectedSymbol } = useApp();
   const [isConsensusModalOpen, setIsConsensusModalOpen] = useState<boolean>(false);
-  const [consensusSelectedSymbol, setConsensusSelectedSymbol] = useState<string>("005930");
+  const [consensusSelectedSymbol, setConsensusSelectedSymbol] = useState<string>("");
+
+  // AppContext still contains a legacy default ticker used by older screens.
+  // Clear it synchronously before passive effects can treat that ticker as an explicit user selection.
+  useLayoutEffect(() => {
+    setSelectedSymbol("");
+  }, [setSelectedSymbol]);
 
   useEffect(() => {
     try {
@@ -39,7 +46,9 @@ function MainLayout() {
 
     const handleOpenConsensus = (event: Event) => {
       const customEvent = event as CustomEvent<string>;
-      if (customEvent.detail) setConsensusSelectedSymbol(customEvent.detail);
+      const explicitSymbol = typeof customEvent.detail === "string" ? customEvent.detail.trim() : "";
+      if (!explicitSymbol) return;
+      setConsensusSelectedSymbol(explicitSymbol);
       setIsConsensusModalOpen(true);
     };
 
