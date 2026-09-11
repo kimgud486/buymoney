@@ -52,6 +52,8 @@ function auditPresetFixture() {
   }
 }
 
+// This is deliberately scoped to the realtime bridge so legitimate constants
+// elsewhere cannot create false positives while live-market fallbacks remain banned.
 function auditRealtimeMarketBridge() {
   const bridgePath = path.resolve("src/hooks/useMarketDataBridge.ts");
   if (!fs.existsSync(bridgePath)) return;
@@ -75,6 +77,8 @@ function auditRealtimeMarketBridge() {
   }
 }
 
+// UI must display the server's actual counts and requirements. Never turn a
+// zero/no-data response into a plausible-looking successful scan.
 function auditScannerUiTruth() {
   const scannerPath = path.resolve("src/components/ExplainableOpportunityScanner.tsx");
   if (!fs.existsSync(scannerPath)) return;
