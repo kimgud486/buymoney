@@ -44,6 +44,10 @@ function hasBrokerFillProof(data: unknown): boolean {
   return filled && orderId.length > 0 && Number.isFinite(qty) && qty > 0 && Number.isFinite(price) && price > 0;
 }
 
+function isManualAction(actionId: string): boolean {
+  return Object.prototype.hasOwnProperty.call(MANUAL_CONFIRM_MESSAGES, actionId);
+}
+
 export class UiActionExecutor {
   private inFlight = new Set<string>();
 
@@ -70,8 +74,7 @@ export class UiActionExecutor {
       return validation as UiActionResult<T>;
     }
 
-    // Manual order buttons must always require an explicit user confirmation.
-    // Autonomous engine actions use different action IDs and are not affected here.
+    const manualAction = isManualAction(actionId);
     const confirmationMessage = MANUAL_CONFIRM_MESSAGES[actionId];
     if (confirmationMessage && typeof window !== "undefined") {
       const confirmed = window.confirm(confirmationMessage);
@@ -90,15 +93,28 @@ export class UiActionExecutor {
     try {
       const result = await action();
 
-      // A UI callback is not allowed to claim FILLED by itself. Manual BUY/SELL
-      // can be shown as FILLED only when a broker fill id + qty + price are present.
-      // This prevents legacy button wrappers from turning a request into a fake fill.
-      if (confirmationMessage && result.status === "FILLED" && !hasBrokerFillProof(result.data)) {
+      // Manual BUY/SELL must never become a verified success from a UI callback alone.
+      // FILLED requires broker order id + filled quantity + filled price. Legacy wrappers
+      // that merely return { status: "FILLED" } are downgraded to unverified ACK.
+      if (manualAction && result.status === "FILLED" && !hasBrokerFillProof(result.data)) {
         return {
           ...result,
+          ok: false,
           status: "ACKNOWLEDGED",
           code: "BROKER_FILL_PROOF_REQUIRED",
-          message: result.message || "주문 요청은 처리됐지만 증권사 체결 증거가 없어 FILLED로 표시하지 않습니다."
+          message: result.message || "주문 콜백은 끝났지만 증권사 주문번호·체결수량·체결가격 증거가 없어 체결 완료로 인정하지 않습니다."
+        };
+      }
+
+      // The generic SUCCESS label is also too strong for a manual order unless the
+      // broker proof is attached. Keep the result truthful and fail closed.
+      if (manualAction && result.status === "SUCCESS" && !hasBrokerFillProof(result.data)) {
+        return {
+          ...result,
+          ok: false,
+          status: "ACKNOWLEDGED",
+          code: "BROKER_SUCCESS_PROOF_REQUIRED",
+          message: result.message || "수동 주문 결과의 증권사 체결 증거를 확인하기 전에는 SUCCESS로 표시하지 않습니다."
         };
       }
 

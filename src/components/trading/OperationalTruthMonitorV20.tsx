@@ -124,6 +124,41 @@ export default function OperationalTruthMonitorV20() {
     readOnlyTruth && brokerConnected && brokerProof && accountVerified && quoteVerified && marketKnown,
   );
 
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("aistock-broker-truth-status", {
+      detail: {
+        symbol,
+        isKoreaSymbol,
+        enforceKis: isKoreaSymbol,
+        evidenceReady: isKoreaSymbol ? evidenceReady : false,
+        readOnlyTruth,
+        brokerConnected,
+        brokerProof,
+        accountVerified,
+        quoteVerified,
+        marketKnown,
+        dataStatus: runtime?.dataStatus ?? null,
+        marketSession: runtime?.marketSession ?? null,
+        updatedAt,
+        error,
+      },
+    }));
+  }, [
+    symbol,
+    isKoreaSymbol,
+    evidenceReady,
+    readOnlyTruth,
+    brokerConnected,
+    brokerProof,
+    accountVerified,
+    quoteVerified,
+    marketKnown,
+    runtime?.dataStatus,
+    runtime?.marketSession,
+    updatedAt,
+    error,
+  ]);
+
   const blockers = useMemo(() => {
     const items = new Set<string>();
     (runtime?.blockers || []).forEach((item) => items.add(String(item)));

@@ -9,6 +9,23 @@ type HubRuntimeDetail = {
   source?: string;
 };
 
+type BrokerTruthDetail = {
+  symbol?: string;
+  isKoreaSymbol?: boolean;
+  enforceKis?: boolean;
+  evidenceReady?: boolean;
+  readOnlyTruth?: boolean;
+  brokerConnected?: boolean;
+  brokerProof?: boolean;
+  accountVerified?: boolean;
+  quoteVerified?: boolean;
+  marketKnown?: boolean;
+  dataStatus?: string | null;
+  marketSession?: string | null;
+  updatedAt?: number | null;
+  error?: string | null;
+};
+
 function normalizedText(node: Element | null | undefined): string {
   return (node?.textContent || "").replace(/\s+/g, " ").trim();
 }
@@ -18,13 +35,21 @@ function setTextIfChanged(node: HTMLElement | null | undefined, next: string): v
   if ((node.textContent || "") !== next) node.textContent = next;
 }
 
+function findManualButton(actions: HTMLElement, side: "BUY" | "SELL"): HTMLButtonElement | undefined {
+  const target = side === "BUY" ? "매수" : "매도";
+  return Array.from(actions.querySelectorAll("button")).find((button) => normalizedText(button).includes(target)) as HTMLButtonElement | undefined;
+}
+
 /**
- * Mobile/readability repair layer for legacy dashboard panels.
- * Presentation only: never invents prices/fills and never unlocks trading.
+ * Legacy dashboard truth/readability layer.
+ *
+ * This layer is fail-closed only. It may disable or relabel controls, but it
+ * never enables an order button, invents a price/fill, or bypasses broker truth.
  */
 export default function AiSignalsResponsiveLayoutFix() {
   useEffect(() => {
     let latestHub: HubRuntimeDetail = {};
+    let latestBroker: BrokerTruthDetail = {};
     let repairing = false;
     let styleEl = document.getElementById(STYLE_ID) as HTMLStyleElement | null;
 
@@ -64,6 +89,16 @@ export default function AiSignalsResponsiveLayoutFix() {
           line-height: 1.25 !important;
           white-space: nowrap !important;
           opacity: 0.78 !important;
+        }
+
+        [data-ai-truth-note="true"] {
+          border: 1px solid rgba(245, 158, 11, 0.28);
+          background: rgba(245, 158, 11, 0.06);
+          border-radius: 8px;
+          padding: 7px 9px;
+          font-size: 10px;
+          line-height: 1.45;
+          color: rgb(180 83 9);
         }
 
         [data-trade-log-empty="true"] {
@@ -209,12 +244,14 @@ export default function AiSignalsResponsiveLayoutFix() {
       panel.dataset.aiSignalsPanel = "true";
       box.dataset.aiSignalsBox = "true";
 
-      const rows = Array.from(box.children) as HTMLElement[];
+      const rows = Array.from(box.children).filter((child) => !(child as HTMLElement).dataset.aiTruthNote) as HTMLElement[];
       const stateRow = rows[0];
       const stockRow = rows[1];
       const techRow = rows[2];
 
       let state = "NO_TRADE";
+      let waitingForPrice = false;
+
       if (stateRow) {
         stateRow.dataset.aiSignalsStateRow = "true";
         const stateText = normalizedText(stateRow.firstElementChild);
@@ -227,10 +264,17 @@ export default function AiSignalsResponsiveLayoutFix() {
         if (priceNode && zeroLikePrice) {
           setTextIfChanged(priceNode, "시세 수신 대기");
           priceNode.dataset.aiPriceWaiting = "true";
+          waitingForPrice = true;
         } else if (priceNode) {
           delete priceNode.dataset.aiPriceWaiting;
+          waitingForPrice = false;
         }
       }
+
+      const selectedSymbol = String(latestBroker.symbol || "").trim().toUpperCase();
+      const enforceKis = latestBroker.enforceKis === true && /^\d{6}$/.test(selectedSymbol);
+      const brokerReady = !enforceKis || latestBroker.evidenceReady === true;
+      const feedReady = latestHub.hasData === true && !waitingForPrice;
 
       if (stockRow) {
         stockRow.dataset.aiSignalsStockRow = "true";
@@ -239,34 +283,85 @@ export default function AiSignalsResponsiveLayoutFix() {
         if (stockName) stockName.dataset.aiSignalsStockName = "true";
         if (actions) {
           actions.dataset.aiSignalsActions = "true";
-          const buttons = Array.from(actions.querySelectorAll("button")) as HTMLButtonElement[];
-          const buy = buttons.find((button) => normalizedText(button).includes("매수"));
-          const sell = buttons.find((button) => normalizedText(button).includes("매도"));
-          setTextIfChanged(buy, buy?.disabled || state !== "BUY" ? "매수 조건 대기" : "매수 실행");
-          setTextIfChanged(sell, sell?.disabled || state !== "SELL" ? "매도 조건 대기" : "매도 실행");
+          const buy = findManualButton(actions, "BUY");
+          const sell = findManualButton(actions, "SELL");
+
+          if (enforceKis && !brokerReady) {
+            if (buy) buy.disabled = true;
+            if (sell) sell.disabled = true;
+          }
+
+          if (buy) {
+            const buyReady = !buy.disabled && state === "BUY" && feedReady && brokerReady;
+            setTextIfChanged(
+              buy,
+              enforceKis && !brokerReady
+                ? "매수 잠금 · 실계좌 검증 대기"
+                : waitingForPrice || !latestHub.hasData
+                  ? "매수 잠금 · 시세 대기"
+                  : buyReady
+                    ? "매수 실행"
+                    : "매수 조건 대기",
+            );
+            buy.title = buyReady
+              ? "매수 조건이 충족되었습니다. 클릭 시 사용자 확인 후 주문 단계로 진행합니다."
+              : "조건·실시간 시세·브로커 검증이 모두 확인되기 전에는 주문을 실행하지 않습니다.";
+          }
+
+          if (sell) {
+            const sellReady = !sell.disabled && state === "SELL" && feedReady && brokerReady;
+            setTextIfChanged(
+              sell,
+              enforceKis && !brokerReady
+                ? "매도 잠금 · 실계좌 검증 대기"
+                : waitingForPrice || !latestHub.hasData
+                  ? "매도 잠금 · 시세 대기"
+                  : sellReady
+                    ? "매도 실행"
+                    : "매도 조건 대기",
+            );
+            sell.title = sellReady
+              ? "매도 조건이 충족되었습니다. 클릭 시 사용자 확인 후 주문 단계로 진행합니다."
+              : "조건·실시간 시세·브로커 검증이 모두 확인되기 전에는 주문을 실행하지 않습니다.";
+          }
         }
       }
 
       if (techRow) {
         techRow.dataset.aiSignalsTechRow = "true";
-        const statePriceNode = stateRow?.lastElementChild as HTMLElement | null;
-        const waitingForPrice = statePriceNode?.dataset.aiPriceWaiting === "true";
-        if (waitingForPrice) {
+        if (waitingForPrice || latestHub.hasData !== true) {
           const spans = Array.from(techRow.querySelectorAll("span")) as HTMLElement[];
-          const scoreValue = spans.find((node) => /(?:0\s*\/\s*100|계산\s*중|계산\s*대기)/.test(normalizedText(node)));
+          const scoreValue = spans.find((node) => /(?:0\s*\/\s*100|계산\s*중|계산\s*대기|데이터\s*수신\s*대기)/.test(normalizedText(node)));
           setTextIfChanged(scoreValue, "데이터 수신 대기");
         }
 
         const validationNode = techRow.lastElementChild as HTMLElement | null;
         setTextIfChanged(
           validationNode,
-          state === "BUY"
-            ? "매수 조건 충족 · 주문 전 확인 필요"
-            : state === "SELL"
-              ? "매도 조건 충족 · 주문 전 확인 필요"
-              : "신호 검증 대기",
+          enforceKis && !brokerReady
+            ? "실계좌·계좌·시세 증거 검증 대기 · 주문 잠금"
+            : !feedReady
+              ? "실시간 시세 검증 대기"
+              : state === "BUY"
+                ? "매수 조건 충족 · 사용자 확인 필요"
+                : state === "SELL"
+                  ? "매도 조건 충족 · 사용자 확인 필요"
+                  : "NO_TRADE · 신호 조건 대기",
         );
       }
+
+      let truthNote = box.querySelector('[data-ai-truth-note="true"]') as HTMLElement | null;
+      if (!truthNote) {
+        truthNote = document.createElement("div");
+        truthNote.dataset.aiTruthNote = "true";
+        box.appendChild(truthNote);
+      }
+      setTextIfChanged(
+        truthNote,
+        enforceKis && !brokerReady
+          ? "🔒 국내 주문 잠금: KIS 연결·실계좌·계좌·실시간 시세 증거가 모두 확인되기 전에는 주문이 실행되지 않습니다."
+          : "✅ 체결 표시는 증권사 주문번호 + 실제 체결수량 + 실제 체결가격이 확인된 경우에만 기록합니다.",
+      );
     };
 
     const repairTradeLog = () => {
@@ -293,7 +388,7 @@ export default function AiSignalsResponsiveLayoutFix() {
       if (realRows.length === 0 && !existingEmpty) {
         const empty = document.createElement("div");
         empty.dataset.tradeLogEmpty = "true";
-        empty.textContent = "아직 증권사에서 확인된 실제 체결 내역이 없습니다.";
+        empty.textContent = "아직 증권사 주문번호·체결수량·체결가격으로 확인된 실제 체결 내역이 없습니다.";
         scrollArea.appendChild(empty);
       } else if (realRows.length > 0 && existingEmpty) {
         existingEmpty.remove();
@@ -356,16 +451,23 @@ export default function AiSignalsResponsiveLayoutFix() {
       repairAll();
     };
 
+    const handleBrokerTruth = (event: Event) => {
+      latestBroker = ((event as CustomEvent<BrokerTruthDetail>).detail || {}) as BrokerTruthDetail;
+      repairAll();
+    };
+
     repairAll();
     const observer = new MutationObserver(() => repairAll());
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
     window.addEventListener("resize", repairAll);
     window.addEventListener("aistock-runtime-hub-status", handleHubStatus as EventListener);
+    window.addEventListener("aistock-broker-truth-status", handleBrokerTruth as EventListener);
 
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", repairAll);
       window.removeEventListener("aistock-runtime-hub-status", handleHubStatus as EventListener);
+      window.removeEventListener("aistock-broker-truth-status", handleBrokerTruth as EventListener);
       document.getElementById(STYLE_ID)?.remove();
     };
   }, []);
