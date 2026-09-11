@@ -1,0 +1,45 @@
+name: Apply KIS Holdings and Dashboard Truth Fix
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - scripts/fix-kis-holdings-and-dashboard-truth.mjs
+      - .github/workflows/apply-kis-holdings-dashboard-truth.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Apply targeted fixes
+        run: node scripts/fix-kis-holdings-and-dashboard-truth.mjs
+
+      - name: Verify patch and compile
+        run: |
+          git diff --check
+          npm ci
+          npm run lint
+          npm run build
+
+      - name: Commit fixed production paths
+        run: |
+          if git diff --quiet -- server.ts src/context/AppContext.tsx src/components/trading/MasterAiAutoTradingDashboard.tsx src/App.tsx; then
+            echo "No product changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server.ts src/context/AppContext.tsx src/components/trading/MasterAiAutoTradingDashboard.tsx src/App.tsx
+          git commit -m "fix: restore KIS overseas holdings and truthful live dashboard"
+          git push origin HEAD:main
