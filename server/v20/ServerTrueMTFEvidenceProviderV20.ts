@@ -30,6 +30,12 @@ type CandlePayload = {
   source?: string;
 };
 
+type VerifiedFrame = {
+  candles: NormalizedCandle[];
+  source: string;
+  dataStatus: "REALTIME_VERIFIED" | "REALTIME_DERIVED";
+};
+
 export interface ServerTrueMTFBuildInputV20 {
   symbol: string;
   baseUrl: string;
@@ -193,7 +199,7 @@ function buildSnapshot(
   timeframe: TrueMTFTimeframeV20,
   candles: NormalizedCandle[],
   source: string,
-  derived = false
+  dataStatus: "REALTIME_VERIFIED" | "REALTIME_DERIVED"
 ): TrueMTFSnapshotV20 | null {
   if (candles.length < 55) return null;
   const closes = candles.map(c => c.close);
@@ -211,7 +217,7 @@ function buildSnapshot(
 
   return {
     timeframe,
-    dataStatus: derived ? "REALTIME_DERIVED" : "REALTIME_VERIFIED",
+    dataStatus,
     source,
     lastBarTimestamp: last.timestamp,
     barIntervalMs: INTERVAL[timeframe],
@@ -232,7 +238,7 @@ async function fetchFrame(
   input: ServerTrueMTFBuildInputV20,
   timeframe: "1m" | "5m" | "D",
   count: number
-): Promise<{ candles: NormalizedCandle[]; source: string } | null> {
+): Promise<VerifiedFrame | null> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const base = input.baseUrl.replace(/\/$/, "");
   const url = `${base}/api/market/realtime-candles?symbol=${encodeURIComponent(input.symbol)}&timeframe=${encodeURIComponent(timeframe)}&count=${count}`;
@@ -240,11 +246,15 @@ async function fetchFrame(
     const response = await fetchImpl(url, { headers: { "x-buymoney-internal-v20": "true" } });
     if (!response.ok) return null;
     const payload = await response.json() as CandlePayload;
-    if (payload.dataStatus && payload.dataStatus !== "REALTIME_VERIFIED" && payload.dataStatus !== "REALTIME_DERIVED") return null;
+
+    // Truth-first rule: missing provenance is not equivalent to verified market data.
+    // Final BUY evidence must carry an explicit server dataStatus.
+    if (payload.dataStatus !== "REALTIME_VERIFIED" && payload.dataStatus !== "REALTIME_DERIVED") return null;
+
     const candles = normalizeVerifiedCandlesV20(payload.candles);
     if (candles.length < 55) return null;
     const source = [payload.provider, payload.source].filter(Boolean).join(":") || "SERVER_REALTIME_CANDLES";
-    return { candles, source };
+    return { candles, source, dataStatus: payload.dataStatus };
   } catch {
     return null;
   }
@@ -261,18 +271,18 @@ export class ServerTrueMTFEvidenceProviderV20 {
 
     const evidence: TrueMTFEvidenceV20 = {};
     if (m1) {
-      const m1Snapshot = buildSnapshot("1m", m1.candles, m1.source);
+      const m1Snapshot = buildSnapshot("1m", m1.candles, m1.source, m1.dataStatus);
       if (m1Snapshot) evidence["1m"] = m1Snapshot;
       const derived3 = aggregateOneMinuteToThreeMinuteV20(m1.candles);
-      const m3Snapshot = buildSnapshot("3m", derived3, `${m1.source}:DERIVED_3M`, true);
+      const m3Snapshot = buildSnapshot("3m", derived3, `${m1.source}:DERIVED_3M`, "REALTIME_DERIVED");
       if (m3Snapshot) evidence["3m"] = m3Snapshot;
     }
     if (m5) {
-      const snapshot = buildSnapshot("5m", m5.candles, m5.source);
+      const snapshot = buildSnapshot("5m", m5.candles, m5.source, m5.dataStatus);
       if (snapshot) evidence["5m"] = snapshot;
     }
     if (daily) {
-      const snapshot = buildSnapshot("D", daily.candles, daily.source);
+      const snapshot = buildSnapshot("D", daily.candles, daily.source, daily.dataStatus);
       if (snapshot) evidence.D = snapshot;
     }
     return evidence;
