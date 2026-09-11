@@ -31,9 +31,6 @@ jobs:
           path = Path('scripts/fix-kis-holdings-and-dashboard-truth.mjs')
           text = path.read_text()
 
-          # The generated server function is stored inside a JS template string.
-          # Preserve every inner template literal as source text instead of executing
-          # it inside the temporary patcher itself.
           start_marker = 'const overseasBalanceFunction = `'
           end_marker = '\n`;\n\nserver = replaceBetween('
           start = text.index(start_marker) + len(start_marker)
@@ -43,8 +40,6 @@ jobs:
           body = re.sub(r'(?<!\\)\$\{', r'\\${', body)
           text = text[:start] + body + text[end:]
 
-          # Dashboard replacement strings also contain JSX template literals.
-          # Escape only interpolation markers that are not already escaped.
           dashboard_marker = '// 3) Dashboard: direct React chart expansion + truth-only display values'
           dashboard_start = text.index(dashboard_marker)
           head = text[:dashboard_start]
@@ -65,7 +60,7 @@ jobs:
           npm run lint
           npm run build
 
-      - name: Commit fixed production paths
+      - name: Commit and rebase verified production paths
         run: |
           if git diff --quiet -- server.ts src/context/AppContext.tsx src/components/trading/MasterAiAutoTradingDashboard.tsx src/App.tsx; then
             echo "No product changes to commit."
@@ -75,4 +70,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add server.ts src/context/AppContext.tsx src/components/trading/MasterAiAutoTradingDashboard.tsx src/App.tsx
           git commit -m "fix: restore KIS overseas holdings and truthful live dashboard"
+
+          # main can advance while lint/build run. Rebase the already-verified patch
+          # on top of the latest main; fail safely on any real product conflict.
+          git fetch origin main
+          git rebase origin/main
           git push origin HEAD:main
