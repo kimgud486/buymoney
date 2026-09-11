@@ -60,6 +60,12 @@ export function shouldSubmitSell(e: ExitEvidence) {
   };
 }
 
+const normalizeAutonomousSymbol = (symbol: string): string =>
+  String(symbol || "")
+    .trim()
+    .toUpperCase()
+    .replace(/^KRW-/, "");
+
 export type AutonomousPositionState =
   | "FLAT"
   | "BUY_CANDIDATE"
@@ -147,6 +153,24 @@ export class AutonomousTradingOrchestrator {
     // PARTIAL FILL EXPOSURE LOCK: Block new entries if partial fills exist
     if (this.hasPartialExposure()) {
       return { executed: false, reason: "PARTIAL_FILL_EXPOSURE_LOCKED" };
+    }
+
+    // Same-symbol exposure lock: a repeated scanner hit must never create another
+    // autonomous BUY while that symbol already has an active/pending position.
+    // CLOSED/FLAT are allowed to become a fresh entry later.
+    const candidateSymbol = normalizeAutonomousSymbol(candidate.symbol);
+    const activeSameSymbol = Array.from(this.managedPositions.values()).find((pos) => {
+      const sameSymbol = normalizeAutonomousSymbol(pos.symbol) === candidateSymbol;
+      const sameMarket = pos.market === candidate.market;
+      const activeState = pos.state !== "CLOSED" && pos.state !== "FLAT";
+      return sameSymbol && sameMarket && activeState;
+    });
+
+    if (activeSameSymbol) {
+      return {
+        executed: false,
+        reason: `DUPLICATE_SYMBOL_EXPOSURE_LOCKED_${activeSameSymbol.state}`
+      };
     }
 
     const gateway = this.brokerRouter.forMarket(candidate.market);
