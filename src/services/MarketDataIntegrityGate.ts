@@ -1,7 +1,6 @@
 // ----------------------------------------------------------------------
 // MARKET DATA INTEGRITY GATE (V14.1 REAL SCANNER CORE)
 // Strict Fail-Closed Verification for Quotes and Candle Data
-// Uses d3 median cadence statistics to detect malformed candle timelines.
 // ----------------------------------------------------------------------
 
 import { median } from "d3";
@@ -33,31 +32,23 @@ export interface VerifiedCandle {
   verificationError?: string;
 }
 
+function normalizeTimestampMs(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value > 0 && value < 10_000_000_000 ? value * 1000 : value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return NaN;
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) return numeric > 0 && numeric < 10_000_000_000 ? numeric * 1000 : numeric;
+    return Date.parse(trimmed);
+  }
+  return NaN;
+}
+
 export class MarketDataIntegrityGate {
   private static MAX_QUOTE_AGE_MS = 60000;
   private static MAX_FUTURE_ALLOWANCE_MS = 5000;
-
-  /** Normalize common market timestamp formats to epoch milliseconds. */
-  private static normalizeTimestamp(value: unknown): number | null {
-    if (value == null || value === "") return null;
-
-    let ts: number;
-    if (typeof value === "number") {
-      ts = value;
-    } else if (typeof value === "string") {
-      const trimmed = value.trim();
-      if (!trimmed) return null;
-      const numeric = Number(trimmed);
-      ts = Number.isFinite(numeric) ? numeric : Date.parse(trimmed);
-    } else {
-      return null;
-    }
-
-    if (!Number.isFinite(ts) || ts <= 0) return null;
-    // Many crypto/market APIs return epoch seconds. Normalize to milliseconds.
-    if (ts < 1_000_000_000_000) ts *= 1000;
-    return Number.isFinite(ts) && ts > 0 ? ts : null;
-  }
 
   public static verifyQuote(quote: {
     symbol: string;
@@ -71,13 +62,12 @@ export class MarketDataIntegrityGate {
   }): { isVerified: boolean; metadata: VerifiedQuoteMetadata } {
     const now = Date.now();
     const receivedAt = new Date(now).toISOString();
-
-    const rawProviderTime = quote.providerTimestamp ?? quote.timestamp;
-    const tsMs = this.normalizeTimestamp(rawProviderTime);
-    const providerTimestamp = tsMs != null ? new Date(tsMs).toISOString() : "INVALID_TIMESTAMP";
-    const ageMs = tsMs == null ? Number.POSITIVE_INFINITY : Math.max(0, now - tsMs);
-    const isFuture = tsMs != null && tsMs > now + this.MAX_FUTURE_ALLOWANCE_MS;
-    const isStale = tsMs == null || ageMs > this.MAX_QUOTE_AGE_MS;
+    const provTime = quote.providerTimestamp ?? quote.timestamp ?? now;
+    const tsMs = normalizeTimestampMs(provTime);
+    const providerTimestamp = Number.isFinite(tsMs) ? new Date(tsMs).toISOString() : String(provTime);
+    const ageMs = Number.isFinite(tsMs) ? Math.max(0, now - tsMs) : Number.POSITIVE_INFINITY;
+    const isFuture = Number.isFinite(tsMs) && tsMs > now + this.MAX_FUTURE_ALLOWANCE_MS;
+    const isStale = !Number.isFinite(tsMs) || ageMs > this.MAX_QUOTE_AGE_MS;
 
     const providerName: "UPBIT" | "NAVER_POLLING" | "YAHOO_FINANCE" | "KIS" | "SYSTEM_HUB" =
       (quote.provider as any) ||
@@ -90,12 +80,11 @@ export class MarketDataIntegrityGate {
         : "SYSTEM_HUB");
 
     const exchangeName = quote.market || "KOSPI";
-
     const tick: MarketTick = {
       symbol: quote.symbol,
       price: quote.price,
       volume: typeof quote.volume === "number" ? quote.volume : parseFloat(String(quote.volume || 0)) || 0,
-      timestamp: tsMs ?? 0,
+      timestamp: Number.isFinite(tsMs) ? tsMs : now,
       source: quote.source || quote.provider || "REALTIME_STREAM",
     };
     const detectorResult = defaultFakeDataDetector.inspect(tick, now);
@@ -111,7 +100,7 @@ export class MarketDataIntegrityGate {
     } else if (typeof quote.price !== "number" || !Number.isFinite(quote.price) || quote.price <= 0) {
       isVerified = false;
       failureReason = "INVALID_PRICE_NON_POSITIVE";
-    } else if (tsMs == null) {
+    } else if (!Number.isFinite(tsMs)) {
       isVerified = false;
       failureReason = "INVALID_PROVIDER_TIMESTAMP";
     } else if (isFuture) {
@@ -161,68 +150,43 @@ export class MarketDataIntegrityGate {
       const low = Number(c.low);
       const close = Number(c.close);
       const volume = Number(c.volume ?? 0);
-      const timestamp = this.normalizeTimestamp(c.timestamp ?? c.time);
+      const timestamp = normalizeTimestampMs(c.timestamp ?? c.time ?? 0);
 
       if (![open, high, low, close].every(Number.isFinite) || open <= 0 || high <= 0 || low <= 0 || close <= 0) {
-        return { isVerified: false, verifiedCandles: [], errorReason: `NON_POSITIVE_OR_NON_FINITE_OHLC_AT_INDEX_${i}` };
+        return { isVerified: false, verifiedCandles: [], errorReason: `NON_POSITIVE_OR_INVALID_OHLC_AT_INDEX_${i}` };
       }
-
       if (low > Math.min(open, close) || high < Math.max(open, close) || high < low) {
         return { isVerified: false, verifiedCandles: [], errorReason: `OHLC_LOGICAL_INCONSISTENCY_AT_INDEX_${i}` };
       }
-
       if (!Number.isFinite(volume) || volume < 0) {
-        return { isVerified: false, verifiedCandles: [], errorReason: `INVALID_VOLUME_AT_INDEX_${i}` };
+        return { isVerified: false, verifiedCandles: [], errorReason: `NEGATIVE_OR_INVALID_VOLUME_AT_INDEX_${i}` };
       }
-
-      if (timestamp == null) {
-        return { isVerified: false, verifiedCandles: [], errorReason: `INVALID_TIMESTAMP_AT_INDEX_${i}` };
+      if (!Number.isFinite(timestamp) || timestamp <= 0) {
+        return { isVerified: false, verifiedCandles: [], errorReason: `INVALID_CANDLE_TIMESTAMP_AT_INDEX_${i}` };
       }
-
       if (timestamp > now + this.MAX_FUTURE_ALLOWANCE_MS) {
         return { isVerified: false, verifiedCandles: [], errorReason: `FUTURE_CANDLE_TIMESTAMP_AT_INDEX_${i}` };
       }
-
-      if (i > 0) {
-        if (timestamp <= lastTimestamp) {
-          return { isVerified: false, verifiedCandles: [], errorReason: `OUT_OF_ORDER_OR_DUPLICATE_TIMESTAMP_AT_INDEX_${i}` };
-        }
-        intervals.push(timestamp - lastTimestamp);
+      if (i > 0 && timestamp <= lastTimestamp) {
+        return { isVerified: false, verifiedCandles: [], errorReason: `OUT_OF_ORDER_OR_DUPLICATE_TIMESTAMP_AT_INDEX_${i}` };
       }
+      if (i > 0) intervals.push(timestamp - lastTimestamp);
 
       lastTimestamp = timestamp;
-      verifiedCandles.push({
-        timestamp,
-        open,
-        high,
-        low,
-        close,
-        volume,
-        tradeValue: Number.isFinite(Number(c.tradeValue)) ? Number(c.tradeValue) : 0,
-        isVerified: true
-      });
+      verifiedCandles.push({ timestamp, open, high, low, close, volume, tradeValue: Number(c.tradeValue || 0), isVerified: true });
     }
 
-    // d3-backed robust cadence check. One overnight/session gap is allowed, but a feed
-    // with many wildly irregular intervals is rejected instead of contaminating indicators.
-    if (intervals.length >= 8) {
-      const typicalInterval = median(intervals);
-      if (typicalInterval == null || !Number.isFinite(typicalInterval) || typicalInterval <= 0) {
+    if (intervals.length >= 4) {
+      const cadenceMs = median(intervals);
+      if (!Number.isFinite(cadenceMs) || !cadenceMs || cadenceMs <= 0) {
         return { isVerified: false, verifiedCandles: [], errorReason: "INVALID_CANDLE_CADENCE" };
       }
-
-      const severeIrregularities = intervals.filter(
-        gap => gap < typicalInterval * 0.2 || gap > typicalInterval * 20
-      ).length;
-      const allowedIrregularities = Math.max(2, Math.floor(intervals.length * 0.2));
-      if (severeIrregularities > allowedIrregularities) {
-        return { isVerified: false, verifiedCandles: [], errorReason: "IRREGULAR_CANDLE_CADENCE" };
+      const extremeGap = intervals.find(gap => gap > cadenceMs * 8);
+      if (extremeGap !== undefined) {
+        return { isVerified: false, verifiedCandles: [], errorReason: "IRREGULAR_CANDLE_CADENCE_EXTREME_GAP" };
       }
     }
 
-    return {
-      isVerified: true,
-      verifiedCandles
-    };
+    return { isVerified: true, verifiedCandles };
   }
 }
