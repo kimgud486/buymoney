@@ -87,8 +87,19 @@ test("real broker account view has no hardcoded market/account truth fallbacks",
   assert.doesNotMatch(realBrokerView, /splitRatio/);
   assert.doesNotMatch(realBrokerView, /연결 정상/);
   assert.doesNotMatch(realBrokerView, /하나은행 매매기준율 연동 LIVE/);
-  assert.match(realBrokerView, /accountDataReady/);
+  assert.doesNotMatch(realBrokerView, /accountDataReady/);
+  assert.match(realBrokerView, /syncTruth/);
   assert.match(realBrokerView, /검증 공급자 미연결/);
+});
+
+test("real broker account readiness is isolated by broker in the current session", () => {
+  assert.match(realBrokerView, /syncTruth\.korea\.state/);
+  assert.match(realBrokerView, /syncTruth\.us\.state/);
+  assert.match(realBrokerView, /syncTruth\.upbit\.state/);
+  assert.match(realBrokerView, /syncOneBroker/);
+  assert.doesNotMatch(realBrokerView, /syncRealAccountBalance\s*\(\s*["']all["']/);
+  assert.match(realBrokerView, /ACCOUNT VERIFIED/);
+  assert.match(realBrokerView, /ACCOUNT NO_DATA/);
 });
 
 test("real broker account view is review-only and never sends direct orders", () => {
@@ -101,11 +112,12 @@ test("real broker account view is review-only and never sends direct orders", ()
   assert.match(realBrokerView, /이 화면에서는 주문을 전송하지 않습니다/);
 });
 
-test("real broker valuation never substitutes average price for a missing current price", () => {
+test("real broker valuation uses only verified live market quotes, never account currentPrice fallback", () => {
   assert.doesNotMatch(realBrokerView, /position\.currentPrice\s*\?\?\s*position\.avgPrice/);
   assert.doesNotMatch(realBrokerView, /position\.currentPrice\s*\|\|\s*position\.avgPrice/);
-  assert.doesNotMatch(realBrokerView, /const\s+currentPrice\s*=\s*[^;\n]*avgPrice/);
-  assert.match(realBrokerView, /const currentPrice = positiveNumber\(position\.currentPrice\)/);
-  assert.match(realBrokerView, /const avgPrice = positiveNumber\(position\.avgPrice\)/);
+  assert.doesNotMatch(realBrokerView, /const\s+currentPrice\s*=\s*positiveNumber\(position\.currentPrice\)/);
+  assert.match(realBrokerView, /realtimeMarketFeedService/);
+  assert.match(realBrokerView, /isVerifiedDisplayQuote/);
+  assert.match(realBrokerView, /const currentPrice = quote\?\.price \?\? null/);
   assert.match(realBrokerView, /valuationKrw = hasValuationInputs/);
 });
