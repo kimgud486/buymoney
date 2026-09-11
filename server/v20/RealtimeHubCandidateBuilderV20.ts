@@ -1,4 +1,5 @@
 import { serverRealtimeMarketHubV20 } from "./ServerRealtimeMarketHubV20";
+import { ServerTrueMTFEvidenceProviderV20 } from "./ServerTrueMTFEvidenceProviderV20";
 import {
   ServerGlobalRealtimeScannerV20,
   type DataTruthStatus,
@@ -225,8 +226,51 @@ export class RealtimeHubCandidateBuilderV20 {
     return { candidate, telemetry };
   }
 
+  /**
+   * Builds the same realtime candidate, then attaches server-owned 1m/3m/5m/D
+   * evidence. This keeps the fast capture path backward compatible while giving
+   * BUY promotion a truth-checked MTF path without trusting browser input.
+   */
+  public static async buildWithTrueMtf(
+    symbol: string,
+    baseUrl: string,
+    fetchImpl?: typeof fetch,
+  ): Promise<RealtimeCandidateBuildResultV20> {
+    const built = this.build(symbol);
+    if (!built.candidate) return built;
+
+    const trueMtf = await ServerTrueMTFEvidenceProviderV20.build({
+      symbol: built.candidate.symbol,
+      baseUrl,
+      fetchImpl,
+    });
+
+    return {
+      ...built,
+      candidate: {
+        ...built.candidate,
+        trueMtf,
+      },
+    };
+  }
+
   public static scan(symbols: string[]): { candidates: ScanCandidateResult[]; telemetry: RealtimeScanTelemetryV20[] } {
     const built = symbols.map((s) => this.build(s));
+    const inputs = built.flatMap((x) => x.candidate ? [x.candidate] : []);
+    return {
+      candidates: ServerGlobalRealtimeScannerV20.scanCandidates(inputs),
+      telemetry: built.map((x) => x.telemetry),
+    };
+  }
+
+  public static async scanWithTrueMtf(
+    symbols: string[],
+    baseUrl: string,
+    fetchImpl?: typeof fetch,
+  ): Promise<{ candidates: ScanCandidateResult[]; telemetry: RealtimeScanTelemetryV20[] }> {
+    const built = await Promise.all(
+      symbols.map((symbol) => this.buildWithTrueMtf(symbol, baseUrl, fetchImpl)),
+    );
     const inputs = built.flatMap((x) => x.candidate ? [x.candidate] : []);
     return {
       candidates: ServerGlobalRealtimeScannerV20.scanCandidates(inputs),
