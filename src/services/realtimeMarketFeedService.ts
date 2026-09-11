@@ -1,6 +1,6 @@
 // ----------------------------------------------------------------------
 // REAL-TIME LIVE MARKET FEED & REAL QUOTES SERVICE (KRX & UPBIT & US)
-// V15 Zero Fake Data & Provenance Standards
+// Zero synthetic prices. WebSocket ticks are preferred; 1s polling is fallback.
 // ----------------------------------------------------------------------
 
 import { safeSymbolStr } from "../lib/stockDictionary";
@@ -10,33 +10,21 @@ import { DataTrustLevel } from "../types/DataTrust";
 export interface LiveMarketQuote {
   symbol: string;
   name: string;
-
   market: "KOSPI" | "KOSDAQ" | "UPBIT" | "US";
-
   price: number | null;
-
   changeRate: number | null;
   changeAmount: number | null;
-
   volume: number | null;
   tradeValue: number | null;
-
-  // Separated from tradeValue
   marketCap: number | null;
-
   provider: string | null;
   source: string | null;
   exchange: string | null;
-
   providerTimestamp: number | null;
   receivedAt: number;
-
   ageMs: number | null;
-
   isVerified: boolean;
-
   trust: DataTrustLevel;
-
   status: "LIVE" | "STALE" | "UNAVAILABLE";
 }
 
@@ -49,21 +37,36 @@ export function requireLiveData(quote: LiveMarketQuote | undefined): boolean {
   return true;
 }
 
+export interface StreamTickInput {
+  symbol: string;
+  name?: string;
+  market?: "KOREA" | "KOSPI" | "KOSDAQ" | "UPBIT" | "US";
+  price: number;
+  change?: number;
+  changePct?: number;
+  volume?: number;
+  accumulatedVolume?: number;
+  accumulatedAmount?: number;
+  timestamp?: number;
+  providerTimestamp?: number;
+  receivedAt?: number;
+  feedSource?: string;
+  source?: string;
+}
+
 class RealtimeMarketFeedService {
   private quotes: Map<string, LiveMarketQuote> = new Map();
   private registeredSymbols: Map<string, "KOSPI" | "KOSDAQ" | "UPBIT" | "US"> = new Map();
   private subscribers: Set<(quotes: Map<string, LiveMarketQuote>) => void> = new Set();
   private isPolling = false;
-  private pollTimer: any = null;
-
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
   private isFeedEnabled = true;
+  private fetchInFlight = false;
 
   constructor() {
     try {
       const savedFeedState = localStorage.getItem("aistock_realtime_feed_active");
-      if (savedFeedState !== null) {
-        this.isFeedEnabled = savedFeedState === "true";
-      }
+      if (savedFeedState !== null) this.isFeedEnabled = savedFeedState === "true";
     } catch {
       this.isFeedEnabled = true;
     }
@@ -74,280 +77,320 @@ class RealtimeMarketFeedService {
   }
 
   public toggleFeed(targetState?: boolean): boolean {
-    const newState = targetState !== undefined ? targetState : !this.isFeedEnabled;
-    this.isFeedEnabled = newState;
+    const next = targetState !== undefined ? targetState : !this.isFeedEnabled;
+    this.isFeedEnabled = next;
     try {
-      localStorage.setItem("aistock_realtime_feed_active", String(newState));
-    } catch (e) {
-      console.warn("Feed state save error:", e);
-    }
+      localStorage.setItem("aistock_realtime_feed_active", String(next));
+    } catch {}
 
-    if (newState) {
-      this.start();
-    } else {
-      this.stop();
-    }
+    if (next) this.start();
+    else this.stop();
 
     if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("realtime_feed_status_change", {
-        detail: { isFeedActive: newState }
-      }));
+      window.dispatchEvent(new CustomEvent("realtime_feed_status_change", { detail: { isFeedActive: next } }));
     }
+    return next;
+  }
 
-    return this.isFeedEnabled;
+  private inferMarket(symbol: string): "KOSPI" | "KOSDAQ" | "UPBIT" | "US" {
+    const clean = symbol.toUpperCase();
+    if (clean.startsWith("KRW-")) return "UPBIT";
+    if (["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "AVAX", "LINK", "DOT", "KAT"].includes(clean)) return "UPBIT";
+    if (/^\d{6}$/.test(clean)) return "KOSPI";
+    return "US";
   }
 
   public registerSymbol(symbol: any, market?: "KOSPI" | "KOSDAQ" | "UPBIT" | "US") {
     const cleanSym = safeSymbolStr(symbol).toUpperCase();
     if (!cleanSym) return;
-    if (!this.registeredSymbols.has(cleanSym)) {
-      const determinedMarket: "KOSPI" | "KOSDAQ" | "UPBIT" | "US" =
-        market ||
-        (cleanSym === "BTC" || cleanSym === "ETH" || cleanSym === "SOL" || cleanSym === "XRP" || cleanSym === "DOGE" ? "UPBIT" :
-         /^[A-Z]{1,5}$/.test(cleanSym) ? "US" : "KOSPI");
-      this.registeredSymbols.set(cleanSym, determinedMarket);
-      this.fetchRealQuotes();
+
+    const determinedMarket = market || this.inferMarket(cleanSym);
+    const wasNew = !this.registeredSymbols.has(cleanSym);
+    this.registeredSymbols.set(cleanSym, determinedMarket);
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("realtime_symbol_registered", {
+        detail: { symbol: cleanSym, market: determinedMarket }
+      }));
     }
+
+    if (wasNew) void this.fetchRealQuotes();
   }
 
   public registerSymbols(symbols: Array<{ symbol: string; market?: "KOSPI" | "KOSDAQ" | "UPBIT" | "US" }>) {
-    let count = 0;
-    symbols.forEach((item) => {
-      if (item.symbol && !this.registeredSymbols.has(item.symbol.toUpperCase())) {
-        this.registerSymbol(item.symbol, item.market);
-        count++;
-      }
-    });
-    if (count > 0 && this.isPolling) {
-      this.fetchRealQuotes();
-    }
+    symbols.forEach((item) => this.registerSymbol(item.symbol, item.market));
   }
 
   public start() {
-    if (!this.isFeedEnabled) return;
-    if (this.isPolling) return;
+    if (!this.isFeedEnabled || this.isPolling) return;
     this.isPolling = true;
-    this.fetchRealQuotes();
+    void this.fetchRealQuotes();
     this.pollTimer = setInterval(() => {
       if (!this.isFeedEnabled) {
         this.stop();
         return;
       }
-      this.fetchRealQuotes();
-    }, 3500);
+      void this.fetchRealQuotes();
+    }, 1000);
   }
 
   public stop() {
     this.isPolling = false;
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.pollTimer = null;
+  }
+
+  /**
+   * Immediate bridge for authenticated KIS / Upbit / backend WebSocket ticks.
+   * This path updates subscribers without waiting for the 1-second REST fallback.
+   */
+  public ingestStreamTick(tick: StreamTickInput): void {
+    const rawSymbol = safeSymbolStr(tick.symbol).toUpperCase();
+    if (!rawSymbol || !Number.isFinite(tick.price) || tick.price <= 0) return;
+
+    const isUpbit = tick.market === "UPBIT" || rawSymbol.startsWith("KRW-") || String(tick.feedSource || tick.source || "").includes("UPBIT");
+    const cleanSymbol = isUpbit ? rawSymbol.replace(/^KRW-/, "") : rawSymbol;
+    const market: "KOSPI" | "KOSDAQ" | "UPBIT" | "US" = isUpbit
+      ? "UPBIT"
+      : tick.market === "US"
+      ? "US"
+      : tick.market === "KOSDAQ"
+      ? "KOSDAQ"
+      : "KOSPI";
+
+    const source = tick.feedSource || tick.source || "SERVER_STREAM";
+    const provider = source.includes("KIS") ? "KIS" : source.includes("UPBIT") ? "UPBIT" : "SYSTEM_HUB";
+    const providerTimestamp = tick.providerTimestamp || tick.timestamp || Date.now();
+    const receivedAt = tick.receivedAt || Date.now();
+    const ageMs = Math.max(0, receivedAt - providerTimestamp);
+
+    const { isVerified } = MarketDataIntegrityGate.verifyQuote({
+      symbol: cleanSymbol,
+      price: tick.price,
+      volume: tick.accumulatedVolume ?? tick.volume,
+      market,
+      providerTimestamp,
+      provider,
+      source
+    });
+
+    const executionGradeSource = source === "KIS_REALTIME_WS" || source === "UPBIT_WS" || source === "US_BROKER_WS";
+    const fresh = ageMs <= 5000;
+    const prev = this.quotes.get(rawSymbol) || this.quotes.get(cleanSymbol);
+
+    const updated: LiveMarketQuote = {
+      symbol: cleanSymbol,
+      name: tick.name || prev?.name || cleanSymbol,
+      market,
+      price: tick.price,
+      changeRate: Number.isFinite(tick.changePct) ? Number(tick.changePct) : prev?.changeRate ?? null,
+      changeAmount: Number.isFinite(tick.change) ? Number(tick.change) : prev?.changeAmount ?? null,
+      volume: Number.isFinite(tick.accumulatedVolume) ? Number(tick.accumulatedVolume) : Number.isFinite(tick.volume) ? Number(tick.volume) : prev?.volume ?? null,
+      tradeValue: Number.isFinite(tick.accumulatedAmount) ? Number(tick.accumulatedAmount) : prev?.tradeValue ?? null,
+      marketCap: prev?.marketCap ?? null,
+      provider,
+      source,
+      exchange: market,
+      providerTimestamp,
+      receivedAt,
+      ageMs,
+      isVerified,
+      trust: isVerified && fresh && executionGradeSource ? "EXECUTION_GRADE" : isVerified ? "ANALYSIS_ONLY" : "DISPLAY_ONLY",
+      status: isVerified && fresh ? "LIVE" : "STALE"
+    };
+
+    this.quotes.set(cleanSymbol, updated);
+    if (isUpbit) this.quotes.set(`KRW-${cleanSymbol}`, updated);
+    this.notifySubscribers();
   }
 
   private async fetchRealQuotes() {
-    // 1. Fetch live quotes for Registered Crypto via Upbit API
+    if (this.fetchInFlight) return;
+    this.fetchInFlight = true;
     try {
-      const upbitSymbols = Array.from(this.registeredSymbols.entries())
-        .filter(([_, m]) => m === "UPBIT")
-        .map(([sym]) => `KRW-${sym.replace("KRW-", "")}`);
-
-      if (upbitSymbols.length > 0) {
-        const uniqueMarkets = Array.from(new Set(upbitSymbols)).join(",");
-        const res = await fetch(`/api/upbit/public/ticker?markets=${encodeURIComponent(uniqueMarkets)}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data)) {
-            data.forEach((item: any) => {
-              const sym = item.market.replace("KRW-", "");
-              const prev = this.quotes.get(sym);
-              const { isVerified, metadata } = MarketDataIntegrityGate.verifyQuote({
-                symbol: sym,
-                price: typeof item.trade_price === "number" ? item.trade_price : null,
-                market: "UPBIT",
-                providerTimestamp: typeof item.trade_timestamp === "number" ? item.trade_timestamp : null,
-                provider: "UPBIT",
-                source: "UPBIT_PUBLIC_TICKER"
-              });
-
-              const providerTs = typeof item.trade_timestamp === "number" ? item.trade_timestamp : null;
-              const ageMs = providerTs ? Math.max(0, Date.now() - providerTs) : null;
-              const isFresh = ageMs !== null && ageMs <= 5000;
-
-              const updated: LiveMarketQuote = {
-                symbol: sym,
-                name: prev?.name || sym,
-                market: "UPBIT",
-                price: typeof item.trade_price === "number" && item.trade_price > 0 ? item.trade_price : null,
-                changeRate: typeof item.signed_change_rate === "number" ? +(item.signed_change_rate * 100).toFixed(2) : null,
-                changeAmount: typeof item.signed_change_price === "number" ? item.signed_change_price : null,
-                tradeValue: typeof item.acc_trade_price_24h === "number" ? Math.round(item.acc_trade_price_24h) : null,
-                volume: typeof item.acc_trade_volume_24h === "number" ? item.acc_trade_volume_24h : null,
-                marketCap: null,
-                provider: "UPBIT",
-                source: "UPBIT_PUBLIC_TICKER",
-                exchange: "UPBIT",
-                providerTimestamp: providerTs,
-                receivedAt: Date.now(),
-                ageMs,
-                isVerified,
-                trust: isVerified && isFresh ? "EXECUTION_GRADE" : "ANALYSIS_ONLY",
-                status: isVerified && isFresh ? "LIVE" : "STALE"
-              };
-              this.quotes.set(sym, updated);
-              this.quotes.set(`KRW-${sym}`, updated);
-            });
-
-            if (typeof window !== "undefined") {
-              window.dispatchEvent(new CustomEvent("upbit_ticker_update", { detail: data }));
-            }
-          }
-        }
-      }
-    } catch (e) {
-      // Silently handle transient network glitches
+      await Promise.allSettled([
+        this.fetchUpbitQuotes(),
+        this.fetchKrxQuotes(),
+        this.fetchSystemStocks()
+      ]);
+      this.notifySubscribers();
+    } finally {
+      this.fetchInFlight = false;
     }
+  }
 
-    // 2. Fetch live quotes for KRX (KOSPI & KOSDAQ) via Naver Finance Batch Polling API
+  private async fetchUpbitQuotes() {
+    const upbitSymbols = Array.from(this.registeredSymbols.entries())
+      .filter(([_, m]) => m === "UPBIT")
+      .map(([sym]) => `KRW-${sym.replace(/^KRW-/, "")}`);
+    if (upbitSymbols.length === 0) return;
+
+    const markets = Array.from(new Set(upbitSymbols)).join(",");
     try {
-      const krxSymbols = Array.from(this.registeredSymbols.entries())
-        .filter(([sym, m]) => /^\d{6}$/.test(sym) && (m === "KOSPI" || m === "KOSDAQ"))
-        .map(([sym]) => sym);
+      const res = await fetch(`/api/upbit/public/ticker?markets=${encodeURIComponent(markets)}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!Array.isArray(data)) return;
 
-      const defaultKrxCodes = ["005930", "000660", "005380", "000270", "035420", "035720", "068270", "005490", "373220", "006400", "012450", "277810", "034020", "080220", "064350", "042700", "247540", "086520"];
-      const allKrxCodes = Array.from(new Set([...krxSymbols, ...defaultKrxCodes]));
+      data.forEach((item: any) => {
+        const full = String(item.market || "").toUpperCase();
+        const sym = full.replace(/^KRW-/, "");
+        const price = Number(item.trade_price);
+        if (!sym || !Number.isFinite(price) || price <= 0) return;
+        const providerTimestamp = Number(item.trade_timestamp) || Date.now();
+        const receivedAt = Date.now();
+        const ageMs = Math.max(0, receivedAt - providerTimestamp);
+        const { isVerified } = MarketDataIntegrityGate.verifyQuote({
+          symbol: sym,
+          price,
+          volume: Number(item.acc_trade_volume_24h) || 0,
+          market: "UPBIT",
+          providerTimestamp,
+          provider: "UPBIT",
+          source: "UPBIT_PUBLIC_TICKER"
+        });
+        const prev = this.quotes.get(full) || this.quotes.get(sym);
+        const updated: LiveMarketQuote = {
+          symbol: sym,
+          name: prev?.name || sym,
+          market: "UPBIT",
+          price,
+          changeRate: Number.isFinite(Number(item.signed_change_rate)) ? Number((Number(item.signed_change_rate) * 100).toFixed(2)) : null,
+          changeAmount: Number.isFinite(Number(item.signed_change_price)) ? Number(item.signed_change_price) : null,
+          volume: Number.isFinite(Number(item.acc_trade_volume_24h)) ? Number(item.acc_trade_volume_24h) : null,
+          tradeValue: Number.isFinite(Number(item.acc_trade_price_24h)) ? Number(item.acc_trade_price_24h) : null,
+          marketCap: prev?.marketCap ?? null,
+          provider: "UPBIT",
+          source: "UPBIT_PUBLIC_TICKER",
+          exchange: "UPBIT",
+          providerTimestamp,
+          receivedAt,
+          ageMs,
+          isVerified,
+          trust: isVerified ? "ANALYSIS_ONLY" : "DISPLAY_ONLY",
+          status: isVerified && ageMs <= 15000 ? "LIVE" : "STALE"
+        };
+        this.quotes.set(sym, updated);
+        this.quotes.set(full, updated);
+      });
 
-      const chunkSize = 30;
-      for (let i = 0; i < allKrxCodes.length; i += chunkSize) {
-        const chunk = allKrxCodes.slice(i, i + chunkSize);
-        const codeParam = chunk.join(",");
-        const pollRes = await fetch(`/api/market/naver-batch?codes=${encodeURIComponent(codeParam)}`);
-
-        if (pollRes.ok) {
-          const pollData = await pollRes.json() as any;
-          const items = pollData?.datas;
-          if (Array.isArray(items)) {
-            items.forEach((item: any) => {
-              const code = item.itemCode;
-              if (code && (item.closePrice || item.closePriceRaw)) {
-                const rawP = String(item.closePriceRaw || item.closePrice || "").replace(/,/g, '');
-                const priceNum = parseFloat(rawP);
-                if (!isNaN(priceNum) && priceNum > 0) {
-                  const rawChange = String(item.compareToPreviousClosePriceRaw || item.compareToPreviousClosePrice || "").replace(/,/g, '');
-                  const changeNum = parseFloat(rawChange);
-                  const rawRatio = String(item.fluctuationsRatioRaw || item.fluctuationsRatio || "").replace(/,/g, '');
-                  const ratioNum = parseFloat(rawRatio);
-                  const isDown = item.compareToPreviousPrice?.code === "5" || item.compareToPreviousPrice?.name === "FALLING";
-                  const prev = this.quotes.get(code);
-
-                  const mappedMarket: "KOSPI" | "KOSDAQ" = item.stockExchangeType?.nameKor === "코스닥" ? "KOSDAQ" : "KOSPI";
-
-                  const { isVerified } = MarketDataIntegrityGate.verifyQuote({
-                    symbol: code,
-                    price: priceNum,
-                    market: mappedMarket,
-                    provider: "NAVER_POLLING",
-                    source: "NAVER_BATCH_POLLING"
-                  });
-
-                  const rawVol = String(item.accumulatedTradingVolume || "").replace(/,/g, '');
-                  const volNum = parseFloat(rawVol);
-                  const rawVal = String(item.accumulatedTradingValue || "").replace(/,/g, '');
-                  const valNum = parseFloat(rawVal);
-                  const rawCap = String(item.marketValueFull || item.marketValue || "").replace(/,/g, '');
-                  const capNum = parseFloat(rawCap);
-
-                  const updated: LiveMarketQuote = {
-                    symbol: code,
-                    name: item.stockName || prev?.name || code,
-                    market: mappedMarket,
-                    price: priceNum,
-                    changeRate: !isNaN(ratioNum) ? (isDown ? -Math.abs(ratioNum) : Math.abs(ratioNum)) : null,
-                    changeAmount: !isNaN(changeNum) ? (isDown ? -Math.abs(changeNum) : Math.abs(changeNum)) : null,
-                    tradeValue: !isNaN(valNum) && valNum > 0 ? valNum : null,
-                    volume: !isNaN(volNum) && volNum > 0 ? volNum : null,
-                    marketCap: !isNaN(capNum) && capNum > 0 ? capNum : null,
-                    provider: "NAVER_POLLING",
-                    source: "NAVER_BATCH_POLLING",
-                    exchange: mappedMarket,
-                    providerTimestamp: null,
-                    receivedAt: Date.now(),
-                    ageMs: null,
-                    isVerified,
-                    trust: "DISPLAY_ONLY",
-                    status: isVerified ? "LIVE" : "STALE"
-                  };
-                  this.quotes.set(code, updated);
-                }
-              }
-            });
-          }
-        }
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("upbit_ticker_update", { detail: data }));
       }
-    } catch (e) {
-      console.warn("[RealtimeFeed] Naver batch polling fetch error:", e);
+    } catch (error) {
+      console.warn("[RealtimeFeed] Upbit ticker fetch error", error);
     }
+  }
 
-    // 3. Query Backend `/api/stocks` for US & Other Stocks
+  private async fetchKrxQuotes() {
+    const registered = Array.from(this.registeredSymbols.entries())
+      .filter(([sym, m]) => /^\d{6}$/.test(sym) && (m === "KOSPI" || m === "KOSDAQ"))
+      .map(([sym]) => sym);
+    const defaults = ["005930", "000660", "005380", "000270", "035420", "035720", "068270", "005490", "373220", "006400", "012450", "277810", "034020", "080220", "064350", "042700", "247540", "086520"];
+    const codes = Array.from(new Set([...registered, ...defaults]));
+    if (codes.length === 0) return;
+
     try {
-      const res = await fetch("/api/stocks");
-      if (res.ok) {
-        const stocks = await res.json();
-        if (Array.isArray(stocks)) {
-          stocks.forEach((s: any) => {
-            if (s.symbol && typeof s.price === "number" && s.price > 0) {
-              const prev = this.quotes.get(s.symbol);
-              const mappedMarket: "KOSPI" | "KOSDAQ" | "UPBIT" | "US" =
-                s.market === "US" ? "US" : (s.market === "UPBIT" || s.market === "BTC") ? "UPBIT" : (s.market === "KOSDAQ" ? "KOSDAQ" : "KOSPI");
+      const res = await fetch(`/api/market/naver-batch?codes=${encodeURIComponent(codes.join(","))}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const payload = await res.json();
+      const items = payload?.datas;
+      if (!Array.isArray(items)) return;
 
-              const { isVerified } = MarketDataIntegrityGate.verifyQuote({
-                symbol: s.symbol,
-                price: s.price,
-                market: mappedMarket,
-                provider: mappedMarket === "US" ? "YAHOO_FINANCE" : "SYSTEM_HUB",
-                source: "API_STOCKS"
-              });
+      items.forEach((item: any) => {
+        const code = String(item.itemCode || "");
+        const price = Number(String(item.closePriceRaw || item.closePrice || "").replace(/,/g, ""));
+        if (!/^\d{6}$/.test(code) || !Number.isFinite(price) || price <= 0) return;
 
-              const updated: LiveMarketQuote = {
-                symbol: s.symbol,
-                name: s.name || prev?.name || s.symbol,
-                market: mappedMarket,
-                price: s.price,
-                changeRate: typeof s.changePct === "number" ? s.changePct : null,
-                changeAmount: typeof s.change === "number" ? s.change : null,
-                tradeValue: typeof s.tradeValue === "number" ? s.tradeValue : null,
-                volume: typeof s.volume === "number" ? s.volume : null,
-                marketCap: typeof s.marketCap === "number" ? s.marketCap : null,
-                provider: mappedMarket === "US" ? "YAHOO_FINANCE" : "SYSTEM_HUB",
-                source: "API_STOCKS",
-                exchange: mappedMarket,
-                providerTimestamp: typeof s.timestamp === "number" ? s.timestamp : null,
-                receivedAt: Date.now(),
-                ageMs: null,
-                isVerified,
-                trust: "ANALYSIS_ONLY",
-                status: isVerified ? "LIVE" : "STALE"
-              };
-              this.quotes.set(s.symbol, updated);
-            }
-          });
+        const market: "KOSPI" | "KOSDAQ" = item.stockExchangeType?.nameKor === "코스닥" ? "KOSDAQ" : "KOSPI";
+        const ratio = Number(String(item.fluctuationsRatioRaw || item.fluctuationsRatio || "0").replace(/,/g, ""));
+        const change = Number(String(item.compareToPreviousClosePriceRaw || item.compareToPreviousClosePrice || "0").replace(/,/g, ""));
+        const isDown = item.compareToPreviousPrice?.code === "5" || item.compareToPreviousPrice?.name === "FALLING";
+        const volume = Number(String(item.accumulatedTradingVolume || "0").replace(/,/g, ""));
+        const tradeValue = Number(String(item.accumulatedTradingValue || "0").replace(/,/g, ""));
+        const marketCap = Number(String(item.marketValueFull || item.marketValue || "0").replace(/,/g, ""));
+        const receivedAt = Date.now();
+        const { isVerified } = MarketDataIntegrityGate.verifyQuote({ symbol: code, price, volume, market, provider: "NAVER_POLLING", source: "NAVER_BATCH_POLLING" });
 
-          if (typeof window !== "undefined") {
-            window.dispatchEvent(new CustomEvent("stock_ticker_update", { detail: stocks }));
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("[RealtimeFeed] Real API stocks fetch error:", e);
+        this.quotes.set(code, {
+          symbol: code,
+          name: item.stockName || this.quotes.get(code)?.name || code,
+          market,
+          price,
+          changeRate: Number.isFinite(ratio) ? (isDown ? -Math.abs(ratio) : Math.abs(ratio)) : null,
+          changeAmount: Number.isFinite(change) ? (isDown ? -Math.abs(change) : Math.abs(change)) : null,
+          volume: Number.isFinite(volume) && volume >= 0 ? volume : null,
+          tradeValue: Number.isFinite(tradeValue) && tradeValue >= 0 ? tradeValue : null,
+          marketCap: Number.isFinite(marketCap) && marketCap > 0 ? marketCap : null,
+          provider: "NAVER_POLLING",
+          source: "NAVER_BATCH_POLLING",
+          exchange: market,
+          providerTimestamp: null,
+          receivedAt,
+          ageMs: 0,
+          isVerified,
+          trust: isVerified ? "DISPLAY_ONLY" : "NO_DATA",
+          status: isVerified ? "LIVE" : "STALE"
+        });
+      });
+    } catch (error) {
+      console.warn("[RealtimeFeed] Naver batch polling fetch error", error);
     }
+  }
 
-    this.notifySubscribers();
+  private async fetchSystemStocks() {
+    try {
+      const res = await fetch("/api/stocks", { cache: "no-store" });
+      if (!res.ok) return;
+      const stocks = await res.json();
+      if (!Array.isArray(stocks)) return;
+
+      stocks.forEach((s: any) => {
+        const symbol = String(s.symbol || "").toUpperCase();
+        const price = Number(s.price);
+        if (!symbol || !Number.isFinite(price) || price <= 0) return;
+        const market: "KOSPI" | "KOSDAQ" | "UPBIT" | "US" = s.market === "US" ? "US" : s.market === "UPBIT" || s.market === "BTC" ? "UPBIT" : s.market === "KOSDAQ" ? "KOSDAQ" : "KOSPI";
+        const provider = market === "US" ? "YAHOO_FINANCE" : "SYSTEM_HUB";
+        const providerTimestamp = Number(s.timestamp) || null;
+        const receivedAt = Date.now();
+        const ageMs = providerTimestamp ? Math.max(0, receivedAt - providerTimestamp) : null;
+        const { isVerified } = MarketDataIntegrityGate.verifyQuote({ symbol, price, volume: s.volume, market, providerTimestamp, provider, source: "API_STOCKS" });
+
+        const prev = this.quotes.get(symbol);
+        this.quotes.set(symbol, {
+          symbol,
+          name: s.name || prev?.name || symbol,
+          market,
+          price,
+          changeRate: Number.isFinite(Number(s.changePct)) ? Number(s.changePct) : null,
+          changeAmount: Number.isFinite(Number(s.change)) ? Number(s.change) : null,
+          volume: Number.isFinite(Number(s.volume)) ? Number(s.volume) : null,
+          tradeValue: Number.isFinite(Number(s.tradeValue)) ? Number(s.tradeValue) : null,
+          marketCap: Number.isFinite(Number(s.marketCap)) ? Number(s.marketCap) : null,
+          provider,
+          source: "API_STOCKS",
+          exchange: market,
+          providerTimestamp,
+          receivedAt,
+          ageMs,
+          isVerified,
+          trust: isVerified ? "ANALYSIS_ONLY" : "DISPLAY_ONLY",
+          status: isVerified && (ageMs == null || ageMs <= 60000) ? "LIVE" : "STALE"
+        });
+      });
+
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("stock_ticker_update", { detail: stocks }));
+      }
+    } catch (error) {
+      console.warn("[RealtimeFeed] /api/stocks fetch error", error);
+    }
   }
 
   public getQuote(symbol: any): LiveMarketQuote | undefined {
     const cleanSym = safeSymbolStr(symbol).toUpperCase();
     if (!cleanSym) return undefined;
-    return this.quotes.get(cleanSym);
+    return this.quotes.get(cleanSym) || this.quotes.get(cleanSym.replace(/^KRW-/, ""));
   }
 
   public getAllQuotes(): LiveMarketQuote[] {
@@ -356,21 +399,13 @@ class RealtimeMarketFeedService {
 
   public subscribe(callback: (quotes: Map<string, LiveMarketQuote>) => void): () => void {
     this.subscribers.add(callback);
-    setTimeout(() => {
-      if (this.subscribers.has(callback)) {
-        try {
-          callback(this.quotes);
-        } catch (e) {
-          console.error("Error in realtimeMarketFeedService initial callback:", e);
-        }
-      }
-    }, 0);
+    queueMicrotask(() => {
+      if (this.subscribers.has(callback)) callback(this.quotes);
+    });
     this.start();
     return () => {
       this.subscribers.delete(callback);
-      if (this.subscribers.size === 0) {
-        this.stop();
-      }
+      if (this.subscribers.size === 0) this.stop();
     };
   }
 
@@ -378,8 +413,8 @@ class RealtimeMarketFeedService {
     this.subscribers.forEach((cb) => {
       try {
         cb(this.quotes);
-      } catch (err) {
-        console.error("Error in realtimeMarketFeedService subscriber:", err);
+      } catch (error) {
+        console.error("[RealtimeFeed] subscriber error", error);
       }
     });
   }
