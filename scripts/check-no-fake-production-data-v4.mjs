@@ -26,6 +26,7 @@ const forbidden = [
   /vwap\s*\?\?\s*price/, /breakoutConfirmed:\s*true\b/, /scannedTotal\s*:\s*3420/,
   /makeMeta\s*\(\s*["']BB_BANDWIDTH["']\s*,\s*3\.5\s*\)/,
   /aiMatchScore\s*:\s*\+\s*\(\s*8[56]/,
+  // Scanner compatibility paths must never manufacture plausible missing metrics.
   /rvol\s*\|\|\s*1\.2/,
   /tradingValue\s*:\s*[^\n]*\|\|\s*500/,
   /adx\s*:\s*32\.5\b/
