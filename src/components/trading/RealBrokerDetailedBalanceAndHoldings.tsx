@@ -13,11 +13,10 @@ import {
   XCircle,
 } from "lucide-react";
 import { useApp } from "../../context/AppContext";
-import { StockPosition, TradeLog } from "../../types";
-import {
-  LiveMarketQuote,
-  realtimeMarketFeedService,
-} from "../../services/realtimeMarketFeedService";
+import type { StockPosition, TradeLog } from "../../types";
+import type { LiveMarketQuote } from "../../services/realtimeMarketFeedService";
+import { realtimeMarketFeedService } from "../../services/realtimeMarketFeedService";
+import { validateBrokerAccountSyncEvidence } from "../../services/brokerAccountTruthValidator";
 import { SmartSafetyGovernanceModal } from "./SmartSafetyGovernanceModal";
 import { BrokerApiConnectModal } from "./BrokerApiConnectModal";
 
@@ -50,6 +49,7 @@ type BrokerSyncTruth = {
   state: SyncState;
   observedAt: string | null;
   message: string | null;
+  accountTotal: number | null;
 };
 
 type PositionFact = {
@@ -68,6 +68,7 @@ const EMPTY_SYNC_TRUTH: BrokerSyncTruth = {
   state: "NO_DATA",
   observedAt: null,
   message: null,
+  accountTotal: null,
 };
 
 function finiteNumber(value: unknown): number | null {
@@ -90,6 +91,11 @@ function nonNegativeNumber(value: unknown): number | null {
 function formatKrw(value: number | null): string {
   if (value == null || !Number.isFinite(value)) return "NO_DATA";
   return `₩${Math.round(value).toLocaleString()}원`;
+}
+
+function formatPlainNumber(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "NO_DATA";
+  return value.toLocaleString(undefined, { maximumFractionDigits: 8 });
 }
 
 function formatUsd(value: number | null): string {
@@ -144,7 +150,7 @@ function BrokerStateBadge({ state }: { state: BrokerState }) {
     state === "CONNECTED"
       ? { text: "ACCOUNT VERIFIED", classes: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300", Icon: CheckCircle2 }
       : state === "FAILED"
-        ? { text: "SYNC FAILED", classes: "border-rose-500/30 bg-rose-500/10 text-rose-300", Icon: XCircle }
+        ? { text: "SYNC BLOCKED", classes: "border-rose-500/30 bg-rose-500/10 text-rose-300", Icon: XCircle }
         : state === "NOT_CONFIGURED"
           ? { text: "NOT_CONFIGURED", classes: "border-slate-700 bg-slate-900 text-slate-400", Icon: Key }
           : { text: "ACCOUNT NO_DATA", classes: "border-amber-500/30 bg-amber-500/10 text-amber-300", Icon: AlertTriangle };
@@ -223,7 +229,7 @@ function BrokerCard({
         className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-black text-slate-200 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
       >
         <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
-        {canSync ? (syncing ? "검증 중..." : syncLabel) : "API 등록 필요"}
+        {canSync ? (syncing ? "원본 증거 검증 중..." : syncLabel) : "API 등록 필요"}
       </button>
     </div>
   );
@@ -238,7 +244,6 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
     profile,
     positions,
     trades,
-    cashBreakdown,
     syncRealAccountBalance,
     addToast,
     blockedSymbolDetails,
@@ -278,12 +283,19 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
   };
 
   const syncOneBroker = async (broker: AccountBroker): Promise<boolean> => {
-    markSync(broker, { state: "NO_DATA", observedAt: null, message: "검증 중" });
+    markSync(broker, { ...EMPTY_SYNC_TRUTH, message: "원본 증거 검증 중" });
     try {
       const result = await syncRealAccountBalance(broker, false);
-      if (result?.success !== true) {
-        const message = result?.message || `${broker} 계좌 검증 응답이 성공 상태가 아닙니다.`;
-        markSync(broker, { state: "FAILED", observedAt: null, message });
+      const verdict = validateBrokerAccountSyncEvidence(broker, result);
+
+      if (!verdict.verified) {
+        const serverMessage = result?.message ? ` / ${result.message}` : "";
+        markSync(broker, {
+          state: "FAILED",
+          observedAt: null,
+          accountTotal: null,
+          message: `검증 차단: ${verdict.reason}${serverMessage}`,
+        });
         return false;
       }
 
@@ -291,12 +303,13 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
       markSync(broker, {
         state: "READY",
         observedAt,
-        message: result?.message || "이번 세션 계좌 동기화 성공",
+        accountTotal: verdict.accountTotal,
+        message: verdict.reason,
       });
       return true;
     } catch (error: any) {
       const message = error?.message || "계좌 동기화 중 오류가 발생했습니다.";
-      markSync(broker, { state: "FAILED", observedAt: null, message });
+      markSync(broker, { state: "FAILED", observedAt: null, accountTotal: null, message });
       return false;
     }
   };
@@ -322,14 +335,14 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
       if (results.every(Boolean)) {
         addToast({
           type: "SUCCESS",
-          title: target === "all" ? "계좌별 검증 완료" : "계좌 검증 완료",
-          message: "요청한 계좌가 각각 별도 API 조회로 검증되었습니다.",
+          title: target === "all" ? "계좌별 원본 검증 완료" : "계좌 원본 검증 완료",
+          message: "success 문구가 아니라 브로커별 원본 증거까지 확인했습니다.",
         });
       } else {
         addToast({
           type: "WARNING",
           title: "일부 계좌 NO_DATA",
-          message: "성공한 계좌만 READY로 표시합니다. 실패한 계좌는 다른 계좌의 값으로 채우지 않습니다.",
+          message: "원본 증거가 부족한 계좌는 READY로 올리지 않았습니다.",
         });
       }
     } finally {
@@ -368,19 +381,8 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
       });
   }, [positions, quotes, syncTruth, fxRate]);
 
-  const configuredBrokerStates: Array<{ configured: boolean; ready: boolean }> = [
-    { configured: koreaConfigured, ready: syncTruth.korea.state === "READY" },
-    { configured: koreaConfigured, ready: syncTruth.us.state === "READY" },
-    { configured: upbitConfigured, ready: syncTruth.upbit.state === "READY" },
-  ];
-  const configuredCount = configuredBrokerStates.filter((item) => item.configured).length;
-  const allConfiguredReady = configuredCount > 0 && configuredBrokerStates
-    .filter((item) => item.configured)
-    .every((item) => item.ready);
-
   const holdingsSummary = useMemo(() => {
-    if (!allConfiguredReady) return { valuation: null, cost: null, pnl: null, pnlRate: null };
-    if (positionFacts.length === 0) return { valuation: 0, cost: 0, pnl: 0, pnlRate: 0 };
+    if (positionFacts.length === 0) return { valuation: null, cost: null, pnl: null, pnlRate: null };
     if (positionFacts.some((fact) => fact.valuationKrw == null || fact.costKrw == null)) {
       return { valuation: null, cost: null, pnl: null, pnlRate: null };
     }
@@ -388,45 +390,11 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
     const valuation = positionFacts.reduce((sum, fact) => sum + Number(fact.valuationKrw), 0);
     const cost = positionFacts.reduce((sum, fact) => sum + Number(fact.costKrw), 0);
     const pnl = valuation - cost;
-    const pnlRate = cost > 0 ? (pnl / cost) * 100 : 0;
+    const pnlRate = cost > 0 ? (pnl / cost) * 100 : null;
     return { valuation, cost, pnl, pnlRate };
-  }, [allConfiguredReady, positionFacts]);
+  }, [positionFacts]);
 
-  const verifiedKoreaCash = syncTruth.korea.state === "READY"
-    ? nonNegativeNumber(cashBreakdown?.koreaCash)
-    : null;
-  const verifiedUpbitCash = syncTruth.upbit.state === "READY"
-    ? nonNegativeNumber(cashBreakdown?.upbitCash)
-    : null;
-
-  // The current server contract does not prove the US cash currency/unit separately.
-  // Never display its legacy zero as a verified account value.
-  const verifiedUsCashRaw: number | null = null;
-  const verifiedCashTotal = allConfiguredReady && verifiedKoreaCash != null && verifiedUpbitCash != null
-    ? verifiedKoreaCash + verifiedUpbitCash
-    : allConfiguredReady && koreaConfigured && !upbitConfigured && verifiedKoreaCash != null
-      ? verifiedKoreaCash
-      : allConfiguredReady && !koreaConfigured && upbitConfigured && verifiedUpbitCash != null
-        ? verifiedUpbitCash
-        : null;
-
-  const grandTotal = verifiedCashTotal != null && holdingsSummary.valuation != null
-    ? verifiedCashTotal + holdingsSummary.valuation
-    : null;
-
-  const formatPositionPrice = (value: number | null, market: StockPosition["market"]) => {
-    if (value == null) return <span className="text-slate-600">NO_DATA</span>;
-    if (market === "US") {
-      return (
-        <span className="inline-flex flex-col items-end">
-          <strong>{formatUsd(value)}</strong>
-          <span className="text-[10px] text-slate-600">{fxRate != null ? `≈ ${formatKrw(value * fxRate)}` : "KRW 환산: NO_DATA"}</span>
-        </span>
-      );
-    }
-    return <strong>{formatKrw(value)}</strong>;
-  };
-
+  const readyCount = Object.values(syncTruth).filter((truth) => truth.state === "READY").length;
   const latestObserved = [syncTruth.korea.observedAt, syncTruth.us.observedAt, syncTruth.upbit.observedAt]
     .filter(Boolean)
     .join(" / ") || "동기화 전";
@@ -441,49 +409,44 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
   const usState = resolveSessionBrokerState(koreaConfigured, syncTruth.us);
   const upbitState = resolveSessionBrokerState(upbitConfigured, syncTruth.upbit);
 
+  const formatPositionPrice = (value: number | null, market: StockPosition["market"]) => {
+    if (value == null) return <span className="text-slate-600">NO_DATA</span>;
+    if (market === "US") {
+      return (
+        <span className="inline-flex flex-col items-end">
+          <strong>{formatUsd(value)}</strong>
+          <span className="text-[10px] text-slate-600">{fxRate != null ? `≈ ${formatKrw(value * fxRate)}` : "KRW 환산: NO_DATA"}</span>
+        </span>
+      );
+    }
+    return <strong>{formatKrw(value)}</strong>;
+  };
+
   return (
-    <section
-      className="w-full overflow-hidden rounded-2xl border border-slate-800 bg-[#050a12] text-slate-100 shadow-2xl"
-      data-testid="real-broker-truth-panel"
-    >
+    <section className="w-full overflow-hidden rounded-2xl border border-slate-800 bg-[#050a12] text-slate-100 shadow-2xl" data-testid="real-broker-truth-panel">
       <header className="border-b border-slate-800 bg-[#08111d] p-5">
         <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
           <div>
             <div className="flex flex-wrap items-center gap-2 text-[10px] font-black">
-              <span className="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-1 text-cyan-300">VERIFIED ACCOUNT VIEW</span>
+              <span className="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-1 text-cyan-300">RAW EVIDENCE GATED</span>
               <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-amber-300">DIRECT ORDER DISABLED</span>
             </div>
             <h2 className="mt-3 text-xl font-black">실계좌 잔고 · 보유종목</h2>
             <p className="mt-2 max-w-3xl text-xs leading-6 text-slate-500">
-              국내·미국·업비트를 각각 따로 검증합니다. 계좌 API의 현재가는 평가에 사용하지 않고, 별도 실시간 시세가 LIVE + VERIFIED일 때만 평가액을 계산합니다.
+              서버의 success/HEALTHY 문구만 믿지 않습니다. 국내·미국·업비트 원본 응답 증거를 각각 확인한 뒤 READY로 올리고, 현재가는 별도 LIVE + VERIFIED 시세만 사용합니다.
             </p>
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => setIsGovernanceOpen(true)}
-              className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-black text-slate-300 hover:bg-slate-800"
-            >
+            <button type="button" onClick={() => setIsGovernanceOpen(true)} className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-black text-slate-300 hover:bg-slate-800">
               <ShieldAlert className="h-4 w-4 text-amber-300" />
               안전상태 {blockedSymbolDetails.length > 0 ? `(${blockedSymbolDetails.length})` : ""}
             </button>
-            <button
-              type="button"
-              onClick={() => setIsApiConnectModalOpen(true)}
-              className="flex items-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-black text-cyan-200 hover:bg-cyan-500/15"
-            >
-              <Key className="h-4 w-4" />
-              API 연결
+            <button type="button" onClick={() => setIsApiConnectModalOpen(true)} className="flex items-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-black text-cyan-200 hover:bg-cyan-500/15">
+              <Key className="h-4 w-4" /> API 연결
             </button>
-            <button
-              type="button"
-              onClick={() => void handleSync("all")}
-              disabled={syncingBroker != null || (!koreaConfigured && !upbitConfigured)}
-              className="flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-xs font-black text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <RefreshCw className={`h-4 w-4 ${syncingBroker === "all" ? "animate-spin" : ""}`} />
-              계좌별 전체 검증
+            <button type="button" onClick={() => void handleSync("all")} disabled={syncingBroker != null || (!koreaConfigured && !upbitConfigured)} className="flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-xs font-black text-slate-950 disabled:cursor-not-allowed disabled:opacity-40">
+              <RefreshCw className={`h-4 w-4 ${syncingBroker === "all" ? "animate-spin" : ""}`} /> 계좌별 원본 검증
             </button>
           </div>
         </div>
@@ -491,14 +454,14 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
         <div className="mt-4 flex flex-wrap items-center gap-2 text-[10px] text-slate-500">
           <span>이번 세션 검증 시각: <strong className="text-slate-300">{latestObserved}</strong></span>
           <span>•</span>
-          <span>통합 상태: <strong className={allConfiguredReady ? "text-emerald-300" : "text-amber-300"}>{allConfiguredReady ? "READY" : "NO_DATA"}</strong></span>
+          <span>READY 계좌: <strong className={readyCount > 0 ? "text-emerald-300" : "text-amber-300"}>{readyCount}/3</strong></span>
         </div>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <MetricCard label="검증 가용 예수금" value={formatKrw(verifiedCashTotal)} note="통화가 확인되지 않은 미국 현금은 합산하지 않음" />
-          <MetricCard label="보유종목 평가액" value={formatKrw(holdingsSummary.valuation)} note="계좌별 READY + LIVE VERIFIED 현재가 + 필요한 환율이 모두 있어야 계산" />
-          <MetricCard label="총 평가손익" value={formatKrw(holdingsSummary.pnl)} note={holdingsSummary.pnlRate == null ? "수익률: NO_DATA" : `수익률: ${formatPercent(holdingsSummary.pnlRate)}`} />
-          <MetricCard label="통합 순자산" value={formatKrw(grandTotal)} note="부분 데이터로 총자산을 추정하지 않음" />
+          <MetricCard label="검증 현금 합계" value="NO_DATA" note="기존 AppContext의 null→0/재계산 현금은 사용하지 않음" />
+          <MetricCard label="검증 보유종목 평가액" value={formatKrw(holdingsSummary.valuation)} note="READY 계좌의 LIVE VERIFIED 현재가만 합산" />
+          <MetricCard label="검증 평가손익" value={formatKrw(holdingsSummary.pnl)} note={holdingsSummary.pnlRate == null ? "수익률: NO_DATA" : `수익률: ${formatPercent(holdingsSummary.pnlRate)}`} />
+          <MetricCard label="통합 순자산" value="NO_DATA" note="현금 통화/계약 감사 전에는 추정하지 않음" />
         </div>
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-xs">
@@ -513,12 +476,7 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
 
       <nav className="flex gap-1 overflow-x-auto border-b border-slate-800 bg-[#07101b] px-4">
         {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => setActiveTab(tab.id)}
-            className={`whitespace-nowrap border-b-2 px-4 py-3 text-xs font-black ${activeTab === tab.id ? "border-cyan-400 text-cyan-300" : "border-transparent text-slate-500 hover:text-slate-300"}`}
-          >
+          <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} className={`whitespace-nowrap border-b-2 px-4 py-3 text-xs font-black ${activeTab === tab.id ? "border-cyan-400 text-cyan-300" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
             {tab.label}
           </button>
         ))}
@@ -533,10 +491,10 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
               state={koreaState}
               error={syncTruth.korea.state === "FAILED" ? syncTruth.korea.message : null}
               rows={[
-                { label: "국내 가용 예수금", value: formatKrw(verifiedKoreaCash) },
-                { label: "이번 세션 계좌 검증", value: syncTruth.korea.state },
+                { label: "원본 계좌 총액", value: syncTruth.korea.state === "READY" ? formatKrw(syncTruth.korea.accountTotal) : "NO_DATA" },
+                { label: "이번 세션 원본 검증", value: syncTruth.korea.state },
               ]}
-              syncLabel="국내 계좌 검증"
+              syncLabel="국내 원본 검증"
               syncing={syncingBroker === "korea" || syncingBroker === "all"}
               canSync={koreaConfigured}
               onSync={() => void handleSync("korea")}
@@ -548,12 +506,12 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
               state={usState}
               error={syncTruth.us.state === "FAILED" ? syncTruth.us.message : null}
               rows={[
-                { label: "US 현금", value: verifiedUsCashRaw == null ? "NO_DATA" : verifiedUsCashRaw.toLocaleString() },
-                { label: "현금 통화단위", value: "NO_DATA" },
-                { label: "이번 세션 계좌 검증", value: syncTruth.us.state },
+                { label: "원본 계좌 평가값", value: syncTruth.us.state === "READY" ? formatPlainNumber(syncTruth.us.accountTotal) : "NO_DATA" },
+                { label: "원본 통화단위", value: "NO_DATA" },
+                { label: "이번 세션 원본 검증", value: syncTruth.us.state },
                 { label: "USD/KRW", value: fxRate == null ? "NO_DATA" : fxRate.toLocaleString() },
               ]}
-              syncLabel="미국 계좌 검증"
+              syncLabel="미국 원본 검증"
               syncing={syncingBroker === "us" || syncingBroker === "all"}
               canSync={koreaConfigured}
               onSync={() => void handleSync("us")}
@@ -565,10 +523,11 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
               state={upbitState}
               error={syncTruth.upbit.state === "FAILED" ? syncTruth.upbit.message : null}
               rows={[
-                { label: "원화 예수금", value: formatKrw(verifiedUpbitCash) },
-                { label: "이번 세션 계좌 검증", value: syncTruth.upbit.state },
+                { label: "원본 계좌 총액", value: syncTruth.upbit.state === "READY" ? formatKrw(syncTruth.upbit.accountTotal) : "NO_DATA" },
+                { label: "원화 예수금", value: "NO_DATA" },
+                { label: "이번 세션 원본 검증", value: syncTruth.upbit.state },
               ]}
-              syncLabel="업비트 계좌 검증"
+              syncLabel="업비트 원본 검증"
               syncing={syncingBroker === "upbit" || syncingBroker === "all"}
               canSync={upbitConfigured}
               onSync={() => void handleSync("upbit")}
@@ -579,7 +538,7 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
             <div className="mt-4 rounded-xl border border-dashed border-slate-800 p-8 text-center">
               <Wallet className="mx-auto h-7 w-7 text-slate-600" />
               <div className="mt-3 text-sm font-black text-slate-300">연결된 실계좌가 없습니다.</div>
-              <p className="mt-2 text-xs text-slate-600">API 연결 후 계좌별 검증을 실행해야 잔고 숫자가 표시됩니다.</p>
+              <p className="mt-2 text-xs text-slate-600">API 연결 후 계좌별 원본 검증을 실행해야 숫자가 표시됩니다.</p>
             </div>
           )}
         </div>
@@ -626,13 +585,8 @@ export const RealBrokerDetailedBalanceAndHoldings: React.FC<RealBrokerDetailedBa
                     <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-800 pt-3">
                       <div className="text-[10px] leading-5 text-slate-600">이 화면에서는 주문을 전송하지 않습니다. 거래는 Stock GPT 검토 단계에서 별도 확인합니다.</div>
                       {onSelectAssetForChart && (
-                        <button
-                          type="button"
-                          onClick={() => onSelectAssetForChart(position.symbol, position.name, position.market)}
-                          className="flex shrink-0 items-center gap-1 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-black text-cyan-200 hover:bg-cyan-500/15"
-                        >
-                          <ChartCandlestick className="h-4 w-4" />
-                          차트 보기
+                        <button type="button" onClick={() => onSelectAssetForChart(position.symbol, position.name, position.market)} className="flex shrink-0 items-center gap-1 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-black text-cyan-200 hover:bg-cyan-500/15">
+                          <ChartCandlestick className="h-4 w-4" /> 차트 보기
                         </button>
                       )}
                     </div>
