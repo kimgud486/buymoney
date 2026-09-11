@@ -1,10 +1,11 @@
 // ----------------------------------------------------------------------
-// BUYMONEY UNIFIED PATTERN SIGNAL ENGINE V20.7
+// BUYMONEY UNIFIED PATTERN SIGNAL ENGINE V20.8
 // One deterministic OHLCV engine for KOREA / US / UPBIT.
 // Read-only analytics: never submits or simulates orders.
 // ----------------------------------------------------------------------
 
 import { Candle } from "../../src/services/StructureBrain";
+import { sessionVwapV20 } from "./SessionAwareMarketMathV20";
 
 export type UnifiedMarketV20 = "KOREA" | "US" | "UPBIT";
 export type UnifiedSignalV20 = "BUY" | "BUY_WATCH" | "HOLD" | "TAKE_PROFIT" | "SELL" | "AVOID";
@@ -153,7 +154,6 @@ export class UnifiedPatternSignalEngineV20 {
       return { ...base, signal: "BUY_WATCH", score: 0, grade: "NO_SETUP", pattern: "WARMING_UP", price, entryLow: null, entryHigh: null, stop: null, target1: null, target2: null, indicators: null, reasons: [`공통 패턴 엔진 워밍업 중: ${candles.length}/55 candles`], risks: ["55개 미만의 캔들로는 BUY/HOLD/SELL 확정 금지"], candleCount: candles.length, dataStatus: "WARMING_UP" };
     }
 
-    const opens = candles.map(c => c.open);
     const highs = candles.map(c => c.high);
     const lows = candles.map(c => c.low);
     const closes = candles.map(c => c.close);
@@ -169,15 +169,6 @@ export class UnifiedPatternSignalEngineV20 {
     const macdHist = macd.map((v, i) => v - macdSignal[i]);
     const atrs = ema(trueRanges(candles), 14);
 
-    let cumPV = 0;
-    let cumVol = 0;
-    const vwaps = candles.map((c, i) => {
-      const typical = (c.high + c.low + c.close) / 3;
-      cumPV += typical * volumes[i];
-      cumVol += volumes[i];
-      return cumVol > 0 ? cumPV / cumVol : c.close;
-    });
-
     const last = candles.length - 1;
     const volumeBase = volumes.slice(-21, -1);
     const avgVol20 = volumeBase.length ? volumeBase.reduce((a, b) => a + b, 0) / volumeBase.length : 0;
@@ -188,7 +179,9 @@ export class UnifiedPatternSignalEngineV20 {
     const rsi14v = rsi14s[last];
     const macdHistogram = macdHist[last];
     const atr14 = atrs[last];
-    const vwap = vwaps[last];
+    // Intraday VWAP must reset at the active market session boundary.
+    // Falling back to the latest close is safer than mixing previous sessions.
+    const vwap = sessionVwapV20(candles, input.market) ?? closes[last];
     const atrPct = price > 0 ? atr14 / price * 100 : 0;
     const vwapDistancePct = vwap > 0 ? (price - vwap) / vwap * 100 : 0;
     const pattern = detectPattern(candles);
