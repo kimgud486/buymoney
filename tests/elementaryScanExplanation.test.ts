@@ -27,6 +27,15 @@ test("pattern history never invents a percentage when there is no detected patte
   assert.equal(stats.sufficient, false);
 });
 
+test("neutral direction never gets treated as bearish history", () => {
+  const stats = calculatePatternHistory(candles(160), "BULLISH_ENGULFING", "NEUTRAL");
+  assert.equal(stats.sampleCount, 0);
+  assert.equal(stats.hitRate, null);
+  assert.equal(stats.recentHitRate, null);
+  assert.equal(stats.sufficient, false);
+  assert.match(stats.message, /방향이 아직 정해지지 않아/);
+});
+
 test("easy explanation fails closed when completed real candles are insufficient", () => {
   assert.equal(buildElementaryScanExplanation(candles(30), "KOREA"), null);
 });
