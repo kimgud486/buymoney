@@ -13,11 +13,14 @@ function normalizedText(node: Element | null | undefined): string {
   return (node?.textContent || "").replace(/\s+/g, " ").trim();
 }
 
+function setTextIfChanged(node: HTMLElement | null | undefined, next: string): void {
+  if (!node) return;
+  if ((node.textContent || "") !== next) node.textContent = next;
+}
+
 /**
- * Mobile/readability repair layer for the legacy dashboard panels.
- *
- * Important: this component changes presentation labels only. It never invents
- * a market price, never marks an order as filled, and never unlocks trading.
+ * Mobile/readability repair layer for legacy dashboard panels.
+ * Presentation only: never invents prices/fills and never unlocks trading.
  */
 export default function AiSignalsResponsiveLayoutFix() {
   useEffect(() => {
@@ -41,9 +44,7 @@ export default function AiSignalsResponsiveLayoutFix() {
           box-sizing: border-box !important;
         }
 
-        [data-ai-signals-panel="true"] {
-          overflow: hidden !important;
-        }
+        [data-ai-signals-panel="true"] { overflow: hidden !important; }
 
         [data-ai-signals-box="true"] {
           display: grid !important;
@@ -53,17 +54,10 @@ export default function AiSignalsResponsiveLayoutFix() {
 
         [data-ai-signals-state-row="true"],
         [data-ai-signals-stock-row="true"],
-        [data-ai-signals-tech-row="true"] {
-          width: 100% !important;
-        }
+        [data-ai-signals-tech-row="true"] { width: 100% !important; }
 
-        [data-ai-signals-stock-row="true"] > * {
-          min-width: 0 !important;
-        }
-
-        [data-ai-signals-stock-name="true"] {
-          overflow-wrap: anywhere !important;
-        }
+        [data-ai-signals-stock-row="true"] > * { min-width: 0 !important; }
+        [data-ai-signals-stock-name="true"] { overflow-wrap: anywhere !important; }
 
         [data-ai-price-waiting="true"] {
           font-size: 11px !important;
@@ -84,20 +78,14 @@ export default function AiSignalsResponsiveLayoutFix() {
           opacity: 0.72 !important;
         }
 
-        [data-v11-pipeline-steps="true"] {
-          scrollbar-width: thin;
-        }
+        [data-v11-pipeline-steps="true"] { scrollbar-width: thin; }
 
         @media (max-width: 640px) {
           [data-ai-signals-panel="true"],
           [data-trade-log-panel="true"],
-          [data-v11-console="true"] {
-            overflow: hidden !important;
-          }
+          [data-v11-console="true"] { overflow: hidden !important; }
 
-          [data-ai-signals-box="true"] {
-            padding: 12px !important;
-          }
+          [data-ai-signals-box="true"] { padding: 12px !important; }
 
           [data-ai-signals-state-row="true"] {
             display: grid !important;
@@ -173,9 +161,7 @@ export default function AiSignalsResponsiveLayoutFix() {
             white-space: normal !important;
           }
 
-          [data-v11-engine-top="true"] {
-            align-items: stretch !important;
-          }
+          [data-v11-engine-top="true"] { align-items: stretch !important; }
 
           [data-v11-engine-actions="true"] {
             display: grid !important;
@@ -198,9 +184,7 @@ export default function AiSignalsResponsiveLayoutFix() {
             gap: 7px !important;
           }
 
-          [data-v11-pipeline-steps="true"] > span {
-            display: none !important;
-          }
+          [data-v11-pipeline-steps="true"] > span { display: none !important; }
 
           [data-v11-pipeline-steps="true"] > div {
             width: 100% !important;
@@ -241,7 +225,7 @@ export default function AiSignalsResponsiveLayoutFix() {
         const normalizedPrice = normalizedText(priceNode).replace(/\s+/g, "");
         const zeroLikePrice = /^(₩|\$)?0(?:\.0+)?$/.test(normalizedPrice);
         if (priceNode && zeroLikePrice) {
-          priceNode.textContent = "시세 수신 대기";
+          setTextIfChanged(priceNode, "시세 수신 대기");
           priceNode.dataset.aiPriceWaiting = "true";
         } else if (priceNode) {
           delete priceNode.dataset.aiPriceWaiting;
@@ -258,8 +242,8 @@ export default function AiSignalsResponsiveLayoutFix() {
           const buttons = Array.from(actions.querySelectorAll("button")) as HTMLButtonElement[];
           const buy = buttons.find((button) => normalizedText(button).includes("매수"));
           const sell = buttons.find((button) => normalizedText(button).includes("매도"));
-          if (buy) buy.textContent = buy.disabled || state !== "BUY" ? "매수 조건 대기" : "매수 실행";
-          if (sell) sell.textContent = sell.disabled || state !== "SELL" ? "매도 조건 대기" : "매도 실행";
+          setTextIfChanged(buy, buy?.disabled || state !== "BUY" ? "매수 조건 대기" : "매수 실행");
+          setTextIfChanged(sell, sell?.disabled || state !== "SELL" ? "매도 조건 대기" : "매도 실행");
         }
       }
 
@@ -270,17 +254,18 @@ export default function AiSignalsResponsiveLayoutFix() {
         if (waitingForPrice) {
           const spans = Array.from(techRow.querySelectorAll("span")) as HTMLElement[];
           const scoreValue = spans.find((node) => /(?:0\s*\/\s*100|계산\s*중|계산\s*대기)/.test(normalizedText(node)));
-          if (scoreValue) scoreValue.textContent = "데이터 수신 대기";
+          setTextIfChanged(scoreValue, "데이터 수신 대기");
         }
 
         const validationNode = techRow.lastElementChild as HTMLElement | null;
-        if (validationNode) {
-          validationNode.textContent = state === "BUY"
+        setTextIfChanged(
+          validationNode,
+          state === "BUY"
             ? "매수 조건 충족 · 주문 전 확인 필요"
             : state === "SELL"
               ? "매도 조건 충족 · 주문 전 확인 필요"
-              : "신호 검증 대기";
-        }
+              : "신호 검증 대기",
+        );
       }
     };
 
@@ -335,7 +320,10 @@ export default function AiSignalsResponsiveLayoutFix() {
       const candidateDivs = consoleRoot ? Array.from(consoleRoot.querySelectorAll("div")) : [];
       const steps = candidateDivs.find((node) => {
         const text = normalizedText(node);
-        return text.includes("1. 마켓 스캐너") && text.includes("2. 통합 패턴분석") && text.includes("5. 잔고/청산 관리");
+        return node.className.includes("overflow-x-auto")
+          && text.includes("1. 마켓 스캐너")
+          && text.includes("2. 통합 패턴분석")
+          && text.includes("5. 잔고/청산 관리");
       }) as HTMLElement | undefined;
       if (steps) steps.dataset.v11PipelineSteps = "true";
 
@@ -343,9 +331,10 @@ export default function AiSignalsResponsiveLayoutFix() {
         ? Array.from(titleWrap.querySelectorAll("span")).find((node) => /RUNNING|PAUSED/.test(normalizedText(node))) as HTMLElement | undefined
         : undefined;
       if (statusBadge && normalizedText(statusBadge).startsWith("RUNNING")) {
-        statusBadge.textContent = latestHub.hasData
-          ? "RUNNING · 실시간 데이터 수신 중"
-          : "RUNNING · 데이터 대기 중";
+        setTextIfChanged(
+          statusBadge,
+          latestHub.hasData ? "RUNNING · 실시간 데이터 수신 중" : "RUNNING · 데이터 대기 중",
+        );
         statusBadge.title = "RUNNING은 감시 루프 상태입니다. 실제 주문 가능 여부는 브로커·계좌·시세 검증과 주문 잠금 상태를 별도로 확인합니다.";
       }
     };
