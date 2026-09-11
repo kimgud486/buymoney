@@ -5,6 +5,7 @@ import {
 } from "../scanner/elementaryScanExplanation";
 
 type Market = "KOREA" | "US" | "BTC";
+type MarketFilter = "ALL" | Market;
 
 type ScanIdea = {
   symbol: string;
@@ -21,6 +22,13 @@ type DetailState = {
   error: string;
   explanation: ElementaryScanExplanation | null;
 };
+
+const MARKET_BUTTONS: Array<{ value: MarketFilter; label: string; server: "ALL" | "KOREA" | "US" | "UPBIT" }> = [
+  { value: "ALL", label: "전체", server: "ALL" },
+  { value: "KOREA", label: "국내", server: "KOREA" },
+  { value: "US", label: "해외", server: "US" },
+  { value: "BTC", label: "업비트", server: "UPBIT" },
+];
 
 function normalizeMarket(symbol: string, raw: unknown): Market {
   const market = String(raw || "").toUpperCase();
@@ -54,12 +62,17 @@ export const ElementaryScanExplanationPanel: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [scannedAt, setScannedAt] = useState("");
+  const [selectedMarket, setSelectedMarket] = useState<MarketFilter>("ALL");
 
-  const fetchIdeas = useCallback(async () => {
+  const fetchIdeas = useCallback(async (marketFilter: MarketFilter) => {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/explainable-scanner?market=ALL&aiExplain=true", { cache: "no-store" });
+      const serverMarket = MARKET_BUTTONS.find((item) => item.value === marketFilter)?.server || "ALL";
+      const response = await fetch(
+        `/api/explainable-scanner?market=${encodeURIComponent(serverMarket)}&aiExplain=true`,
+        { cache: "no-store" },
+      );
       if (!response.ok) throw new Error(`스캔 서버 연결 실패 (${response.status})`);
       const payload = await response.json();
       if (!payload?.success || payload?.authority !== "REAL_PRECHECK_ONLY" || payload?.finalAuthority !== "SERVER_V20_FINAL_REQUIRED") {
@@ -70,10 +83,12 @@ export const ElementaryScanExplanationPanel: React.FC = () => {
         const symbol = String(raw?.symbol || "").trim();
         const price = Number(raw?.price);
         if (!symbol || !(price > 0)) return [];
+        const market = normalizeMarket(symbol, raw?.market);
+        if (marketFilter !== "ALL" && market !== marketFilter) return [];
         return [{
           symbol,
           name: String(raw?.name || symbol),
-          market: normalizeMarket(symbol, raw?.market),
+          market,
           price,
           score: Math.max(0, Math.min(100, Math.round(Number(raw?.score) || 0))),
           pattern: String(raw?.pattern || "NONE"),
@@ -91,10 +106,19 @@ export const ElementaryScanExplanationPanel: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    fetchIdeas();
-    const timer = window.setInterval(fetchIdeas, 30000);
+    fetchIdeas(selectedMarket);
+    const timer = window.setInterval(() => fetchIdeas(selectedMarket), 30000);
     return () => window.clearInterval(timer);
-  }, [fetchIdeas]);
+  }, [fetchIdeas, selectedMarket]);
+
+  const changeMarket = (market: MarketFilter) => {
+    if (market === selectedMarket) {
+      void fetchIdeas(market);
+      return;
+    }
+    setSelected(null);
+    setSelectedMarket(market);
+  };
 
   const openDetail = async (idea: ScanIdea) => {
     if (selected === idea.symbol) {
@@ -147,10 +171,29 @@ export const ElementaryScanExplanationPanel: React.FC = () => {
               <span className="text-[11px] font-bold rounded-full px-2 py-1 bg-cyan-50 border border-cyan-200 text-cyan-800">국내 · 해외 · 업비트</span>
             </div>
             <p className="text-xs text-slate-500 mt-1">종목을 누르면 “왜 찾았는지 → 언제 볼지 → 어디가 위험한지 → 예전에 몇 번 맞았는지”를 쉬운 말로 보여줘요.</p>
+            <div className="mt-2 flex items-center gap-1.5 flex-wrap" data-testid="elementary-market-filter">
+              {MARKET_BUTTONS.map((button) => (
+                <button
+                  key={button.value}
+                  type="button"
+                  onClick={() => changeMarket(button.value)}
+                  disabled={loading && selectedMarket === button.value}
+                  className={`rounded-lg border px-2.5 py-1 text-[11px] font-black transition ${
+                    selectedMarket === button.value
+                      ? "border-cyan-600 bg-cyan-600 text-white"
+                      : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
+                  } disabled:opacity-60`}
+                  aria-pressed={selectedMarket === button.value}
+                >
+                  {button.value === "KOREA" ? "🇰🇷 " : button.value === "US" ? "🇺🇸 " : button.value === "BTC" ? "🪙 " : "🌐 "}
+                  {button.label}
+                </button>
+              ))}
+            </div>
           </div>
           <button
             type="button"
-            onClick={fetchIdeas}
+            onClick={() => fetchIdeas(selectedMarket)}
             disabled={loading}
             className="self-start sm:self-auto rounded-xl border border-slate-300 px-3 py-2 text-xs font-bold hover:bg-slate-50 disabled:opacity-50"
           >
@@ -161,9 +204,13 @@ export const ElementaryScanExplanationPanel: React.FC = () => {
         {error ? (
           <div className="p-5 text-sm font-bold text-rose-700 bg-rose-50">⚠️ {error}</div>
         ) : loading && ideas.length === 0 ? (
-          <div className="p-6 text-center text-sm text-slate-500">실제 스캔 결과를 확인하고 있어요...</div>
+          <div className="p-6 text-center text-sm text-slate-500">
+            {selectedMarket === "KOREA" ? "국내" : selectedMarket === "US" ? "해외" : selectedMarket === "BTC" ? "업비트" : "전체 시장"} 실제 스캔 결과를 확인하고 있어요...
+          </div>
         ) : ideas.length === 0 ? (
-          <div className="p-6 text-center text-sm text-slate-500">지금 조건을 통과한 실제 스캔 종목이 없어요.</div>
+          <div className="p-6 text-center text-sm text-slate-500">
+            선택한 시장에서 지금 조건을 통과한 실제 스캔 종목이 없어요.
+          </div>
         ) : (
           <div className="divide-y divide-slate-200">
             {ideas.map((idea) => {
@@ -268,6 +315,7 @@ export const ElementaryScanExplanationPanel: React.FC = () => {
 
         <div className="px-4 py-2 bg-slate-50 border-t border-slate-200 text-[10px] text-slate-500 flex justify-between gap-2 flex-wrap">
           <span>고정 가격표가 아니라 실제 캔들에서 지지·저항·ATR·VWAP을 다시 계산해요.</span>
+          <span>{selectedMarket === "KOREA" ? "국내만 스캔 중" : selectedMarket === "US" ? "해외만 스캔 중" : selectedMarket === "BTC" ? "업비트만 스캔 중" : "전체 시장 스캔 중"}</span>
           {scannedAt && <span>마지막 스캔: {scannedAt}</span>}
         </div>
       </div>
