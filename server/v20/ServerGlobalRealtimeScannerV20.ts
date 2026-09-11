@@ -1,8 +1,9 @@
 // ----------------------------------------------------------------------
-// SERVER GLOBAL REALTIME SCANNER V20.6
+// SERVER GLOBAL REALTIME SCANNER V20.7
 // TRUTH-FIRST / NO FABRICATED FALLBACKS
 // KR + US + UPBIT
 // BUY requires Truth Bridge + verified 1m/3m/5m/D + executable pattern.
+// Score/grade are capped by actual evidence coverage so incomplete data cannot look A/S grade.
 // ----------------------------------------------------------------------
 
 import { TrueMTFEvidenceV20, TrueMTFGateResultV20, TrueMTFSignalGateV20 } from "./TrueMTFSignalGateV20";
@@ -41,6 +42,22 @@ function approximatelyEqual(a: number, b: number, relativeTolerance = 1e-9): boo
 function hasSuspectDerivedLiquidityShape(input: ScanCandidateInput): boolean {
   if (!positive(input.price) || !positive(input.volume) || !positive(input.rvol) || !validNumber(input.tradeValue)) return false;
   return input.volume <= 20 && approximatelyEqual(input.volume, input.rvol, 1e-7) && approximatelyEqual(input.tradeValue, input.price * input.volume, 1e-7);
+}
+
+/**
+ * Prevent an evidence-poor candidate from receiving an A/S-looking score.
+ *  - <60% coverage: cannot exceed REJECT/C boundary (61)
+ *  - 60-74%: cannot exceed B/WATCH boundary (75)
+ *  - 75-89%: cannot exceed A boundary (87), but BUY still requires the hard evidence gate
+ *  - >=90%: raw score is retained
+ */
+export function capScannerScoreByEvidence(rawScore: number, dataCoveragePct: number): number {
+  const score = Math.max(0, Math.min(100, Math.round(rawScore)));
+  const coverage = Math.max(0, Math.min(100, Math.round(dataCoveragePct)));
+  if (coverage < 60) return Math.min(score, 61);
+  if (coverage < 75) return Math.min(score, 75);
+  if (coverage < 90) return Math.min(score, 87);
+  return score;
 }
 
 export class ServerGlobalRealtimeScannerV20 {
@@ -91,13 +108,24 @@ export class ServerGlobalRealtimeScannerV20 {
     if (validNumber(input.orderbookImbalance)) { if (input.orderbookImbalance > .2) score += 4; else if (input.orderbookImbalance < -.2) score -= 6; }
     if (validNumber(input.signedFlow)) score += input.signedFlow > 0 ? 3 : input.signedFlow < 0 ? -3 : 0;
     if (patternGate.passed) score += Math.min(6, patternGate.executableMatches.length * 2);
-    score = Math.max(0, Math.min(100, Math.round(score)));
+    score = capScannerScoreByEvidence(score, dataCoveragePct);
 
     const buyEvidenceComplete = input.dataStatus === "REALTIME_VERIFIED" && dataCoveragePct >= 60 && rsValues.length > 0 && positive(input.vwap) && positive(input.ema20) && positive(input.rvol) && patternGate.passed && trueMtfGate.passed;
     let grade: ScanCandidateResult["grade"]; let recommendation: ScanCandidateResult["recommendation"];
     if (score >= 88) { grade="S"; recommendation="BUY_CANDIDATE"; } else if (score >= 76) { grade="A"; recommendation="BUY_CANDIDATE"; } else if (score >= 62) { grade="B"; recommendation="WATCH"; } else { grade="C"; recommendation="REJECT"; }
-    if (input.dataStatus === "REALTIME_DERIVED" && recommendation === "BUY_CANDIDATE") recommendation = "WATCH";
-    if (recommendation === "BUY_CANDIDATE" && !buyEvidenceComplete) recommendation = "WATCH";
+
+    // Derived/incomplete evidence can never be presented with an A/S-looking grade.
+    if (input.dataStatus === "REALTIME_DERIVED" && recommendation === "BUY_CANDIDATE") {
+      recommendation = "WATCH";
+      grade = "B";
+      score = Math.min(score, 75);
+    }
+    if (recommendation === "BUY_CANDIDATE" && !buyEvidenceComplete) {
+      recommendation = "WATCH";
+      grade = "B";
+      score = Math.min(score, 75);
+    }
+
     return { ...input, setupScore: score, grade, recommendation, missingFields, dataCoveragePct, trueMtfGate, patternGate, timestamp };
   }
 
