@@ -1,0 +1,49 @@
+name: Profile Market Type One Shot
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-profile-market-type:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm ci
+      - name: Align profile market type with runtime
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/types.ts')
+          text = path.read_text()
+          old = "  autoTradingTargetMarket?: 'ALL' | 'KOREA' | 'US';"
+          new = "  autoTradingTargetMarket?: 'ALL' | 'KOREA' | 'US' | 'BTC';"
+          if old not in text:
+              if new in text:
+                  raise SystemExit(0)
+              raise SystemExit('autoTradingTargetMarket type anchor missing')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: TypeScript check
+        run: npx tsc --noEmit
+      - name: Commit patch
+        run: |
+          if git diff --quiet; then
+            echo "No changes needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/types.ts
+          git commit -m "fix: include BTC in auto trading target market type"
+          git push
