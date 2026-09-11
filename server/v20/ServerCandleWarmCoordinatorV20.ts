@@ -23,7 +23,7 @@ const DEFAULT_INTRADAY_COUNT = 180;
 const KOREA_INTRADAY_COUNT = 600;
 const ANALYSIS_COUNT = 70;
 const MIN_1M_WARM = 55;
-const MIN_15M_ANALYSIS = 35;
+const MIN_15M_ANALYSIS = 20;
 
 function cleanCandles(raw: unknown): Candle[] {
   if (!Array.isArray(raw)) return [];
