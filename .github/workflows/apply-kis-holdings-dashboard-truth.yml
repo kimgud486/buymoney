@@ -71,6 +71,11 @@ jobs:
           git add server.ts src/context/AppContext.tsx src/components/trading/MasterAiAutoTradingDashboard.tsx src/App.tsx
           git commit -m "fix: restore KIS overseas holdings and truthful live dashboard"
 
+          # The quote-normalization step intentionally edits only the temporary
+          # applicator in the runner workspace. Do not carry that helper mutation
+          # into the product commit or let it block the rebase.
+          git restore -- scripts/fix-kis-holdings-and-dashboard-truth.mjs
+
           # main can advance while lint/build run. Rebase the already-verified patch
           # on top of the latest main; fail safely on any real product conflict.
           git fetch origin main
