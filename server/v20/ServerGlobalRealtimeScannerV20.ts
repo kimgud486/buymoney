@@ -3,7 +3,8 @@
 // TRUTH-FIRST / NO FABRICATED FALLBACKS
 // KR + US + UPBIT
 // BUY requires Truth Bridge + verified 1m/3m/5m/D + executable pattern
-// + a truth-checked live microstructure gate on the realtime hub path.
+// + a truth-checked live microstructure gate when V20.10 evidence is attached.
+// Candidates without V20.10 evidence retain exact V20.9 scoring for shadow use.
 // ----------------------------------------------------------------------
 
 import { TrueMTFEvidenceV20, TrueMTFGateResultV20, TrueMTFSignalGateV20 } from "./TrueMTFSignalGateV20";
@@ -113,11 +114,19 @@ export class ServerGlobalRealtimeScannerV20 {
     if (positive(input.ema20) && positive(input.ema50) && input.ema20 > input.ema50) score += 5;
     if (input.structureTrend === "BULLISH") score += 10; else if (input.structureTrend === "BEARISH") score -= 15;
     if (input.isBreakout) score += 7; if (input.isRetest) score += 6;
-    // V20.10: spread may influence score only after the server-owned truth gate
-    // confirms the quote. orderbookImbalance/signedFlow are intentionally not
-    // scored until real depth/aggressor source fields are wired into the hub.
-    if (input.microstructure?.passed && validNumber(input.spreadBps)) {
+
+    const legacyMicrostructureMode = !input.microstructure;
+    // V20.10 scoring is allowed only after server-owned live evidence passes.
+    // When no V20.10 evidence is attached, preserve the exact V20.9 behavior
+    // so Shadow comparisons have a faithful baseline.
+    if ((legacyMicrostructureMode || input.microstructure?.passed) && validNumber(input.spreadBps)) {
       if (input.spreadBps > 80) score -= 20; else if (input.spreadBps > 50) score -= 12; else if (input.spreadBps <= 20) score += 3;
+    }
+    if (legacyMicrostructureMode && validNumber(input.orderbookImbalance)) {
+      if (input.orderbookImbalance > .2) score += 4; else if (input.orderbookImbalance < -.2) score -= 6;
+    }
+    if (legacyMicrostructureMode && validNumber(input.signedFlow)) {
+      score += input.signedFlow > 0 ? 3 : input.signedFlow < 0 ? -3 : 0;
     }
     if (patternGate.passed) score += Math.min(6, patternGate.executableMatches.length * 2);
     score = Math.max(0, Math.min(100, Math.round(score)));
