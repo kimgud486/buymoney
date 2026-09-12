@@ -14,6 +14,8 @@ export interface V2010ShadowDecisionPolicyOptions {
   observedAt?: number;
   record?: boolean;
   recorder?: V2010ShadowComparisonRecorder;
+  /** Optional result from a direct server authority call. */
+  v2010Result?: ScanCandidateResult;
 }
 
 export interface V2010ShadowDecisionResult {
@@ -33,6 +35,9 @@ export function v2010EnforcementEnabled(envValue = process.env.AISTOCK_V20_10_EN
  * Default production behavior is intentionally V20.9. V20.10 is Shadow-only
  * until AISTOCK_V20_10_ENFORCE=1 is explicitly enabled after evidence review.
  * This lets real observations accumulate without changing BUY decisions first.
+ *
+ * Final server authority may pass a precomputed direct scanner result so the
+ * existing authority chain remains explicit and auditable.
  */
 export function evaluateCandidateWithV2010ShadowPolicy(
   input: ScanCandidateInput,
@@ -40,7 +45,7 @@ export function evaluateCandidateWithV2010ShadowPolicy(
 ): V2010ShadowDecisionResult {
   const observedAt = Number.isFinite(options.observedAt) ? options.observedAt! : Date.now();
   const baseline = evaluateV209BaselineForShadow(input);
-  const v2010 = ServerGlobalRealtimeScannerV20.evaluateCandidate(input);
+  const v2010 = options.v2010Result ?? ServerGlobalRealtimeScannerV20.evaluateCandidate(input);
   const enforced = options.enforce ?? v2010EnforcementEnabled();
 
   if (options.record !== false) {
