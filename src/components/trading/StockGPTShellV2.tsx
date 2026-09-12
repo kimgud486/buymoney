@@ -27,6 +27,7 @@ import { MASTER_STOCK_UNIVERSE_METADATA } from "../../data/stockUniverse";
 import { LiveMarketQuote, realtimeMarketFeedService } from "../../services/realtimeMarketFeedService";
 import { RealTimeTradingViewChart } from "./RealTimeTradingViewChart";
 import StockGPTFeaturePanels from "./StockGPTFeaturePanels";
+import StockGPTVerifiedFinancialPanel from "./StockGPTVerifiedFinancialPanel";
 import StockGPTVerifiedNewsPanel from "./StockGPTVerifiedNewsPanel";
 
 type Candle = {
@@ -736,7 +737,7 @@ export default function StockGPTShellV2() {
                   </div>
                 )}
 
-                {stockTab === "financials" && <TruthUnavailablePanel title="재무 정보" reason="현재 Stock GPT에 연결된 검증 재무 공급자를 아직 안전 감사하지 않았습니다." />}
+                {stockTab === "financials" && <StockGPTVerifiedFinancialPanel symbol={selectedQuote.symbol} market={selectedQuote.market} />}
                 {stockTab === "news" && <StockGPTVerifiedNewsPanel symbol={selectedQuote.symbol} />}
                 {stockTab === "community" && <TruthUnavailablePanel title="토론 커뮤니티" reason="검증 가능한 커뮤니티 원문 공급자와 출처 표시가 아직 연결되지 않았습니다." />}
 
