@@ -3,6 +3,7 @@ import {
   ScanCandidateResult,
   ServerGlobalRealtimeScannerV20
 } from "./ServerGlobalRealtimeScannerV20";
+import { evaluateCandidateWithV2010ShadowPolicy } from "./V2010ShadowDecisionPolicy";
 import {
   BuyHoldActionV20,
   BuyHoldDecisionResultV20,
@@ -135,17 +136,20 @@ function applyPatternAuthority(
 /**
  * Final server-side BUY & HOLD authority.
  *
- * One call performs:
- * REAL DATA candidate -> V20 scanner -> executable-pattern gate -> True MTF ->
- * performance DB -> STRONG_BUY/BUY/WATCH/NO or KEEP_HOLD/REDUCE/EXIT ->
- * verified trade plan.
+ * The direct ServerGlobalRealtimeScannerV20 authority call remains explicit.
+ * V20.10 then compares that same server-owned candidate against the V20.9
+ * baseline in Shadow mode. Production decisions stay on V20.9 until
+ * AISTOCK_V20_10_ENFORCE=1 is explicitly enabled after evidence review.
  *
  * It intentionally does not place orders. Execution remains behind the
  * existing live-account, broker-ack, idempotency and kill-switch gates.
  */
 export class FinalBuyHoldDecisionServiceV20 {
   public static evaluate(request: FinalBuyHoldRequestV20): FinalBuyHoldResponseV20 {
-    const scan = ServerGlobalRealtimeScannerV20.evaluateCandidate(request.candidate);
+    const v2010Authority = ServerGlobalRealtimeScannerV20.evaluateCandidate(request.candidate);
+    const scan = evaluateCandidateWithV2010ShadowPolicy(request.candidate, {
+      v2010Result: v2010Authority,
+    }).production;
     const currentPrice = finitePositive(request.currentPrice)
       ? request.currentPrice
       : scan.price;

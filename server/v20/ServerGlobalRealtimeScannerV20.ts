@@ -1,13 +1,16 @@
 // ----------------------------------------------------------------------
-// SERVER GLOBAL REALTIME SCANNER V20.6
+// SERVER GLOBAL REALTIME SCANNER V20.10
 // TRUTH-FIRST / NO FABRICATED FALLBACKS
 // KR + US + UPBIT
-// BUY requires Truth Bridge + verified 1m/3m/5m/D + executable pattern.
+// BUY requires Truth Bridge + verified 1m/3m/5m/D + executable pattern
+// + a truth-checked live microstructure gate when V20.10 evidence is attached.
+// Candidates without V20.10 evidence retain exact V20.9 scoring for shadow use.
 // ----------------------------------------------------------------------
 
 import { TrueMTFEvidenceV20, TrueMTFGateResultV20, TrueMTFSignalGateV20 } from "./TrueMTFSignalGateV20";
 import { ExecutablePatternGateResultV20, ExecutablePatternGateV20 } from "./ExecutablePatternGateV20";
 import { ScannerCandidateTruthBridgeV20 } from "./ScannerCandidateTruthBridgeV20";
+import type { LiveMicrostructureEvidenceV2010 } from "./LiveMicrostructureGateV2010";
 
 export type MarketType = "KR" | "US" | "CRYPTO";
 export type ExchangeType = "KOSPI" | "KOSDAQ" | "NASDAQ" | "NYSE" | "AMEX" | "UPBIT" | "UNKNOWN";
@@ -20,7 +23,11 @@ export interface ScanCandidateInput {
   volume: number; tradeValue: number; rvol: number; liquiditySource?: string;
   rs5m?: number; rs15m?: number; rs1h?: number; rs1d?: number;
   vwap?: number; ema9?: number; ema20?: number; ema50?: number; atr14?: number; rsi14?: number;
-  spreadBps?: number; orderbookImbalance?: number; signedFlow?: number;
+  spreadBps?: number;
+  /** Reserved for source-verified depth/flow only. Never synthesize from price. */
+  orderbookImbalance?: number; signedFlow?: number;
+  /** Present on the server realtime-hub path. Legacy callers stay compatible. */
+  microstructure?: LiveMicrostructureEvidenceV2010;
   patterns?: string[]; structureTrend?: "BULLISH" | "BEARISH" | "SIDEWAYS";
   isBreakout?: boolean; isRetest?: boolean; chaseRisk?: boolean; exhaustionRisk?: boolean;
   trueMtf?: TrueMTFEvidenceV20; dataStatus: DataTruthStatus;
@@ -75,8 +82,28 @@ export class ServerGlobalRealtimeScannerV20 {
     if (!input.structureTrend) missingFields.push("structureTrend");
     if (!trueMtfGate.passed) missingFields.push("trueMTF:1m+3m+5m+D");
     if (!patternGate.passed) missingFields.push("executablePattern");
+    if (input.microstructure?.required && !input.microstructure.passed) {
+      missingFields.push(`microstructure:${input.microstructure.status}`);
+      for (const field of input.microstructure.missingFields) {
+        const label = `microstructure:${field}`;
+        if (!missingFields.includes(label)) missingFields.push(label);
+      }
+    }
 
-    const coverageChecks = [rsValues.length > 0, positive(input.vwap), positive(input.ema9), positive(input.ema20), positive(input.ema50), positive(input.atr14), validNumber(input.rsi14), validNumber(input.spreadBps), Boolean(input.structureTrend), patternGate.passed, trueMtfGate.passed];
+    const microstructureReady = input.microstructure?.required ? input.microstructure.passed : true;
+    const coverageChecks = [
+      rsValues.length > 0,
+      positive(input.vwap),
+      positive(input.ema9),
+      positive(input.ema20),
+      positive(input.ema50),
+      positive(input.atr14),
+      validNumber(input.rsi14),
+      input.microstructure?.required ? input.microstructure.passed : validNumber(input.spreadBps),
+      Boolean(input.structureTrend),
+      patternGate.passed,
+      trueMtfGate.passed,
+    ];
     const dataCoveragePct = Math.round((coverageChecks.filter(Boolean).length / coverageChecks.length) * 100);
 
     let score = 35;
@@ -87,13 +114,32 @@ export class ServerGlobalRealtimeScannerV20 {
     if (positive(input.ema20) && positive(input.ema50) && input.ema20 > input.ema50) score += 5;
     if (input.structureTrend === "BULLISH") score += 10; else if (input.structureTrend === "BEARISH") score -= 15;
     if (input.isBreakout) score += 7; if (input.isRetest) score += 6;
-    if (validNumber(input.spreadBps)) { if (input.spreadBps > 80) score -= 20; else if (input.spreadBps > 50) score -= 12; else if (input.spreadBps <= 20) score += 3; }
-    if (validNumber(input.orderbookImbalance)) { if (input.orderbookImbalance > .2) score += 4; else if (input.orderbookImbalance < -.2) score -= 6; }
-    if (validNumber(input.signedFlow)) score += input.signedFlow > 0 ? 3 : input.signedFlow < 0 ? -3 : 0;
+
+    const legacyMicrostructureMode = !input.microstructure;
+    // V20.10 scoring is allowed only after server-owned live evidence passes.
+    // When no V20.10 evidence is attached, preserve the exact V20.9 behavior
+    // so Shadow comparisons have a faithful baseline.
+    if ((legacyMicrostructureMode || input.microstructure?.passed) && validNumber(input.spreadBps)) {
+      if (input.spreadBps > 80) score -= 20; else if (input.spreadBps > 50) score -= 12; else if (input.spreadBps <= 20) score += 3;
+    }
+    if (legacyMicrostructureMode && validNumber(input.orderbookImbalance)) {
+      if (input.orderbookImbalance > .2) score += 4; else if (input.orderbookImbalance < -.2) score -= 6;
+    }
+    if (legacyMicrostructureMode && validNumber(input.signedFlow)) {
+      score += input.signedFlow > 0 ? 3 : input.signedFlow < 0 ? -3 : 0;
+    }
     if (patternGate.passed) score += Math.min(6, patternGate.executableMatches.length * 2);
     score = Math.max(0, Math.min(100, Math.round(score)));
 
-    const buyEvidenceComplete = input.dataStatus === "REALTIME_VERIFIED" && dataCoveragePct >= 60 && rsValues.length > 0 && positive(input.vwap) && positive(input.ema20) && positive(input.rvol) && patternGate.passed && trueMtfGate.passed;
+    const buyEvidenceComplete = input.dataStatus === "REALTIME_VERIFIED"
+      && dataCoveragePct >= 60
+      && rsValues.length > 0
+      && positive(input.vwap)
+      && positive(input.ema20)
+      && positive(input.rvol)
+      && patternGate.passed
+      && trueMtfGate.passed
+      && microstructureReady;
     let grade: ScanCandidateResult["grade"]; let recommendation: ScanCandidateResult["recommendation"];
     if (score >= 88) { grade="S"; recommendation="BUY_CANDIDATE"; } else if (score >= 76) { grade="A"; recommendation="BUY_CANDIDATE"; } else if (score >= 62) { grade="B"; recommendation="WATCH"; } else { grade="C"; recommendation="REJECT"; }
     if (input.dataStatus === "REALTIME_DERIVED" && recommendation === "BUY_CANDIDATE") recommendation = "WATCH";

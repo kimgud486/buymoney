@@ -1,8 +1,9 @@
 import { serverRealtimeMarketHubV20 } from "./ServerRealtimeMarketHubV20";
 import { ServerTrueMTFEvidenceProviderV20 } from "./ServerTrueMTFEvidenceProviderV20";
 import { latestSessionCandlesV20, sessionVwapV20 } from "./SessionAwareMarketMathV20";
+import { evaluateLiveMicrostructureV2010 } from "./LiveMicrostructureGateV2010";
+import { evaluateCandidateWithV2010ShadowPolicy } from "./V2010ShadowDecisionPolicy";
 import {
-  ServerGlobalRealtimeScannerV20,
   type DataTruthStatus,
   type ScanCandidateInput,
   type ScanCandidateResult,
@@ -118,6 +119,18 @@ function usablePattern(pattern?: string | null): string[] | undefined {
   return [code];
 }
 
+function scanCandidatesWithShadowV2010(inputs: ScanCandidateInput[]): ScanCandidateResult[] {
+  if (!Array.isArray(inputs)) return [];
+  const observedAt = Date.now();
+
+  return inputs
+    .map((input) => evaluateCandidateWithV2010ShadowPolicy(input, { observedAt }).production)
+    .filter((result) => result.recommendation !== "REJECT")
+    .sort((a, b) => b.setupScore !== a.setupScore
+      ? b.setupScore - a.setupScore
+      : b.dataCoveragePct - a.dataCoveragePct);
+}
+
 export class RealtimeHubCandidateBuilderV20 {
   public static build(symbol: string): RealtimeCandidateBuildResultV20 {
     const key = String(symbol || "").trim().toUpperCase();
@@ -166,8 +179,6 @@ export class RealtimeHubCandidateBuilderV20 {
     const sessionCandles = latestSessionCandlesV20(candles, quote.market);
     const closes = candles.map((c) => c.close);
     const signalIndicators = unifiedSignal?.dataStatus === "READY" ? unifiedSignal.indicators : null;
-    // Always prefer a session-correct VWAP. The unified engine uses the same helper,
-    // while this fallback protects the candidate path during warmup or stale signal cache.
     const vwapValue = sessionVwapV20(candles, quote.market) ?? signalIndicators?.vwap;
     const ema9 = signalIndicators?.ema9 ?? ema(closes, 9);
     const ema20 = signalIndicators?.ema20 ?? ema(closes, 20);
@@ -177,9 +188,17 @@ export class RealtimeHubCandidateBuilderV20 {
     const currentRvol = signalIndicators?.rvol20 ?? rvol(candles, 20);
     const first = sessionCandles[0] ?? candles[0];
     const latest = sessionCandles[sessionCandles.length - 1] ?? candles[candles.length - 1];
-    const spreadBps = quote.askPrice && quote.bidPrice && quote.askPrice >= quote.bidPrice && quote.price > 0
-      ? ((quote.askPrice - quote.bidPrice) / quote.price) * 10_000
-      : undefined;
+    const market = quote.market === "KOREA" ? "KR" : quote.market === "US" ? "US" : "CRYPTO";
+    const microstructure = evaluateLiveMicrostructureV2010({
+      market,
+      price: quote.price,
+      bidPrice: quote.bidPrice,
+      askPrice: quote.askPrice,
+      quoteUpdatedAt: quote.updatedAt,
+      rvol: currentRvol,
+      atr14,
+    });
+    const spreadBps = microstructure.spreadBps ?? undefined;
     const detectedPatterns = unifiedSignal?.dataStatus === "READY"
       ? usablePattern(unifiedSignal.pattern)
       : undefined;
@@ -187,7 +206,7 @@ export class RealtimeHubCandidateBuilderV20 {
     const candidate: ScanCandidateInput = {
       symbol: quote.symbol,
       name: quote.name,
-      market: quote.market === "KOREA" ? "KR" : quote.market === "US" ? "US" : "CRYPTO",
+      market,
       exchange: quote.market === "UPBIT" ? "UPBIT" : "UNKNOWN",
       price: quote.price,
       openPrice: first?.open,
@@ -205,6 +224,7 @@ export class RealtimeHubCandidateBuilderV20 {
       atr14,
       rsi14,
       spreadBps,
+      microstructure,
       patterns: detectedPatterns,
       structureTrend: structure(candles),
       isBreakout: unifiedSignal?.pattern === "BREAKOUT_20" || breakout(candles, 20),
@@ -217,11 +237,6 @@ export class RealtimeHubCandidateBuilderV20 {
     return { candidate, telemetry };
   }
 
-  /**
-   * Builds the same realtime candidate, then attaches server-owned 1m/3m/5m/D
-   * evidence. This keeps the fast capture path backward compatible while giving
-   * BUY promotion a truth-checked MTF path without trusting browser input.
-   */
   public static async buildWithTrueMtf(
     symbol: string,
     baseUrl: string,
@@ -254,7 +269,7 @@ export class RealtimeHubCandidateBuilderV20 {
     const built = symbols.map((s) => this.build(s));
     const inputs = built.flatMap((x) => x.candidate ? [x.candidate] : []);
     return {
-      candidates: ServerGlobalRealtimeScannerV20.scanCandidates(inputs),
+      candidates: scanCandidatesWithShadowV2010(inputs),
       telemetry: built.map((x) => x.telemetry),
     };
   }
@@ -269,7 +284,7 @@ export class RealtimeHubCandidateBuilderV20 {
     );
     const inputs = built.flatMap((x) => x.candidate ? [x.candidate] : []);
     return {
-      candidates: ServerGlobalRealtimeScannerV20.scanCandidates(inputs),
+      candidates: scanCandidatesWithShadowV2010(inputs),
       telemetry: built.map((x) => x.telemetry),
     };
   }
