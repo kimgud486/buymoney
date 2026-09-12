@@ -11,11 +11,86 @@ export interface KISRuntimeProbeResult {
   errors: string[];
 }
 
+export interface KISDomesticFundamentalsTruth {
+  dataStatus: "REALTIME_VERIFIED" | "NO_DATA";
+  source: "KIS_INQUIRE_PRICE";
+  symbol: string;
+  asOf: string | null;
+  per: number | null;
+  pbr: number | null;
+  eps: number | null;
+  bps: number | null;
+}
+
 type FetchLike = typeof fetch;
+
+const fundamentalsCache = new Map<string, KISDomesticFundamentalsTruth>();
+const FUNDAMENTALS_MAX_AGE_MS = 60_000;
+
+function emptyFundamentals(symbol: string): KISDomesticFundamentalsTruth {
+  return {
+    dataStatus: "NO_DATA",
+    source: "KIS_INQUIRE_PRICE",
+    symbol: String(symbol || "").trim().toUpperCase(),
+    asOf: null,
+    per: null,
+    pbr: null,
+    eps: null,
+    bps: null,
+  };
+}
 
 function toFiniteNumber(value: unknown): number | null {
   const n = Number(value);
   return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function toPositiveMetric(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function toNonZeroMetric(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n !== 0 ? n : null;
+}
+
+function storeFundamentalsFromQuote(symbol: string, output: any, asOf: string | null): void {
+  const cleanSymbol = String(symbol || "").trim().toUpperCase();
+  const per = toPositiveMetric(output?.per ?? output?.PER);
+  const pbr = toPositiveMetric(output?.pbr ?? output?.PBR);
+  const eps = toNonZeroMetric(output?.eps ?? output?.EPS);
+  const bps = toPositiveMetric(output?.bps ?? output?.BPS);
+  const hasAnyVerifiedMetric = per !== null || pbr !== null || eps !== null || bps !== null;
+
+  fundamentalsCache.set(cleanSymbol, {
+    dataStatus: hasAnyVerifiedMetric && asOf ? "REALTIME_VERIFIED" : "NO_DATA",
+    source: "KIS_INQUIRE_PRICE",
+    symbol: cleanSymbol,
+    asOf: hasAnyVerifiedMetric ? asOf : null,
+    per,
+    pbr,
+    eps,
+    bps,
+  });
+}
+
+export function getCachedKISDomesticFundamentals(
+  symbol: string,
+  nowMs: number = Date.now(),
+): KISDomesticFundamentalsTruth {
+  const cleanSymbol = String(symbol || "").trim().toUpperCase();
+  const cached = fundamentalsCache.get(cleanSymbol);
+  if (!cached || cached.dataStatus !== "REALTIME_VERIFIED" || !cached.asOf) {
+    return emptyFundamentals(cleanSymbol);
+  }
+
+  const asOfMs = Date.parse(cached.asOf);
+  if (!Number.isFinite(asOfMs) || nowMs - asOfMs > FUNDAMENTALS_MAX_AGE_MS || nowMs < asOfMs - 5_000) {
+    return emptyFundamentals(cleanSymbol);
+  }
+
+  return cached;
 }
 
 function seoulClock(nowMs: number): { weekday: number; hhmm: number } {
@@ -58,6 +133,7 @@ export async function probeKISDomesticRuntime(params: {
   const errors: string[] = [];
 
   if (!/^\d{6}$/.test(symbol) || !params.token || !appKey || !appSecret || !accountNo) {
+    if (/^\d{6}$/.test(symbol)) fundamentalsCache.set(symbol, emptyFundamentals(symbol));
     return {
       quoteSuccess: false,
       quoteAsOf: null,
@@ -94,13 +170,17 @@ export async function probeKISDomesticRuntime(params: {
         lastPrice = toFiniteNumber(data?.output?.stck_prpr ?? data?.output?.STCK_PRPR);
         quoteSuccess = Boolean(lastPrice && lastPrice > 0);
         quoteAsOf = quoteSuccess ? new Date(nowMs).toISOString() : null;
+        storeFundamentalsFromQuote(symbol, data?.output ?? {}, quoteAsOf);
       } else {
+        fundamentalsCache.set(symbol, emptyFundamentals(symbol));
         errors.push(`KIS quote rejected: ${String(data?.msg1 || data?.msg_cd || "UNKNOWN")}`);
       }
     } else {
+      fundamentalsCache.set(symbol, emptyFundamentals(symbol));
       errors.push(`KIS quote HTTP ${res.status}`);
     }
   } catch (error: any) {
+    fundamentalsCache.set(symbol, emptyFundamentals(symbol));
     errors.push(`KIS quote error: ${error?.message || String(error)}`);
   }
 
