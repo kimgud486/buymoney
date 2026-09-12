@@ -28,6 +28,20 @@ export interface LiveMarketQuote {
   status: "LIVE" | "STALE" | "UNAVAILABLE";
 }
 
+function parseOptionalMarketNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const parsed = Number(typeof value === "string" ? value.replace(/,/g, "") : value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseOptionalTimestamp(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 export function requireLiveData(quote: LiveMarketQuote | undefined): boolean {
   if (!quote) return false;
   if (quote.status !== "LIVE" || !quote.isVerified) return false;
@@ -160,9 +174,9 @@ class RealtimeMarketFeedService {
 
     const source = tick.feedSource || tick.source || "SERVER_STREAM";
     const provider = source.includes("KIS") ? "KIS" : source.includes("UPBIT") ? "UPBIT" : "SYSTEM_HUB";
-    const providerTimestamp = tick.providerTimestamp || tick.timestamp || Date.now();
-    const receivedAt = tick.receivedAt || Date.now();
-    const ageMs = Math.max(0, receivedAt - providerTimestamp);
+    const providerTimestamp = parseOptionalTimestamp(tick.providerTimestamp ?? tick.timestamp);
+    const receivedAt = parseOptionalTimestamp(tick.receivedAt) ?? Date.now();
+    const ageMs = providerTimestamp == null ? null : Math.max(0, receivedAt - providerTimestamp);
 
     const { isVerified } = MarketDataIntegrityGate.verifyQuote({
       symbol: cleanSymbol,
@@ -175,7 +189,7 @@ class RealtimeMarketFeedService {
     });
 
     const executionGradeSource = source === "KIS_REALTIME_WS" || source === "UPBIT_WS" || source === "US_BROKER_WS";
-    const fresh = ageMs <= 5000;
+    const fresh = ageMs != null && ageMs <= 5000;
     const prev = this.quotes.get(rawSymbol) || this.quotes.get(cleanSymbol);
 
     const updated: LiveMarketQuote = {
@@ -195,8 +209,8 @@ class RealtimeMarketFeedService {
       receivedAt,
       ageMs,
       isVerified,
-      trust: isVerified && fresh && executionGradeSource ? "EXECUTION_GRADE" : isVerified ? "ANALYSIS_ONLY" : "DISPLAY_ONLY",
-      status: isVerified && fresh ? "LIVE" : "STALE"
+      trust: isVerified && fresh && executionGradeSource ? "EXECUTION_GRADE" : isVerified ? "ANALYSIS_ONLY" : "NO_DATA",
+      status: isVerified && fresh ? "LIVE" : providerTimestamp == null ? "UNAVAILABLE" : "STALE"
     };
 
     this.quotes.set(cleanSymbol, updated);
@@ -235,15 +249,17 @@ class RealtimeMarketFeedService {
       data.forEach((item: any) => {
         const full = String(item.market || "").toUpperCase();
         const sym = full.replace(/^KRW-/, "");
-        const price = Number(item.trade_price);
-        if (!sym || !Number.isFinite(price) || price <= 0) return;
-        const providerTimestamp = Number(item.trade_timestamp) || Date.now();
+        const price = parseOptionalMarketNumber(item.trade_price);
+        if (!sym || price == null || price <= 0) return;
+
+        const providerTimestamp = parseOptionalTimestamp(item.trade_timestamp);
         const receivedAt = Date.now();
-        const ageMs = Math.max(0, receivedAt - providerTimestamp);
+        const ageMs = providerTimestamp == null ? null : Math.max(0, receivedAt - providerTimestamp);
+        const volume = parseOptionalMarketNumber(item.acc_trade_volume_24h);
         const { isVerified } = MarketDataIntegrityGate.verifyQuote({
           symbol: sym,
           price,
-          volume: Number(item.acc_trade_volume_24h) || 0,
+          volume: volume ?? undefined,
           market: "UPBIT",
           providerTimestamp,
           provider: "UPBIT",
@@ -255,10 +271,12 @@ class RealtimeMarketFeedService {
           name: prev?.name || sym,
           market: "UPBIT",
           price,
-          changeRate: Number.isFinite(Number(item.signed_change_rate)) ? Number((Number(item.signed_change_rate) * 100).toFixed(2)) : null,
-          changeAmount: Number.isFinite(Number(item.signed_change_price)) ? Number(item.signed_change_price) : null,
-          volume: Number.isFinite(Number(item.acc_trade_volume_24h)) ? Number(item.acc_trade_volume_24h) : null,
-          tradeValue: Number.isFinite(Number(item.acc_trade_price_24h)) ? Number(item.acc_trade_price_24h) : null,
+          changeRate: parseOptionalMarketNumber(item.signed_change_rate) != null
+            ? Number((Number(item.signed_change_rate) * 100).toFixed(2))
+            : null,
+          changeAmount: parseOptionalMarketNumber(item.signed_change_price),
+          volume,
+          tradeValue: parseOptionalMarketNumber(item.acc_trade_price_24h),
           marketCap: prev?.marketCap ?? null,
           provider: "UPBIT",
           source: "UPBIT_PUBLIC_TICKER",
@@ -267,8 +285,8 @@ class RealtimeMarketFeedService {
           receivedAt,
           ageMs,
           isVerified,
-          trust: isVerified ? "ANALYSIS_ONLY" : "DISPLAY_ONLY",
-          status: isVerified && ageMs <= 15000 ? "LIVE" : "STALE"
+          trust: isVerified ? "ANALYSIS_ONLY" : "NO_DATA",
+          status: isVerified && ageMs != null && ageMs <= 15000 ? "LIVE" : providerTimestamp == null ? "UNAVAILABLE" : "STALE"
         };
         this.quotes.set(sym, updated);
         this.quotes.set(full, updated);
@@ -286,8 +304,7 @@ class RealtimeMarketFeedService {
     const registered = Array.from(this.registeredSymbols.entries())
       .filter(([sym, m]) => /^\d{6}$/.test(sym) && (m === "KOSPI" || m === "KOSDAQ"))
       .map(([sym]) => sym);
-    const defaults = ["005930", "000660", "005380", "000270", "035420", "035720", "068270", "005490", "373220", "006400", "012450", "277810", "034020", "080220", "064350", "042700", "247540", "086520"];
-    const codes = Array.from(new Set([...registered, ...defaults]));
+    const codes = Array.from(new Set(registered));
     if (codes.length === 0) return;
 
     try {
@@ -299,38 +316,48 @@ class RealtimeMarketFeedService {
 
       items.forEach((item: any) => {
         const code = String(item.itemCode || "");
-        const price = Number(String(item.closePriceRaw || item.closePrice || "").replace(/,/g, ""));
-        if (!/^\d{6}$/.test(code) || !Number.isFinite(price) || price <= 0) return;
+        const price = parseOptionalMarketNumber(item.closePriceRaw ?? item.closePrice);
+        if (!/^\d{6}$/.test(code) || price == null || price <= 0) return;
 
         const market: "KOSPI" | "KOSDAQ" = item.stockExchangeType?.nameKor === "코스닥" ? "KOSDAQ" : "KOSPI";
-        const ratio = Number(String(item.fluctuationsRatioRaw || item.fluctuationsRatio || "0").replace(/,/g, ""));
-        const change = Number(String(item.compareToPreviousClosePriceRaw || item.compareToPreviousClosePrice || "0").replace(/,/g, ""));
+        const ratio = parseOptionalMarketNumber(item.fluctuationsRatioRaw ?? item.fluctuationsRatio);
+        const change = parseOptionalMarketNumber(item.compareToPreviousClosePriceRaw ?? item.compareToPreviousClosePrice);
         const isDown = item.compareToPreviousPrice?.code === "5" || item.compareToPreviousPrice?.name === "FALLING";
-        const volume = Number(String(item.accumulatedTradingVolume || "0").replace(/,/g, ""));
-        const tradeValue = Number(String(item.accumulatedTradingValue || "0").replace(/,/g, ""));
-        const marketCap = Number(String(item.marketValueFull || item.marketValue || "0").replace(/,/g, ""));
+        const volume = parseOptionalMarketNumber(item.accumulatedTradingVolume);
+        const tradeValue = parseOptionalMarketNumber(item.accumulatedTradingValue);
+        const marketCap = parseOptionalMarketNumber(item.marketValueFull ?? item.marketValue);
+        const providerTimestamp = parseOptionalTimestamp(item.providerTimestamp ?? item.tradeTimestamp ?? item.timestamp);
         const receivedAt = Date.now();
-        const { isVerified } = MarketDataIntegrityGate.verifyQuote({ symbol: code, price, volume, market, provider: "NAVER_POLLING", source: "NAVER_BATCH_POLLING" });
+        const ageMs = providerTimestamp == null ? null : Math.max(0, receivedAt - providerTimestamp);
+        const { isVerified } = MarketDataIntegrityGate.verifyQuote({
+          symbol: code,
+          price,
+          volume: volume ?? undefined,
+          market,
+          providerTimestamp,
+          provider: "NAVER_POLLING",
+          source: "NAVER_BATCH_POLLING"
+        });
 
         this.quotes.set(code, {
           symbol: code,
           name: item.stockName || this.quotes.get(code)?.name || code,
           market,
           price,
-          changeRate: Number.isFinite(ratio) ? (isDown ? -Math.abs(ratio) : Math.abs(ratio)) : null,
-          changeAmount: Number.isFinite(change) ? (isDown ? -Math.abs(change) : Math.abs(change)) : null,
-          volume: Number.isFinite(volume) && volume >= 0 ? volume : null,
-          tradeValue: Number.isFinite(tradeValue) && tradeValue >= 0 ? tradeValue : null,
-          marketCap: Number.isFinite(marketCap) && marketCap > 0 ? marketCap : null,
+          changeRate: ratio == null ? null : (isDown ? -Math.abs(ratio) : Math.abs(ratio)),
+          changeAmount: change == null ? null : (isDown ? -Math.abs(change) : Math.abs(change)),
+          volume: volume != null && volume >= 0 ? volume : null,
+          tradeValue: tradeValue != null && tradeValue >= 0 ? tradeValue : null,
+          marketCap: marketCap != null && marketCap > 0 ? marketCap : null,
           provider: "NAVER_POLLING",
           source: "NAVER_BATCH_POLLING",
           exchange: market,
-          providerTimestamp: null,
+          providerTimestamp,
           receivedAt,
-          ageMs: 0,
+          ageMs,
           isVerified,
           trust: isVerified ? "DISPLAY_ONLY" : "NO_DATA",
-          status: isVerified ? "LIVE" : "STALE"
+          status: isVerified && ageMs != null ? "LIVE" : providerTimestamp == null ? "UNAVAILABLE" : "STALE"
         });
       });
     } catch (error) {
@@ -347,14 +374,23 @@ class RealtimeMarketFeedService {
 
       stocks.forEach((s: any) => {
         const symbol = String(s.symbol || "").toUpperCase();
-        const price = Number(s.price);
-        if (!symbol || !Number.isFinite(price) || price <= 0) return;
+        const price = parseOptionalMarketNumber(s.price);
+        if (!symbol || price == null || price <= 0) return;
         const market: "KOSPI" | "KOSDAQ" | "UPBIT" | "US" = s.market === "US" ? "US" : s.market === "UPBIT" || s.market === "BTC" ? "UPBIT" : s.market === "KOSDAQ" ? "KOSDAQ" : "KOSPI";
         const provider = market === "US" ? "YAHOO_FINANCE" : "SYSTEM_HUB";
-        const providerTimestamp = Number(s.timestamp) || null;
+        const providerTimestamp = parseOptionalTimestamp(s.timestamp);
         const receivedAt = Date.now();
-        const ageMs = providerTimestamp ? Math.max(0, receivedAt - providerTimestamp) : null;
-        const { isVerified } = MarketDataIntegrityGate.verifyQuote({ symbol, price, volume: s.volume, market, providerTimestamp, provider, source: "API_STOCKS" });
+        const ageMs = providerTimestamp == null ? null : Math.max(0, receivedAt - providerTimestamp);
+        const volume = parseOptionalMarketNumber(s.volume);
+        const { isVerified } = MarketDataIntegrityGate.verifyQuote({
+          symbol,
+          price,
+          volume: volume ?? undefined,
+          market,
+          providerTimestamp,
+          provider,
+          source: "API_STOCKS"
+        });
 
         const prev = this.quotes.get(symbol);
         this.quotes.set(symbol, {
@@ -362,11 +398,11 @@ class RealtimeMarketFeedService {
           name: s.name || prev?.name || symbol,
           market,
           price,
-          changeRate: Number.isFinite(Number(s.changePct)) ? Number(s.changePct) : null,
-          changeAmount: Number.isFinite(Number(s.change)) ? Number(s.change) : null,
-          volume: Number.isFinite(Number(s.volume)) ? Number(s.volume) : null,
-          tradeValue: Number.isFinite(Number(s.tradeValue)) ? Number(s.tradeValue) : null,
-          marketCap: Number.isFinite(Number(s.marketCap)) ? Number(s.marketCap) : null,
+          changeRate: parseOptionalMarketNumber(s.changePct),
+          changeAmount: parseOptionalMarketNumber(s.change),
+          volume,
+          tradeValue: parseOptionalMarketNumber(s.tradeValue),
+          marketCap: parseOptionalMarketNumber(s.marketCap),
           provider,
           source: "API_STOCKS",
           exchange: market,
@@ -374,8 +410,8 @@ class RealtimeMarketFeedService {
           receivedAt,
           ageMs,
           isVerified,
-          trust: isVerified ? "ANALYSIS_ONLY" : "DISPLAY_ONLY",
-          status: isVerified && (ageMs == null || ageMs <= 60000) ? "LIVE" : "STALE"
+          trust: isVerified ? "ANALYSIS_ONLY" : "NO_DATA",
+          status: isVerified && ageMs != null && ageMs <= 60000 ? "LIVE" : providerTimestamp == null ? "UNAVAILABLE" : "STALE"
         });
       });
 

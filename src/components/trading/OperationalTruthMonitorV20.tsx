@@ -50,7 +50,7 @@ function isRealtimeDataStatus(value: unknown): boolean {
 
 export default function OperationalTruthMonitorV20() {
   const { selectedSymbol } = useApp() as any;
-  const symbol = useMemo(() => normalizeSymbol(selectedSymbol) || "005930", [selectedSymbol]);
+  const symbol = useMemo(() => normalizeSymbol(selectedSymbol), [selectedSymbol]);
   const isKoreaSymbol = /^\d{6}$/.test(symbol);
   const [runtime, setRuntime] = useState<RuntimeTruth | null>(null);
   const [loading, setLoading] = useState(false);
@@ -62,6 +62,7 @@ export default function OperationalTruthMonitorV20() {
       setRuntime(null);
       setError(null);
       setUpdatedAt(null);
+      setLoading(false);
       return;
     }
 
@@ -127,7 +128,7 @@ export default function OperationalTruthMonitorV20() {
   useEffect(() => {
     window.dispatchEvent(new CustomEvent("aistock-broker-truth-status", {
       detail: {
-        symbol,
+        symbol: symbol || null,
         isKoreaSymbol,
         enforceKis: isKoreaSymbol,
         evidenceReady: isKoreaSymbol ? evidenceReady : false,
@@ -178,8 +179,10 @@ export default function OperationalTruthMonitorV20() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <strong className="text-slate-100">실계좌 읽기 전용 상태</strong>
-          <span className="rounded-md border border-slate-700 px-2 py-0.5 font-mono">{symbol}</span>
-          {!isKoreaSymbol ? (
+          <span className="rounded-md border border-slate-700 px-2 py-0.5 font-mono">{symbol || "종목 미선택"}</span>
+          {!symbol ? (
+            <span className="text-slate-500">국내 종목을 선택하면 KIS 상태를 확인합니다.</span>
+          ) : !isKoreaSymbol ? (
             <span className="text-slate-500">국내 KIS 종목에서 확인</span>
           ) : loading && !runtime ? (
             <span className="text-cyan-300">확인 중...</span>

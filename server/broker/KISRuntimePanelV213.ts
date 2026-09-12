@@ -1,5 +1,6 @@
 import { evaluateKISLiveAccountTruth, type KISLiveAccountTruth, type LiveMarketSession } from "./KISLiveAccountTruthV212";
 import { validateLiveOrderReadiness, type LiveOrderIntent, type LiveOrderReadiness } from "./KISLiveOrderReadiness";
+import { getCachedKISDomesticFundamentals, type KISDomesticFundamentalsTruth } from "./KISRuntimeProbeV213";
 
 export interface KISRuntimePanelInput {
   brokerConfigured: boolean;
@@ -57,6 +58,7 @@ export interface KISRuntimePanel {
   holdings: KISRuntimePanelInput["holdings"];
   orderableCash: number | null;
   orderableQty: number | null;
+  fundamentals: KISDomesticFundamentalsTruth;
   accountTruth: KISLiveAccountTruth;
   liveEnvironmentProof: KISLiveEnvironmentProof;
   orderReadiness: LiveOrderReadiness | null;
@@ -80,6 +82,7 @@ export function buildKISRuntimePanel(input: KISRuntimePanelInput): KISRuntimePan
   const orderableCash = finiteOrNull(input.orderableCash);
   const orderableQty = Number.isInteger(input.orderableQty) && Number(input.orderableQty) >= 0 ? Number(input.orderableQty) : null;
   const symbol = input.symbol ? String(input.symbol).trim().toUpperCase() : null;
+  const fundamentals = getCachedKISDomesticFundamentals(symbol ?? "", nowMs);
 
   const dataStatus: "REALTIME_VERIFIED" | "STALE" | "NO_DATA" =
     input.quoteSuccess && lastPrice !== null && quoteAsOf
@@ -175,6 +178,7 @@ export function buildKISRuntimePanel(input: KISRuntimePanelInput): KISRuntimePan
     holdings: input.holdings ?? [],
     orderableCash,
     orderableQty,
+    fundamentals,
     accountTruth,
     liveEnvironmentProof,
     orderReadiness,

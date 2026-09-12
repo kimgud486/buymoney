@@ -1,6 +1,7 @@
 // ----------------------------------------------------------------------
-// ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V9 (AISTOCK V21.2 TRUTH-FIRST)
-// Protects realtime truth, scanner counts, and market-readiness diagnostics.
+// ZERO FAKE DATA PRODUCTION AUDIT SCRIPT V10 (STOCK GPT TRUTH-FIRST)
+// Protects realtime truth, scanner counts, market-readiness diagnostics,
+// and the Stock GPT UI from silent synthetic fallbacks.
 // ----------------------------------------------------------------------
 
 import fs from "node:fs";
@@ -104,6 +105,51 @@ function auditScannerUiTruth() {
   }
 }
 
+function auditStockGptTruthCleanup() {
+  const guardedFiles = [
+    {
+      file: "src/components/TransactionHistory.tsx",
+      forbidden: [
+        /randomWinRate\b/,
+        /randomCompliance\b/,
+        /Math\.random\s*\(/,
+        /평균 손익비는\s*2\.4:1/,
+        /fillOrder\s*\(/,
+        /체결 승인 신뢰도:/,
+      ],
+    },
+    {
+      file: "src/components/trading/AiHighVolatilityAlertSystem.tsx",
+      forbidden: [
+        /getAllStocks\s*\(/,
+        /Math\.random\s*\(/,
+        /5\.8\s*:\s*-4\.2/,
+        /2\.5\s*\+\s*idx\s*\*\s*0\.8/,
+        /1\.8\s*\+\s*idx\s*\*\s*0\.45/,
+      ],
+    },
+    {
+      file: "src/components/trading/StockSearchAndAddModal.tsx",
+      forbidden: [
+        /regPrice\b/,
+        /["']12500["']/,
+        /live\?\.price\s*\|\|\s*stock\.price/,
+        /AI\s*\{stock\.score\}점/,
+        /실시간 연동중/,
+      ],
+    },
+  ];
+
+  for (const guard of guardedFiles) {
+    const full = path.resolve(guard.file);
+    if (!fs.existsSync(full)) continue;
+    const text = fs.readFileSync(full, "utf8");
+    for (const pattern of guard.forbidden) {
+      if (pattern.test(text)) fail(`STOCK GPT TRUTH REGRESSION: ${guard.file} (${pattern})`);
+    }
+  }
+}
+
 function auditServerTruthRoutes() {
   const serverPath = path.resolve("server.ts");
   if (!fs.existsSync(serverPath)) return;
@@ -160,14 +206,15 @@ function scanFile(fullPath) {
   }
 }
 
-console.log("🔍 Running Production Zero Fake Data Audit V9...");
+console.log("🔍 Running Production Zero Fake Data Audit V10...");
 auditPresetFixture();
 auditRealtimeMarketBridge();
 auditScannerUiTruth();
+auditStockGptTruthCleanup();
 auditServerTruthRoutes();
 for (const rootPath of ROOTS) scanPath(rootPath);
 if (failed) {
-  console.error("💥 Zero Fake Data Audit V9 FAILED!");
+  console.error("💥 Zero Fake Data Audit V10 FAILED!");
   process.exit(1);
 }
-console.log("✅ Production Zero Fake Data Audit V9 PASSED cleanly.");
+console.log("✅ Production Zero Fake Data Audit V10 PASSED cleanly.");
