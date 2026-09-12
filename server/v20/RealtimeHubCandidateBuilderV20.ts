@@ -2,6 +2,8 @@ import { serverRealtimeMarketHubV20 } from "./ServerRealtimeMarketHubV20";
 import { ServerTrueMTFEvidenceProviderV20 } from "./ServerTrueMTFEvidenceProviderV20";
 import { latestSessionCandlesV20, sessionVwapV20 } from "./SessionAwareMarketMathV20";
 import { evaluateLiveMicrostructureV2010 } from "./LiveMicrostructureGateV2010";
+import { evaluateV209BaselineForShadow } from "./V209ShadowBaselineEvaluator";
+import { v2010ShadowComparisonRecorder } from "./V2010ShadowComparisonRecorder";
 import {
   ServerGlobalRealtimeScannerV20,
   type DataTruthStatus,
@@ -117,6 +119,29 @@ function usablePattern(pattern?: string | null): string[] | undefined {
   const code = String(pattern || "").trim().toUpperCase();
   if (!code || code === "NO_PATTERN" || code === "WARMING_UP") return undefined;
   return [code];
+}
+
+function scanCandidatesWithShadowV2010(inputs: ScanCandidateInput[]): ScanCandidateResult[] {
+  if (!Array.isArray(inputs)) return [];
+  const observedAt = Date.now();
+
+  // Existing live scans also advance pending 5m/15m/30m outcomes. No timer,
+  // fabricated interpolation or background price source is used.
+  for (const input of inputs) {
+    v2010ShadowComparisonRecorder.observeQuote(input.symbol, input.price, observedAt);
+  }
+
+  return inputs
+    .map((input) => {
+      const current = ServerGlobalRealtimeScannerV20.evaluateCandidate(input);
+      const baseline = evaluateV209BaselineForShadow(input);
+      v2010ShadowComparisonRecorder.recordComparison(baseline, current, current.timestamp);
+      return current;
+    })
+    .filter((result) => result.recommendation !== "REJECT")
+    .sort((a, b) => b.setupScore !== a.setupScore
+      ? b.setupScore - a.setupScore
+      : b.dataCoveragePct - a.dataCoveragePct);
 }
 
 export class RealtimeHubCandidateBuilderV20 {
@@ -257,7 +282,7 @@ export class RealtimeHubCandidateBuilderV20 {
     const built = symbols.map((s) => this.build(s));
     const inputs = built.flatMap((x) => x.candidate ? [x.candidate] : []);
     return {
-      candidates: ServerGlobalRealtimeScannerV20.scanCandidates(inputs),
+      candidates: scanCandidatesWithShadowV2010(inputs),
       telemetry: built.map((x) => x.telemetry),
     };
   }
@@ -272,7 +297,7 @@ export class RealtimeHubCandidateBuilderV20 {
     );
     const inputs = built.flatMap((x) => x.candidate ? [x.candidate] : []);
     return {
-      candidates: ServerGlobalRealtimeScannerV20.scanCandidates(inputs),
+      candidates: scanCandidatesWithShadowV2010(inputs),
       telemetry: built.map((x) => x.telemetry),
     };
   }
