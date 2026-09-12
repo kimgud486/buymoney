@@ -2,10 +2,8 @@ import { serverRealtimeMarketHubV20 } from "./ServerRealtimeMarketHubV20";
 import { ServerTrueMTFEvidenceProviderV20 } from "./ServerTrueMTFEvidenceProviderV20";
 import { latestSessionCandlesV20, sessionVwapV20 } from "./SessionAwareMarketMathV20";
 import { evaluateLiveMicrostructureV2010 } from "./LiveMicrostructureGateV2010";
-import { evaluateV209BaselineForShadow } from "./V209ShadowBaselineEvaluator";
-import { v2010ShadowComparisonRecorder } from "./V2010ShadowComparisonRecorder";
+import { evaluateCandidateWithV2010ShadowPolicy } from "./V2010ShadowDecisionPolicy";
 import {
-  ServerGlobalRealtimeScannerV20,
   type DataTruthStatus,
   type ScanCandidateInput,
   type ScanCandidateResult,
@@ -125,19 +123,8 @@ function scanCandidatesWithShadowV2010(inputs: ScanCandidateInput[]): ScanCandid
   if (!Array.isArray(inputs)) return [];
   const observedAt = Date.now();
 
-  // Existing live scans also advance pending 5m/15m/30m outcomes. No timer,
-  // fabricated interpolation or background price source is used.
-  for (const input of inputs) {
-    v2010ShadowComparisonRecorder.observeQuote(input.symbol, input.price, observedAt);
-  }
-
   return inputs
-    .map((input) => {
-      const current = ServerGlobalRealtimeScannerV20.evaluateCandidate(input);
-      const baseline = evaluateV209BaselineForShadow(input);
-      v2010ShadowComparisonRecorder.recordComparison(baseline, current, current.timestamp);
-      return current;
-    })
+    .map((input) => evaluateCandidateWithV2010ShadowPolicy(input, { observedAt }).production)
     .filter((result) => result.recommendation !== "REJECT")
     .sort((a, b) => b.setupScore !== a.setupScore
       ? b.setupScore - a.setupScore
